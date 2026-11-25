@@ -758,7 +758,7 @@ fn log_memory() {
          left to commit); host copies of title memory: {} alive {:.0} MB, of them {} windows \
          outside buffers {:.0} MB; snapshot buffers kept: {} reserving {:.0} MB; staging of \
          textures: {} alive {:.0} MB, {} kept by their texture; host textures: {} alive {:.0} MB, \
-         {} placed in title memory; made so far: {} upload buffers {:.0} MB, {} shared buffers \
+         {} placed in title memory; made so far: {} upload buffers {:.0} MB ({} of them {:.0} MB in the card's memory, Resizable BAR), {} shared buffers \
          {:.0} MB, {} card buffers {:.0} MB",
         mb(private),
         mb(working),
@@ -778,6 +778,8 @@ fn log_memory() {
         crate::resource::placed_textures(),
         made[0],
         mb(made[1]),
+        crate::host::GPU_UPLOADS[0].load(Relaxed),
+        mb(crate::host::GPU_UPLOADS[1].load(Relaxed)),
         made[2],
         mb(made[3]),
         made[4],

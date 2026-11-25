@@ -5731,11 +5731,85 @@ impl Host {
         }
     }
 
+    /// Whether upload buffers may be made in the card's own memory that the
+    /// CPU writes through the PCI bar (`D3D12_HEAP_TYPE_GPU_UPLOAD`, with
+    /// Resizable BAR on and a driver that offers it: `OPTIONS16`
+    /// `GPUUploadHeapSupported`). Shaders and copies then read the list's
+    /// scratch, constants and texture staging from the card's memory, not
+    /// across the bus at every read. `VICTORY_GPU_UPLOAD=0` keeps them in
+    /// the PC's memory, as before.
+    fn gpu_upload_supported(&self) -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| {
+            if std::env::var_os("VICTORY_GPU_UPLOAD").is_some_and(|v| v == "0") {
+                tracing::info!("GPU upload heap (Resizable BAR) off: VICTORY_GPU_UPLOAD=0");
+                return false;
+            }
+            #[repr(C)]
+            #[derive(Default)]
+            struct Options16 {
+                dynamic_depth_bias: windows::core::BOOL,
+                gpu_upload_heap: windows::core::BOOL,
+            }
+            let mut o = Options16::default();
+            // SAFETY: OPTIONS16 (45) and its two-BOOL structure; a runtime
+            // that does not know it fails the call.
+            let asked = unsafe {
+                self.device
+                    .CheckFeatureSupport(D3D12_FEATURE(45), (&raw mut o).cast(), size_of_val(&o) as u32)
+            };
+            let on = asked.is_ok() && o.gpu_upload_heap.as_bool();
+            tracing::info!(
+                supported = on,
+                asked = asked.is_ok(),
+                "GPU upload heap (Resizable BAR): upload buffers in the card's memory when supported"
+            );
+            on
+        })
+    }
+
+    /// Whether this upload buffer goes into the card's memory
+    /// ([`Host::gpu_upload_supported`]): up to 16 MiB, and while this
+    /// process uses under four fifths of the card's budget (asked at most
+    /// every quarter second), below where texture copies stop
+    /// (`resource::room`) so that those keep their room.
+    fn gpu_upload(&self, size: u64) -> bool {
+        static ROOM: AtomicU32 = AtomicU32::new(0);
+        static ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        if size > 16 << 20 || GPU_UPLOAD_FAILED.load(Ordering::Relaxed) || !self.gpu_upload_supported() {
+            return false;
+        }
+        let now = now_ms();
+        if now.saturating_sub(ASKED.load(Ordering::Relaxed)) >= 250 {
+            ASKED.store(now, Ordering::Relaxed);
+            let room = self.video_memory().is_some_and(|[budget, used, ..]| used < budget / 5 * 4);
+            ROOM.store(u32::from(room), Ordering::Relaxed);
+        }
+        ROOM.load(Ordering::Relaxed) != 0
+    }
+
     pub(crate) fn upload_buffer(&self, size: u64) -> Option<(ID3D12Resource, *mut u8)> {
+        let gpu = self.gpu_upload(size);
+        if gpu {
+            if let Some(made) = self.upload_buffer_in(size, true) {
+                GPU_UPLOADS[0].fetch_add(1, Ordering::Relaxed);
+                GPU_UPLOADS[1].fetch_add(size, Ordering::Relaxed);
+                return Some(made);
+            }
+            // Refused: never again this run, the PC's memory from here on.
+            if !GPU_UPLOAD_FAILED.swap(true, Ordering::Relaxed) {
+                tracing::warn!(size, "an upload buffer in the card's memory was refused: upload buffers stay in the PC's memory");
+            }
+        }
+        self.upload_buffer_in(size, false)
+    }
+
+    fn upload_buffer_in(&self, size: u64, gpu: bool) -> Option<(ID3D12Resource, *mut u8)> {
         MADE[0].fetch_add(1, Ordering::Relaxed);
         MADE[1].fetch_add(size, Ordering::Relaxed);
         let heap = D3D12_HEAP_PROPERTIES {
-            Type: D3D12_HEAP_TYPE_UPLOAD,
+            // GPU_UPLOAD (5): the card's memory, written by the CPU.
+            Type: if gpu { D3D12_HEAP_TYPE(5) } else { D3D12_HEAP_TYPE_UPLOAD },
             ..Default::default()
         };
         let desc = D3D12_RESOURCE_DESC {
@@ -5771,6 +5845,10 @@ impl Host {
         };
         match made {
             Ok(()) => Some((buffer?, data.cast())),
+            Err(e) if gpu => {
+                tracing::warn!(error = %e, size, "no upload buffer in the card's memory");
+                None
+            }
             Err(e) => {
                 tracing::warn!(error = %e, size, "no upload buffer");
                 None
@@ -5778,6 +5856,13 @@ impl Host {
         }
     }
 }
+
+/// Upload buffers made in the card's memory ([`Host::gpu_upload`]) since
+/// the start: count and bytes.
+pub(crate) static GPU_UPLOADS: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// An upload buffer in the card's memory was refused: none is asked for again.
+static GPU_UPLOAD_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The swap chain formats a presented texture can be copied into: its own
 /// family's.
