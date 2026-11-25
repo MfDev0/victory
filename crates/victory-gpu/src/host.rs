@@ -2124,6 +2124,13 @@ fn blocked_by(written: &[(usize, usize)], runs: &[&HostList], count: bool) -> Op
                 }
                 &Step::Fill(_, src, len) => {
                     if touches(written, src, src + len) {
+                        if late_results() {
+                            // Taken as title memory holds it now.
+                            if count {
+                                LATE_RESULTS.fetch_add(1, Ordering::Relaxed);
+                            }
+                            continue;
+                        }
                         if count {
                             LATE_STATS[16].fetch_add(1, Ordering::Relaxed);
                         }
@@ -2146,6 +2153,101 @@ fn blocked_by(written: &[(usize, usize)], runs: &[&HostList], count: bool) -> Op
     }
     None
 }
+
+/// Copy back only what is read (`VICTORY_READ_BACK_ONLY=0`: all the card
+/// changed is copied back), Dolphin's skip of EFB copies to RAM: with lazy
+/// copy-back on, a copy in the card's memory whose held memory neither a
+/// title thread nor our own code touched in [`QUIET_LANDINGS`] landings in
+/// a row, and that the title does not write, is not fetched or merged; the
+/// card keeps the only fresh bytes, which is all the shaders need. If
+/// something touches it while a batch is held, its pieces are fetched
+/// before the batch is done and it is copied back always from then on.
+/// Every [`PROBE_EVERY`]th landing copies everything back, so a reader
+/// shows itself.
+///
+/// shortcut: a read of such a copy outside a held batch sees older bytes
+/// until a probe or a held read finds it; the title writing it puts its
+/// counter back to nothing.
+fn read_back_only() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| crate::lazy::on() && std::env::var_os("VICTORY_READ_BACK_ONLY").is_none_or(|v| v != "0"))
+}
+
+/// See [`read_back_only`].
+const QUIET_LANDINGS: u32 = 64;
+/// See [`read_back_only`].
+const PROBE_EVERY: u64 = 16;
+
+/// Per copy in the card's memory (by its address): its title start and
+/// the landings in a row nothing touched it, `u32::MAX` once something did.
+fn read_quiet() -> std::sync::MutexGuard<'static, std::collections::HashMap<usize, (usize, u32)>> {
+    static QUIET: OnceLock<std::sync::Mutex<std::collections::HashMap<usize, (usize, u32)>>> = OnceLock::new();
+    QUIET.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Pieces left on the card ([`read_back_only`]), their bytes, and pieces
+/// fetched after all as something read them, since the frame line.
+static READ_ONLY_STATS: [std::sync::atomic::AtomicU64; 3] = [const { std::sync::atomic::AtomicU64::new(0) }; 3];
+
+/// The copies of `plans` (by address) whose pieces are left on the card in
+/// this landing ([`read_back_only`]); `held` whether the batch is held
+/// (only then are touches seen).
+fn read_only_plan(plans: &[&CardPlan], held: bool) -> Vec<usize> {
+    if !read_back_only() || !held {
+        return Vec::new();
+    }
+    static LANDINGS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let landing = LANDINGS.fetch_add(1, Ordering::Relaxed);
+    let touched = crate::lazy::take_touched();
+    let mut quiet = read_quiet();
+    let mut seen: Vec<usize> = Vec::new();
+    let mut skip = Vec::new();
+    for plan in plans {
+        for r in &plan.ranges {
+            let copy = std::sync::Arc::as_ptr(&r.shadow) as usize;
+            if seen.contains(&copy) {
+                continue;
+            }
+            seen.push(copy);
+            let (from, to) = r.shadow.title_span();
+            let read = touched.as_ref().is_none_or(|t| t.iter().any(|&(a, b)| a < to && b > from));
+            let entry = quiet.entry(copy).or_insert((from, 0));
+            if entry.0 != from {
+                *entry = (from, 0);
+            }
+            if read {
+                entry.1 = u32::MAX;
+            } else if r.shadow.title_writes_card() {
+                if entry.1 != u32::MAX {
+                    entry.1 = 0;
+                }
+            } else if entry.1 != u32::MAX {
+                entry.1 += 1;
+            }
+            if entry.1 != u32::MAX && entry.1 >= QUIET_LANDINGS && landing % PROBE_EVERY != 0 {
+                skip.push(copy);
+            }
+        }
+    }
+    skip
+}
+
+/// Whether a fill of upload memory from title memory that a flight's
+/// shaders may write goes on with what title memory holds (the results
+/// of the last flight copied back there), not waiting for the flight to
+/// land (`VICTORY_LATE_RESULTS=0`: waits). Xenia's fast readback: the
+/// submitting thread waited 60-275 ms a frame for such fills in the
+/// 2026-11-24 report. Most were of ranges the shaders declared but did not
+/// write (a view over a whole pool); where they did, the fill takes the
+/// results one flight late.
+fn late_results() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_LATE_RESULTS").is_none_or(|v| v != "0"))
+}
+
+/// Fills that went on with the results one flight late ([`late_results`]),
+/// since the frame line last took them.
+static LATE_RESULTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// With flights in the air, after the submission's write-watch asking:
 /// whether `runs` refresh a range of a host copy that a flight's shaders
@@ -2594,6 +2696,19 @@ fn late_line(frames: f64) {
         if crate::lazy::on() {
             tracing::info!("{}", crate::lazy::line(frames));
         }
+        if read_back_only() {
+            let s: Vec<u64> = READ_ONLY_STATS.iter().map(|s| s.swap(0, Ordering::Relaxed)).collect();
+            tracing::info!(
+                "copy-back of only what is read (VICTORY_READ_BACK_ONLY=0: all): {:.1} pieces ({:.1} MB) left on the card a frame, {:.1} fetched after all as something read them",
+                s[0] as f64 / frames,
+                s[1] as f64 / frames / 1048576.0,
+                s[2] as f64 / frames
+            );
+        }
+        tracing::info!(
+            "fills of upload memory that took results one flight late, not waiting (VICTORY_LATE_RESULTS=0: wait): {:.1} a frame",
+            LATE_RESULTS.swap(0, Ordering::Relaxed) as f64 / frames
+        );
     }
     if late_exact() {
         let [pages, runs, bytes] = crate::shadow::merged_stats().map(|n| n as f64 / frames);
@@ -3377,13 +3492,18 @@ impl Host {
     /// whatever was sent meanwhile, so it may bring a later flight's
     /// bytes, which that flight's landing then finds merged already; and
     /// nothing is sent back up.
-    fn relay_card_back(&self, plans: &[&CardPlan], fetch: &mut Option<RelayFetch>, sends_done: u64) {
+    fn relay_card_back(&self, plans: &[&CardPlan], fetch: &mut Option<RelayFetch>, sends_done: u64, held: bool) {
         let differs = {
             let work = CARD_WORK.lock().unwrap_or_else(|e| e.into_inner());
             work.as_ref().map(|work| (work.differs.1, (work.differs.2 / 4) as usize))
         };
         let mut pieces: Vec<(std::sync::Arc<crate::shadow::Shadow>, usize, usize, u64)> = Vec::new();
         let mut total = 0u64;
+        // Copy-back of only what is read: the pieces of copies nothing has
+        // read lately wait here, fetched only if something reads them
+        // before the batch is done.
+        let mut later: Vec<(std::sync::Arc<crate::shadow::Shadow>, usize, usize, u64)> = Vec::new();
+        let skip = read_only_plan(plans, held);
         if let Some((differs, dwords)) = differs {
             // SAFETY: the mapping of the results. The compares of these
             // plans have run, and their dwords are given to no other plan
@@ -3410,6 +3530,10 @@ impl Host {
                         }
                         let (lo, hi) = r.shadow.card_piece(&r.span, p);
                         if lo < hi && seen.insert((copy, lo, hi)) {
+                            if skip.contains(&copy) {
+                                later.push((r.shadow.clone(), lo, hi, 0));
+                                continue;
+                            }
                             pieces.push((r.shadow.clone(), lo, hi, total));
                             total += (hi - lo) as u64;
                         }
@@ -3418,6 +3542,60 @@ impl Host {
                 }
             }
         }
+        self.relay_fetch_merge(&pieces, total, fetch, sends_done);
+        if later.is_empty() {
+            return;
+        }
+        // What was read meanwhile (a title thread held at it, or our own
+        // code): those copies' waiting pieces are fetched too, before the
+        // batch is done, and the copies are copied back whole from now on.
+        let mut read: Vec<usize> = Vec::new();
+        let mut checked: Vec<usize> = Vec::new();
+        for (shadow, ..) in &later {
+            let copy = std::sync::Arc::as_ptr(shadow) as usize;
+            if !checked.contains(&copy) {
+                checked.push(copy);
+                let (from, to) = shadow.title_span();
+                if crate::lazy::touched_in(from, to) {
+                    read.push(copy);
+                }
+            }
+        }
+        let mut again = Vec::new();
+        let mut again_total = 0u64;
+        for (shadow, lo, hi, _) in later {
+            if read.contains(&(std::sync::Arc::as_ptr(&shadow) as usize)) {
+                again.push((shadow, lo, hi, again_total));
+                again_total += (hi - lo) as u64;
+            } else {
+                READ_ONLY_STATS[0].fetch_add(1, Ordering::Relaxed);
+                READ_ONLY_STATS[1].fetch_add((hi - lo) as u64, Ordering::Relaxed);
+            }
+        }
+        if !read.is_empty() {
+            let mut quiet = read_quiet();
+            for copy in &read {
+                if let Some(q) = quiet.get_mut(copy) {
+                    q.1 = u32::MAX;
+                }
+            }
+        }
+        if !again.is_empty() {
+            READ_ONLY_STATS[2].fetch_add(again.len() as u64, Ordering::Relaxed);
+            self.relay_fetch_merge(&again, again_total, fetch, sends_done);
+        }
+    }
+
+    /// [`Host::relay_card_back`]'s fetch of `pieces` (copy, from, to, where
+    /// in the fetch buffer), `total` bytes, and their merge into title
+    /// memory.
+    fn relay_fetch_merge(
+        &self,
+        pieces: &[(std::sync::Arc<crate::shadow::Shadow>, usize, usize, u64)],
+        total: u64,
+        fetch: &mut Option<RelayFetch>,
+        sends_done: u64,
+    ) {
         if pieces.is_empty() {
             // Nothing to fetch: every send so far is older than the next
             // fetch (on the copy engine, which does not wait for them, only
@@ -3454,7 +3632,7 @@ impl Host {
                 if let Some((queue, (allocator, list))) = &copy {
                     allocator.Reset()?;
                     list.Reset(allocator, None)?;
-                    for (shadow, lo, hi, at) in &pieces {
+                    for (shadow, lo, hi, at) in pieces {
                         list.CopyBufferRegion(&buffer, *at, &shadow.buffer, *lo as u64, (*hi - *lo) as u64);
                     }
                     list.Close()?;
@@ -3469,7 +3647,7 @@ impl Host {
                 }
                 allocator.Reset()?;
                 list.Reset(&allocator, None)?;
-                for (shadow, lo, hi, at) in &pieces {
+                for (shadow, lo, hi, at) in pieces {
                     list.CopyBufferRegion(&buffer, *at, &shadow.buffer, *lo as u64, (*hi - *lo) as u64);
                 }
                 list.Close()?;
@@ -3502,7 +3680,7 @@ impl Host {
         }
         let mut title = Vec::new();
         let mut written = 0;
-        for (shadow, lo, hi, at) in &pieces {
+        for (shadow, lo, hi, at) in pieces {
             // SAFETY: the mapping of the fetched bytes, `total` of them;
             // the copy into it has run.
             let gpu = unsafe { std::slice::from_raw_parts((data + *at as usize) as *const u8, hi - lo) };
@@ -3591,7 +3769,7 @@ impl Host {
                 }
                 let plans: Vec<&CardPlan> = flights.iter().filter_map(|f| f.card.as_ref()).collect();
                 let sends_done = flights.iter().map(|f| f.sends).max().unwrap_or(0);
-                self.relay_card_back(&plans, fetch, sends_done);
+                self.relay_card_back(&plans, fetch, sends_done, lazy);
                 let mut back: Vec<Declared> = Vec::new();
                 for flight in &flights {
                     for (shadow, ranges) in &flight.back {

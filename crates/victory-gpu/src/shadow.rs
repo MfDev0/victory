@@ -2720,6 +2720,22 @@ impl Shadow {
         self.card.is_some()
     }
 
+    /// The title memory the copy is of, as (start, end).
+    pub(crate) fn title_span(&self) -> (usize, usize) {
+        (self.start as usize, (self.start + self.len) as usize)
+    }
+
+    /// Whether title bytes are on their way to the card's side of the copy
+    /// (changed on the CPU's side and not sent yet, or sent and not past a
+    /// merged fetch): the title writes this copy.
+    pub(crate) fn title_writes_card(&self) -> bool {
+        let Some(card) = &self.card else {
+            return false;
+        };
+        let dirty = card.dirty.lock().unwrap_or_else(|e| e.into_inner());
+        !dirty.is_empty() || !card.sent.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+    }
+
     /// The CPU side's bytes at offsets `[from, to)` changed: they go to the
     /// card's side before the next submission.
     fn card_changed(&self, from: usize, to: usize) {

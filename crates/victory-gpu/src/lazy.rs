@@ -94,6 +94,45 @@ fn wait_most() -> Duration {
     }))
 }
 
+/// Held memory touched by a title thread or by our own code (not by the
+/// thread that lands flights, whose touches are the copy-back), as
+/// (start, end), for `crate::host`'s copy-back of only what is read; a
+/// fixed array, as the exception handler notes into it, and whether more
+/// touches came than it holds (then everything counts as touched).
+static TOUCHED: Mutex<([(usize, usize); 256], usize, bool)> = Mutex::new(([(0, 0); 256], 0, false));
+
+/// Notes a touch of held `[at, at + len)` ([`TOUCHED`]).
+fn touched(at: usize, len: usize) {
+    if LANDING.get() {
+        return;
+    }
+    let mut t = TOUCHED.lock().unwrap_or_else(|e| e.into_inner());
+    let n = t.1;
+    if n < t.0.len() {
+        t.0[n] = (at, at.saturating_add(len.max(1)));
+        t.1 = n + 1;
+    } else {
+        t.2 = true;
+    }
+}
+
+/// Whether held memory in `[from, to)` was touched since the last
+/// [`take_touched`].
+pub(crate) fn touched_in(from: usize, to: usize) -> bool {
+    let t = TOUCHED.lock().unwrap_or_else(|e| e.into_inner());
+    t.2 || t.0[..t.1].iter().any(|&(a, b)| a < to && b > from)
+}
+
+/// The touches since the last call (None: more than are noted, so take
+/// everything as touched), forgotten.
+pub(crate) fn take_touched() -> Option<Vec<(usize, usize)>> {
+    let mut t = TOUCHED.lock().unwrap_or_else(|e| e.into_inner());
+    let out = (!t.2).then(|| t.0[..t.1].to_vec());
+    t.1 = 0;
+    t.2 = false;
+    out
+}
+
 /// Called once by the thread that lands flights.
 pub(crate) fn landing_thread() {
     LANDING.set(true);
@@ -229,7 +268,11 @@ pub(crate) fn release(at: usize, len: usize) -> bool {
     if !ACTIVE.load(Ordering::Acquire) {
         return false;
     }
-    open_locked(&mut state(), at, at.saturating_add(len.max(1)))
+    let opened = open_locked(&mut state(), at, at.saturating_add(len.max(1)));
+    if opened {
+        touched(at, len);
+    }
+    opened
 }
 
 /// The runtime maps or unmaps title memory `[at, at + len)`: what is held
@@ -298,6 +341,7 @@ pub(crate) fn fault(at: usize) -> bool {
         open_locked(&mut st, at, at + 1);
         return true;
     }
+    touched(at, 1);
     let began = Instant::now();
     let deadline = began + wait_most();
     LAZY_STATS[3].fetch_add(1, Ordering::Relaxed);
