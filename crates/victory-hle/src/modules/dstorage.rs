@@ -222,9 +222,25 @@ extern "system" fn create_queue(
 extern "system" fn set_staging_buffer_size(_: Factory, size: u32) -> HRESULT {
     tracing::info!(size, "dstorage: staging buffer size");
     if let Some(scheduler) = scheduler() {
-        scheduler.lock().staging = u64::from(size);
+        scheduler.lock().staging = staging_limit(u64::from(size));
     }
     S_OK
+}
+
+/// The compressed bytes let in flight for a staging buffer of `title`
+/// bytes: at least `VICTORY_DSTORAGE_STAGING_MB` (128 unless set; 0 keeps
+/// the title's). On the console the staging buffer is memory the hardware
+/// decompresses through; here it only bounds how much is read and unpacked
+/// at once, and the title's 32 MiB held most of the twelve workers idle
+/// while the world streamed in (one request of a few MB each).
+fn staging_limit(title: u64) -> u64 {
+    static MB: OnceLock<u64> = OnceLock::new();
+    let mb = *MB.get_or_init(|| {
+        let mb = std::env::var("VICTORY_DSTORAGE_STAGING_MB").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(128);
+        tracing::info!(mb, "dstorage: compressed bytes in flight at least (VICTORY_DSTORAGE_STAGING_MB)");
+        mb
+    });
+    title.max(mb << 20)
 }
 
 fn text(name: *const c_char) -> String {
@@ -406,7 +422,7 @@ fn scheduler() -> Option<&'static Scheduler> {
                     next_id: 0,
                     next_seq: 0,
                     staged: 0,
-                    staging: STAGING,
+                    staging: staging_limit(STAGING),
                     starved: false,
                     clock: [0; 3],
                     now: 0,
