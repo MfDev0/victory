@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '3.9'
+$TryVersion = '4.0'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -471,7 +471,7 @@ function Set-RunEnv {
     $script:LazyFromTry = $c.lazy -ne 'off'
     if (-not $script:LazyFromTry) { [Environment]::SetEnvironmentVariable('VICTORY_LAZY_BACK', '0', 'Process') }
     if (-not $script:NewFromTry) {
-        foreach ($k in @('VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH')) { [Environment]::SetEnvironmentVariable($k, '0', 'Process') }
+        foreach ($k in @('VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH', 'VICTORY_TRIM_BARRIERS')) { [Environment]::SetEnvironmentVariable($k, '0', 'Process') }
     }
     # The hit-detection program that page-faults the card (upstream #981),
     # skipped as the NVIDIA world runs on victory-gta6 did.
@@ -544,6 +544,18 @@ function Run-Game {
     Set-RunEnv
     if ("$($c.prepared)" -ne "$($c.built_key)") { Prepare-Shaders 'new build' }
     elseif ("$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from the last run' }
+    # The shared pipeline list (keys of pipelines other players met, no
+    # game files): the game starts making them while it loads.
+    $shared = Join-Path $Src 'scripts\try\shared-pipelines.txt'
+    if (Test-Path -LiteralPath $shared) {
+        $pdir = Join-Path $env:VICTORY_CACHE_DIR 'pipelines'
+        try {
+            New-Item -ItemType Directory -Force -Path $pdir | Out-Null
+            Copy-Item -LiteralPath $shared -Destination (Join-Path $pdir 'shared-pipelines.txt') -Force
+            $n = @(Get-Content -LiteralPath $shared | Where-Object { $_ -and -not $_.StartsWith('#') }).Count
+            Say "shared pipeline list: $n pipelines other players met are made while the game loads"
+        } catch { Bad "could not copy the shared pipeline list: $_" }
+    }
     Say "failed shaders saved to: $($env:VICTORY_DUMP_FAILED)"
     Say "shader loop limit: $($env:VICTORY_SHADER_LOOP_LIMIT)   skipped programs: $($env:VICTORY_SKIP_PIPELINES)"
     Say 'New places compile their pipelines while you play (things may be missing for a while); after you close the game they are all compiled, and the next launch has them from the start.'
@@ -631,6 +643,9 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
         New-Item -ItemType Directory -Force -Path $stage | Out-Null
         Copy-Item -LiteralPath $log -Destination $stage
         if (Test-Path $crashes) { Copy-Item -LiteralPath $crashes -Destination $stage }
+        # This PC's pipeline list (keys only), for the shared list.
+        $early = Join-Path $env:VICTORY_CACHE_DIR 'pipelines\early-pipelines.txt'
+        if (Test-Path -LiteralPath $early) { Copy-Item -LiteralPath $early -Destination $stage }
         $buildLog = Join-Path $LogDir 'build.log'
         if (Test-Path $buildLog) { Copy-Item -LiteralPath $buildLog -Destination $stage }
         $dump = $env:VICTORY_DUMP_FAILED

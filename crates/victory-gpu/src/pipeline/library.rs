@@ -787,9 +787,41 @@ fn used() -> std::sync::MutexGuard<'static, Option<HashSet<String>>> {
     used
 }
 
-/// Whether the title pipeline with `key` was requested in this or an earlier run.
+/// The shared pipeline list (`shared-pipelines.txt` in the cache's
+/// folder, which VIctory Try fills from the list in the repository): keys
+/// of title pipelines other players' runs drew with, one a line (`#` lines
+/// are notes). A pipeline the title creates that is on it is started at
+/// once, as one this machine drew with before would be, so a first run
+/// makes them during loading instead of at the first draw (when that draw
+/// is dropped or stood in for). Only keys: no shader of the game is in it.
+/// `VICTORY_SHARED_PIPELINES=0` ignores it.
+const SHARED_FILE: &str = "shared-pipelines.txt";
+
+fn shared() -> &'static HashSet<String> {
+    static SHARED: OnceLock<HashSet<String>> = OnceLock::new();
+    SHARED.get_or_init(|| {
+        if std::env::var_os("VICTORY_SHARED_PIPELINES").is_some_and(|v| v == "0") {
+            return HashSet::new();
+        }
+        let listed = DIR
+            .get()
+            .and_then(|d| std::fs::read_to_string(d.join(SHARED_FILE)).ok())
+            .unwrap_or_default();
+        let set: HashSet<String> = listed
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(str::to_owned)
+            .collect();
+        tracing::info!(pipelines = set.len(), "title pipelines other players met, to start early (VICTORY_SHARED_PIPELINES=0: not)");
+        set
+    })
+}
+
+/// Whether the title pipeline with `key` was requested in this or an
+/// earlier run, or is on the shared list ([`SHARED_FILE`]).
 pub(crate) fn wanted_early(key: &str) -> bool {
-    used().as_ref().is_some_and(|s| s.contains(key))
+    used().as_ref().is_some_and(|s| s.contains(key)) || shared().contains(key)
 }
 
 /// A draw or dispatch requested the title pipeline with `key`.

@@ -98,6 +98,26 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      (`VICTORY_PIPELINE_MOST_ASKED=0`);
    - DirectStorage reads up to 128 MB at once instead of 32
      (`VICTORY_DSTORAGE_STAGING_MB`).
+   4.0 adds, each with its own switch to turn it off:
+   - copy back only what the game reads (like Dolphin skipping EFB copies):
+     buffers nothing on the CPU has touched for 64 batches stay on the card
+     (`VICTORY_READ_BACK_ONLY=0`);
+   - late results (like Xenia's fast readback): the game's uploads no longer
+     wait for the card's last results to come back; they use the ones before
+     (`VICTORY_LATE_RESULTS=0`);
+   - a second kind of stand-in pipeline (Dolphin's ubershader idea): an
+     object whose pipeline is still compiling borrows one with the same
+     shaders that only writes depth differently, instead of vanishing
+     (`VICTORY_STAND_IN_LOOSE=0`);
+   - a shared pipeline list: pipelines other players met start compiling
+     while the game loads (`VICTORY_SHARED_PIPELINES=0`); your own list goes
+     into the report zip (`early-pipelines.txt`), so it can be added;
+   - large 2 MB memory pages for the game's CPU memory, if Windows allows it
+     ("Lock pages in memory"; `VICTORY_LARGE_PAGES=0`);
+   - barrier trimming: GPU waits between two reads are dropped
+     (`VICTORY_TRIM_BARRIERS=0`; off by itself after the card is lost).
+   Occlusion queries already answer "visible" at once (nothing hidden by
+   them).
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,

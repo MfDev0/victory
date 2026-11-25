@@ -1,0 +1,4 @@
+# VIctory shared pipeline list: keys of title pipelines that players' runs drew with.
+# One key a line. Keys only (hashes): no shader or other file of the game is in here.
+# VIctory Try copies this into the cache, and the game starts making these pipelines while it loads.
+# To add yours: send the early-pipelines.txt that VIctory Try puts in the report zip.
