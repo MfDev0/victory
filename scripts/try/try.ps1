@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '3.5'
+$TryVersion = '3.6'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -40,11 +40,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -454,6 +454,11 @@ function Set-RunEnv {
         if ($script:WideFromTry) { [Environment]::SetEnvironmentVariable('VICTORY_WIDE_BACK', '1', 'Process') }
         Say "speed: relay (stable)$(if ($script:WideFromTry) { ', copy-back on several threads' })   (F switches to the faster, riskier mode)"
     }
+    # 3.6: compute shaders that need 64-lane waves (refused by 32-lane
+    # NVIDIA cards) are translated a slower way that works. Off again by
+    # itself if a run loses the card (see Check-Run).
+    $script:WaveWideFromTry = (-not $script:UserWaveWide) -and $c.wavewide -ne 'off'
+    if (-not $script:UserWaveWide) { [Environment]::SetEnvironmentVariable('VICTORY_WAVE_WIDE', $(if ($c.wavewide -eq 'off') { '0' } else { $null }), 'Process') }
     # The hit-detection program that page-faults the card (upstream #981),
     # skipped as the NVIDIA world runs on victory-gta6 did.
     # And the meshlet culling that hung at load (b83629b90cd2b7bc, #18 there).
@@ -579,6 +584,9 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
         if ($c.fast -eq '1') {
             $c.fast = ''
             Say 'next run: back to the stable relay speed mode (F switches again).'
+        } elseif ($script:WaveWideFromTry) {
+            $c.wavewide = 'off'
+            Say 'next run: the 64-lane compute shaders are left out again, as before 3.6.'
         } elseif ($script:WideFromTry) {
             $c.wide = 'off'
             Say 'next run: copy-back on one thread again, as before 3.5.'
@@ -663,6 +671,7 @@ function Run-Newer {
 
 $script:Config = Load-Config
 $script:UserLoop = $env:VICTORY_SHADER_LOOP_LIMIT
+$script:UserWaveWide = $env:VICTORY_WAVE_WIDE
 while (-not (Ask-Game $false)) {}
 if (-not (Ensure-Tools)) { exit 1 }
 $changed = Update-Source

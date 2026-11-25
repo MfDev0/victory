@@ -63,13 +63,18 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    `logs\prepare.log`). The next launch has them all from its start, so
    one run that reaches a place is enough: no restarting again and again
    while the world fills in a few pipelines a minute.
+   From 3.6 the compute shaders that ask for 64-lane waves, which 32-lane
+   NVIDIA cards refuse ("pipelines the card refused"), are translated in a
+   slower form that the card accepts (`VICTORY_WAVE_WIDE=0` turns it off).
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
    `VIctory-report-<date>.zip` (the game log, crash details, build log and
    the failed shaders). If the graphics card was lost during the run, the
-   next run is safer by itself: back from F mode to the relay, or else the
-   shader loop limit goes from 256 to 128. Nothing changes after a good run.
+   next run is safer by itself, one step a time: back from F mode to the
+   relay, or the 64-lane compute shaders left out again (3.6), or copy-back
+   on one thread (3.5), or the shader loop limit from 256 to 128. Nothing
+   changes after a good run.
 6. Then you choose what's next:
    - **Enter**: run again;
    - **U**: update to the newest version and run;
