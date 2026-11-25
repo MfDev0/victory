@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '3.8'
+$TryVersion = '3.9'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -40,11 +40,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -465,8 +465,13 @@ function Set-RunEnv {
     # buffers compared on the card from the PC's memory. All three off again
     # by themselves if a run loses the card (see Check-Run).
     $script:NewFromTry = $c.new38 -ne 'off'
+    # 3.9: lazy copy-back (the title hears the card is done before what it
+    # wrote is copied back). Off again by itself after a run that crashed
+    # with an access violation (see Check-Run).
+    $script:LazyFromTry = $c.lazy -ne 'off'
+    if (-not $script:LazyFromTry) { [Environment]::SetEnvironmentVariable('VICTORY_LAZY_BACK', '0', 'Process') }
     if (-not $script:NewFromTry) {
-        foreach ($k in @('VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB')) { [Environment]::SetEnvironmentVariable($k, '0', 'Process') }
+        foreach ($k in @('VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH')) { [Environment]::SetEnvironmentVariable($k, '0', 'Process') }
     }
     # The hit-detection program that page-faults the card (upstream #981),
     # skipped as the NVIDIA world runs on victory-gta6 did.
@@ -580,13 +585,22 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
     }
     # Draws still waiting for their pipelines at the end: what is missing
     # (see-through objects) until the next launches have compiled them.
-    $lastFrame = @($lines | Where-Object { $_ -match 'dropped ([0-9]+) without a host pipeline \(([0-9]+) being made\)' }) | Select-Object -Last 1
-    if ($lastFrame -and $lastFrame -match 'dropped ([0-9]+) without a host pipeline \(([0-9]+) being made\)') {
+    $lastFrame = @($lines | Where-Object { $_ -match 'dropped ([0-9]+) without a host pipeline \(([0-9]+) being made' }) | Select-Object -Last 1
+    if ($lastFrame -and $lastFrame -match 'dropped ([0-9]+) without a host pipeline \(([0-9]+) being made') {
         Say "at the end: $($Matches[1]) draws a frame still waiting for $($Matches[2]) pipelines being compiled (fewer each launch: run it again)"
     }
     Say "shaders that do not translate: $(& $count 'shader does not translate')"
     Say "pipelines the card refused: $(& $count 'host pipeline refused')"
     Say "slow submissions (over 250 ms on the card): $(& $count 'slow host submission')"
+    # A crash on a memory access (0xc0000005) with lazy copy-back on: the
+    # next run copies back first, as before 3.9.
+    $faulted = & $count 'VIctory: .*0xc0000005'
+    if ($faulted -gt 0 -and $script:LazyFromTry) {
+        $c.lazy = 'off'
+        Save-Config
+        Bad 'the game crashed on a memory access in this run.'
+        Say 'next run: lazy copy-back is off (the card results are copied back before the game hears the card is done).'
+    }
     $lost = & $count 'device removed|DEVICE_REMOVED|DEVICE_HUNG'
     if ($lost -gt 0) {
         Bad 'the graphics card was lost (device removed) in this run.'
@@ -595,7 +609,7 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
             Say 'next run: back to the stable relay speed mode (F switches again).'
         } elseif ($script:NewFromTry) {
             $c.new38 = 'off'
-            Say 'next run: the 3.8 additions (stand-in pipelines, Resizable BAR uploads, PC-side card copies) are off.'
+            Say 'next run: the 3.8 and 3.9 card additions (stand-in pipelines, Resizable BAR uploads, PC-side card copies, copy-engine fetches) are off.'
         } elseif ($script:WaveWideFromTry) {
             $c.wavewide = 'off'
             Say 'next run: the 64-lane compute shaders are left out again, as before 3.6.'

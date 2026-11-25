@@ -83,6 +83,21 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - empty views no longer counted as refused, and the first calls of the two
      unknown pipeline methods write their pieces to the log for the next fix
      (`VICTORY_RAW_TYPED=1` tries a fix for raw views off 16 bytes).
+   3.9 adds, each with its own switch to turn it off:
+   - texture checks no longer wait while the game streams memory in and out
+     (that wait was nearly all of the 1-2 s "textures" spikes;
+     `VICTORY_TEXTURE_NO_WAIT=0`);
+   - lazy copy-back: the game hears the card is done at once, and a game
+     thread that touches what the card wrote waits only for that
+     (`VICTORY_LAZY_BACK=0`; off by itself after a crash on a memory access);
+   - what the card wrote is fetched on its copy engine, not behind the
+     drawing work (`VICTORY_COPY_FETCH=0`);
+   - only bytes that really changed go to the card's copies
+     (`VICTORY_SAME_SKIP=0`);
+   - pipelines that the most draws wait for are compiled first
+     (`VICTORY_PIPELINE_MOST_ASKED=0`);
+   - DirectStorage reads up to 128 MB at once instead of 32
+     (`VICTORY_DSTORAGE_STAGING_MB`).
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
