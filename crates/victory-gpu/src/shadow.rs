@@ -1871,6 +1871,36 @@ pub(crate) fn merged_stats() -> [u64; 3] {
     [0, 1, 2].map(|i| MERGED[i].swap(0, Ordering::Relaxed))
 }
 
+/// Since the last frame-rate line, why [`Shadow::merge_under_writes`] left
+/// the flights to be settled: the compare without a journal over its
+/// budget, no snapshot, the changed runs over theirs; then pages compared
+/// with no journal to say which were written.
+static MERGE_SETTLES: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
+/// [`MERGE_SETTLES`], taken.
+pub(crate) fn merge_settle_stats() -> [u64; 4] {
+    [0, 1, 2, 3].map(|i| MERGE_SETTLES[i].swap(0, Ordering::Relaxed))
+}
+
+/// Bytes of title memory a submission may compare page by page where no
+/// write-watch journal says what the title wrote
+/// (`VICTORY_MERGE_UNWATCHED_MB`, 64; 0: settle as before). In the
+/// 2026-11-25 reports every frame settled its fifteen flights for title
+/// memory changed under shader writes, 400 ms a frame waiting for the
+/// card, while the pages put in were three and the bytes none: the
+/// journal could not say, so everything waited. Comparing reads memory at
+/// several GB/s: 64 MB is a few milliseconds.
+pub(crate) fn merge_unwatched_bytes() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("VICTORY_MERGE_UNWATCHED_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(64)
+            << 20
+    })
+}
+
 /// The runs of bytes where `now` differs from `was` (of one length), as
 /// (offset, bytes) in order: every differing byte is in a run and no equal
 /// byte is.
@@ -2913,7 +2943,13 @@ impl Shadow {
     /// Whether the caller must still settle the flights: the journal
     /// cannot say what was written, a snapshot is missing, or `runs_left`
     /// ran out. Pages done before that stay done.
-    pub(crate) fn merge_under_writes(&self, address: usize, len: usize, runs_left: &mut usize) -> bool {
+    pub(crate) fn merge_under_writes(
+        &self,
+        address: usize,
+        len: usize,
+        runs_left: &mut usize,
+        unwatched_left: &mut usize,
+    ) -> bool {
         let (start, end) = (self.start as usize, (self.start + self.len) as usize);
         let (from, to) = (address.max(start), (address + len).min(end));
         if from >= to {
@@ -2930,9 +2966,7 @@ impl Shadow {
         if busy.is_empty() {
             return false;
         }
-        if self.watched.load(Ordering::Relaxed) == NOT_WATCHED {
-            return true;
-        }
+        let unwatched = self.watched.load(Ordering::Relaxed) == NOT_WATCHED;
         let base = start / PAGE;
         let mut title = vec![0u8; PAGE];
         for (a, e) in busy {
@@ -2942,12 +2976,27 @@ impl Shadow {
             // of view memory, which is guarded and not write-watched, and
             // those were all of run 99's cases: the flights were settled
             // 4-5 times a frame for "0 pages looked at".
-            let Some((now, written)) = crate::watch::writes(a, e, true) else {
-                return true;
-            };
-            let stale: Vec<usize> = {
-                let copied = self.copied.lock().unwrap_or_else(|e| e.into_inner());
-                stale_pages_in(base, &copied, a, e, &written)
+            let journal = if unwatched { None } else { crate::watch::writes(a, e, true) };
+            // Where nothing can say which pages the title wrote, every page
+            // of the range is compared ([`merge_unwatched_bytes`]): the
+            // reference holds what the copy held when the range went to the
+            // shaders, and the copy-back changes title memory and it
+            // together, so what differs is the title's.
+            let (now, stale): (Option<u64>, Vec<usize>) = match journal {
+                Some((now, written)) => {
+                    let copied = self.copied.lock().unwrap_or_else(|e| e.into_inner());
+                    (Some(now), stale_pages_in(base, &copied, a, e, &written))
+                }
+                None => {
+                    if e - a > *unwatched_left {
+                        MERGE_SETTLES[0].fetch_add(1, Ordering::Relaxed);
+                        return true;
+                    }
+                    *unwatched_left -= e - a;
+                    let pages: Vec<usize> = (a / PAGE..e.div_ceil(PAGE)).collect();
+                    MERGE_SETTLES[3].fetch_add(pages.len() as u64, Ordering::Relaxed);
+                    (None, pages)
+                }
             };
             for page in stale {
                 let (lo, hi) = ((page * PAGE).max(a), ((page + 1) * PAGE).min(e));
@@ -2978,6 +3027,7 @@ impl Shadow {
                     let held = unsafe { std::slice::from_raw_parts_mut(self.data.add(at), n) };
                     let runs = changed_runs(title, held);
                     if runs.len() > *runs_left {
+                        MERGE_SETTLES[2].fetch_add(1, Ordering::Relaxed);
                         return true;
                     }
                     *runs_left -= runs.len();
@@ -2989,6 +3039,7 @@ impl Shadow {
                     }
                 } else {
                     let Some(snapshot) = before.as_mut() else {
+                        MERGE_SETTLES[1].fetch_add(1, Ordering::Relaxed);
                         return true;
                     };
                     // SAFETY: the snapshot's allocation holds the copy's
@@ -3008,8 +3059,12 @@ impl Shadow {
                 drop(before);
                 // Taken, if the range holds all of the page that is in the
                 // copy; else the rest of it is the refresh's, which notes
-                // only whole pages, and the page is looked at again.
-                if (page * PAGE).max(start) >= a && ((page + 1) * PAGE).min(end) <= e {
+                // only whole pages, and the page is looked at again. (With
+                // no journal there is no time to note.)
+                if let Some(now) = now
+                    && (page * PAGE).max(start) >= a
+                    && ((page + 1) * PAGE).min(end) <= e
+                {
                     let mut copied = self.copied.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(at) = copied.get_mut(page - base) {
                         *at = now;

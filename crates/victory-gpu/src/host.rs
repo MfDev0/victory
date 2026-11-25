@@ -2583,10 +2583,25 @@ fn stale_under_flights(runs: &[&HostList]) -> bool {
         // settle is still due where that could not be done. At most this
         // many changed runs go up to copies in the card's memory, each a
         // copy of its own there.
-        let mut runs_left = 512;
-        return spans.iter().any(|(shadow, from, to)| shadow.merge_under_writes(*from, *to - *from, &mut runs_left));
+        // (512 once: pages of the title's constants change in more runs
+        // than that between two submissions, and every frame then waited
+        // for its fifteen flights, 400 ms on an RTX 4060, for "3 pages
+        // looked at, 0 changed runs"; avatarmanz/VIctory-7900XTX 007fe557
+        // found the same. A run is one small copy on the card.)
+        let mut runs_left = merge_runs();
+        let mut unwatched_left = crate::shadow::merge_unwatched_bytes();
+        return spans
+            .iter()
+            .any(|(shadow, from, to)| shadow.merge_under_writes(*from, *to - *from, &mut runs_left, &mut unwatched_left));
     }
     spans.iter().any(|(shadow, from, to)| shadow.stale_under_writes(*from, *to - *from))
+}
+
+/// Changed runs a submission may put in under flights' shader writes
+/// before it settles them instead (`VICTORY_MERGE_RUNS`, 16384).
+fn merge_runs() -> usize {
+    static N: OnceLock<usize> = OnceLock::new();
+    *N.get_or_init(|| std::env::var("VICTORY_MERGE_RUNS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(16384))
 }
 
 /// A fence signal on a queue ([`late`]): goes behind the flights in the
@@ -3053,6 +3068,12 @@ fn late_line(frames: f64) {
             "title bytes put in under flights' shader writes per frame (VICTORY_LATE_WAIT=2): {pages:.0} pages looked at, \
              {runs:.0} changed runs, {:.2} MB",
             bytes / (1 << 20) as f64
+        );
+        let [budget, snapshot, runs_out, unjournaled] = crate::shadow::merge_settle_stats().map(|n| n as f64 / frames);
+        tracing::info!(
+            "settled for it per frame because: the compare with no write journal was over its budget {budget:.1} \
+             (VICTORY_MERGE_UNWATCHED_MB), no snapshot {snapshot:.1}, too many changed runs {runs_out:.1}; \
+             {unjournaled:.0} pages compared with no journal"
         );
     }
 }
