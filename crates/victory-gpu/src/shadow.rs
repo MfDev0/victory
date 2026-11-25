@@ -71,6 +71,9 @@ pub(crate) struct Shadow {
     card: Option<Card>,
     /// A window of title memory outside buffers, not a title buffer's copy.
     window: bool,
+    /// Refreshes that brought title bytes into the copy, so far: the title
+    /// writes the memory (`crate::host`'s copy-back of only what is read).
+    title_in: AtomicU64,
     /// With `crate::inplace`: not a copy at all. `buffer` is placed in a
     /// heap opened on the title memory itself, so shaders read and write
     /// the title's own bytes and nothing is copied either way. The heap,
@@ -2399,6 +2402,7 @@ impl Shadow {
             },
             card: None,
             window: false,
+            title_in: AtomicU64::new(0),
             place: None,
         }
     }
@@ -3007,6 +3011,20 @@ impl Shadow {
     /// since it was last copied (all of it if the memory is not
     /// write-watched). Returns the bytes copied.
     pub(crate) fn update(&self, address: usize, len: usize) -> usize {
+        let bytes = self.update_inner(address, len);
+        if bytes > 0 {
+            self.title_in.fetch_add(1, Ordering::Relaxed);
+        }
+        bytes
+    }
+
+    /// Refreshes so far that brought title bytes into the copy.
+    pub(crate) fn title_ins(&self) -> u64 {
+        self.title_in.load(Ordering::Relaxed)
+    }
+
+    /// [`Shadow::update`]'s copy.
+    fn update_inner(&self, address: usize, len: usize) -> usize {
         // In place: the card reads title memory itself.
         if self.place.is_some() {
             return 0;

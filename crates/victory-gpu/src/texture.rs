@@ -1102,6 +1102,9 @@ impl Staging {
                 "a sampled texture's memory is all zero (not streamed yet, or a failed BCPack read)"
             );
         }
+        if self.detile_spread(tiled, held) {
+            return;
+        }
         for (i, (footprint, &rows)) in self.footprints.iter().zip(&self.rows).enumerate() {
             let (mip, slice) = (i as u32 % self.mips, i as u32 / self.mips);
             let f = footprint.Footprint;
@@ -1124,6 +1127,74 @@ impl Staging {
                 return;
             }
         }
+    }
+}
+
+/// Threads a big texture's subresources are detiled on at once
+/// (`VICTORY_DETILE_THREADS`, 4 by default; 1: on the refreshing thread
+/// alone, as before Try 4.2). Try 4.2, idea 5: reading, hashing and
+/// detiling were 20-40 ms a frame of the submitting thread's time while
+/// the world streamed in, most of it the detile of big array and cube
+/// textures, whose slices and levels are each their own job.
+fn detile_threads() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("VICTORY_DETILE_THREADS")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(4usize)
+            .clamp(1, 16)
+    })
+}
+
+/// A texture of at least this many bytes is detiled on [`detile_threads`].
+const SPREAD_BYTES: usize = 2 << 20;
+
+impl Staging {
+    /// [`Staging::detile`] of every subresource the title holds (`held`,
+    /// by level), on [`detile_threads`] threads at once. False, with
+    /// nothing done, for a small texture or one subresource.
+    fn detile_spread(&self, tiled: &[u8], held: u32) -> bool {
+        let threads = detile_threads();
+        if threads < 2 || tiled.len() < SPREAD_BYTES || self.footprints.len() < 2 {
+            return false;
+        }
+        // Per subresource: level, slice, where in the staging buffer
+        // (as an address: threads take it apart) and its pitches.
+        let mut jobs: Vec<(u32, u32, usize, usize, usize, usize)> = Vec::new();
+        for (i, (footprint, &rows)) in self.footprints.iter().zip(&self.rows).enumerate() {
+            let (mip, slice) = (i as u32 % self.mips, i as u32 / self.mips);
+            let f = footprint.Footprint;
+            let pitch = f.RowPitch as usize;
+            let len = pitch * rows as usize * f.Depth as usize;
+            // SAFETY: the subresource's part of the mapped staging buffer.
+            let at = unsafe { self.data.add(footprint.Offset as usize) } as usize;
+            if mip < 32 && held & (1 << mip) == 0 {
+                // SAFETY: as above; no thread runs yet.
+                unsafe { std::slice::from_raw_parts_mut(at as *mut u8, len) }.fill(0);
+                continue;
+            }
+            jobs.push((mip, slice, at, len, pitch, pitch * rows as usize));
+        }
+        // Biggest first, dealt out in turn.
+        jobs.sort_unstable_by_key(|j| std::cmp::Reverse(j.3));
+        let layout = &self.layout;
+        std::thread::scope(|scope| {
+            for t in 0..threads.min(jobs.len()) {
+                let mine: Vec<_> = jobs.iter().skip(t).step_by(threads).copied().collect();
+                scope.spawn(move || {
+                    for (mip, slice, at, len, pitch, depth_pitch) in mine {
+                        // SAFETY: subresources' parts of the staging
+                        // buffer do not overlap; each is one thread's.
+                        let linear = unsafe { std::slice::from_raw_parts_mut(at as *mut u8, len) };
+                        if let Err(e) = layout.detile(tiled, mip, slice, linear, pitch, depth_pitch) {
+                            tracing::warn!(?e, mip, slice, "texture not detiled");
+                        }
+                    }
+                });
+            }
+        });
+        true
     }
 }
 

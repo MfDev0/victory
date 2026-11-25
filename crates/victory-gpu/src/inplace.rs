@@ -67,7 +67,8 @@ pub(crate) fn probe_level() -> u8 {
 /// buffers that lies in private memory committed whole is not copied: a
 /// part of the title's allocation is opened as a host heap and the window
 /// is a buffer placed over it ([`place_for`]). 2: title buffers too,
-/// except the big ones in the card's memory.
+/// except the big ones in the card's memory. 3: the hybrid, title buffers
+/// only up to [`small_most`].
 ///
 /// What stage 1 covers is private memory (`XMemVirtualAlloc`'s). View
 /// memory (the page pool) is turned down here: its section is made
@@ -88,6 +89,24 @@ pub(crate) fn probe_level() -> u8 {
 pub(crate) fn level() -> u8 {
     static LEVEL: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
     *LEVEL.get_or_init(|| std::env::var("VICTORY_INPLACE").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0))
+}
+
+/// `VICTORY_INPLACE=3`, the hybrid (Try 4.2, idea 2, after the shared
+/// memory of Apple's M chips and AMD's APUs, split as consoles split it):
+/// windows and title buffers of up to this many bytes
+/// (`VICTORY_INPLACE_SMALL_MB`, 8 by default) are the title's own memory,
+/// shared with the card: what the title changes every frame (constants,
+/// command memory, small pools) is neither copied in before a submission
+/// nor compared and copied back after it. The big buffers shaders read
+/// most stay in the card's memory ([`crate::shadow`]'s `cards`), and the
+/// middle ones copies, as before.
+///
+/// What it assumes is what 2 assumes; with flights in the air
+/// (`VICTORY_LATE_WAIT`, on by default) a title read of such a buffer may
+/// see a flight's writes half done, as [`crate::host`]'s late results do.
+fn small_most() -> u64 {
+    static MOST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *MOST.get_or_init(|| std::env::var("VICTORY_INPLACE_SMALL_MB").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(8) << 20)
 }
 
 /// The most title memory in place at once, in bytes
@@ -136,6 +155,11 @@ pub(crate) fn place_part(device: &ID3D12Device, start: u64, len: u64) -> Result<
 /// be opened; `None` leaves the caller to make a copy, as before.
 pub(crate) fn place_for(start: u64, len: u64, window: bool) -> Option<Placed> {
     if level() < if window { 1 } else { 2 } {
+        return None;
+    }
+    // The hybrid: only the small buffers share the title's memory.
+    if !window && level() == 3 && len > small_most() {
+        STATS[6].fetch_add(1, Ordering::Relaxed);
         return None;
     }
     // View memory: known from the runtime without asking Windows.

@@ -226,6 +226,9 @@ pub(crate) struct State {
     /// Tables made afresh in this list: (table, slot count, contents) → first
     /// dynamic slot.
     fresh_tables: std::collections::HashMap<(u64, u32, u64), u32>,
+    /// Constant data copied to upload memory in this list ([`share_constants`]):
+    /// (host list, its title epoch, title address, bytes) → GPU address.
+    constant_fills: std::collections::HashMap<(usize, u64, u64, u32), u64>,
     /// The dynamic slots the list holds: title heap, first, count; given
     /// back when the list has run, is reset or released.
     dynamic: Vec<(usize, u32, u32)>,
@@ -238,6 +241,20 @@ pub(crate) struct State {
     root_uav_slots: std::collections::HashMap<(usize, u64), RootSlot>,
     /// The list ran and its dynamic slots were given back.
     tables_gone: bool,
+}
+
+/// Whether constant data that several fresh tables of a list name is
+/// copied to upload memory once (`VICTORY_SHARE_CONSTANTS=0`: once per
+/// table, as before Try 4.2). Try 4.2, idea 4, reuse of what was already
+/// made (as a replay of recorded command buffers reuses them): a frame of
+/// the world makes some 12,500 tables, most of them naming the same few
+/// constant buffers of the frame and the view, and each copied them into
+/// upload memory of its own at submission. Two fills of the same title
+/// bytes recorded between the same two title writes of the list copy the
+/// same bytes, so the second table's view shows the first's copy.
+fn share_constants() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SHARE_CONSTANTS").is_none_or(|v| v != "0"))
 }
 
 impl Drop for State {
@@ -268,6 +285,7 @@ impl State {
             crate::descriptor::release_dynamic(heap, first, n);
         }
         self.fresh_tables.clear();
+        self.constant_fills.clear();
         self.root_srv_slots.clear();
         self.root_uav_slots.clear();
         self.tables_gone = true;
@@ -2632,11 +2650,24 @@ impl State {
                 let used = entries.iter().find(|u| u.table_offset_dwords / 8 == k);
                 match crate::descriptor::view(table + u64::from(k) * 32) {
                     Some(View::Constant(address, size)) => {
-                        let Some((gpu, to)) = list.scratch(u64::from(size)) else {
-                            host.make_null(index);
-                            continue;
+                        // The same constant buffer for many draws (the
+                        // frame's and the view's constants): copied once
+                        // between two title writes of the list.
+                        let key = (std::ptr::from_ref(list) as usize, list.title_epoch(), address, size);
+                        let gpu = match self.constant_fills.get(&key) {
+                            Some(&gpu) => gpu,
+                            None => {
+                                let Some((gpu, to)) = list.scratch(u64::from(size)) else {
+                                    host.make_null(index);
+                                    continue;
+                                };
+                                list.defer_fill(to, address as *const u8, size as usize);
+                                if share_constants() {
+                                    self.constant_fills.insert(key, gpu);
+                                }
+                                gpu
+                            }
                         };
-                        list.defer_fill(to, address as *const u8, size as usize);
                         host.constant_at(index, gpu, size);
                     }
                     Some(view) => {

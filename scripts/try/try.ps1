@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '4.1'
+$TryVersion = '4.2'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -40,11 +40,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -506,6 +506,25 @@ function Set-RunEnv {
         $script:NewFromTry = $false; $script:LazyFromTry = $false
         Say 'PLAIN mode: VICTORY''s defaults, as ztrx runs the game   (Z switches back to Try''s settings)'
     }
+    # 4.2: the frame-rate ideas. B (on by default): the game renders at 75%
+    # of the screen and our present scales it up and sharpens it (as DLSS /
+    # FSR mods do), and ray tracing is skipped (its structures are not built
+    # here: the rays only cost time and gave black shadows). M: frames moved
+    # on between the game's own (as VR's spacewarp). H: small buffers shared
+    # with the card instead of copied (as on one-memory machines).
+    # (Each only when not set before VIctory Try started.)
+    foreach ($kv in @(@('VICTORY_RENDER_SCALE', '75'), @('VICTORY_SKIP_RT', '1'), @('VICTORY_FRAMEGEN', '1'), @('VICTORY_INPLACE', '3'))) {
+        $name = $kv[0]
+        if ($null -eq $script:UserFx[$name]) {
+            $want = switch ($name) {
+                'VICTORY_FRAMEGEN' { $c.between -eq '1' }
+                'VICTORY_INPLACE' { $c.hybrid -eq '1' }
+                default { $c.boost -ne 'off' }
+            }
+            [Environment]::SetEnvironmentVariable($name, $(if ($want) { $kv[1] } else { $null }), 'Process')
+        }
+    }
+    Say "fps boost: $(if ($c.boost -ne 'off') { 'ON (75% render scale + sharpen, no ray tracing)' } else { 'off' })   frames in between: $(if ($c.between -eq '1') { 'ON' } else { 'off' })   shared small buffers: $(if ($c.hybrid -eq '1') { 'ON' } else { 'off' })"
     # Its own cache: the old base's pipeline library and shaders do not mix.
     if (-not $env:VICTORY_CACHE_DIR) { $env:VICTORY_CACHE_DIR = Join-Path $TryHome 'cache-gta6' }
     # Shaders that do not translate are saved here (zip and send this folder).
@@ -743,6 +762,8 @@ $script:Config = Load-Config
 $script:UserLoop = $env:VICTORY_SHADER_LOOP_LIMIT
 $script:UserWaveWide = $env:VICTORY_WAVE_WIDE
 $script:UserDisplay = $env:VICTORY_DISPLAY_MODE
+$script:UserFx = @{}
+foreach ($name in @('VICTORY_RENDER_SCALE', 'VICTORY_SKIP_RT', 'VICTORY_FRAMEGEN', 'VICTORY_INPLACE')) { $script:UserFx[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 while (-not (Ask-Game $false)) {}
 if (-not (Ensure-Tools)) { exit 1 }
 $changed = Update-Source
@@ -756,6 +777,7 @@ while ($true) {
     Say 'Enter = run again    U = update to the newest version and run'
     Say 'G = change the game paths    C = switch Series S / Series X    F = switch speed mode'
     Say 'R = switch the screen size (1080p / 4K)    Z = switch plain mode (VICTORY defaults, like ztrx)'
+    Say 'B = switch fps boost (75% render scale, no ray tracing)    M = switch frames in between    H = switch shared small buffers'
     Say 'P = prepare all pipelines again (done by itself after each update and run)    Q = quit'
     $k = (Read-Host '  Choice').Trim().ToUpper()
     if ($k -eq 'Q') { exit 0 }
@@ -767,6 +789,18 @@ while ($true) {
     }
     if ($k -eq 'Z') {
         $script:Config.plain = $(if ($script:Config.plain -eq '1') { '' } else { '1' })
+        Save-Config
+    }
+    if ($k -eq 'B') {
+        $script:Config.boost = $(if ($script:Config.boost -eq 'off') { '' } else { 'off' })
+        Save-Config
+    }
+    if ($k -eq 'M') {
+        $script:Config.between = $(if ($script:Config.between -eq '1') { '' } else { '1' })
+        Save-Config
+    }
+    if ($k -eq 'H') {
+        $script:Config.hybrid = $(if ($script:Config.hybrid -eq '1') { '' } else { '1' })
         Save-Config
     }
     if ($k -eq 'R') {

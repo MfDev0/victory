@@ -141,6 +141,34 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      is drawing with right now, and pipelines only started early no longer
      run above the game's own threads (`VICTORY_PIPELINE_KEEP_WORKER=0`,
      `VICTORY_PIPELINE_EARLY_BOOST=1` restore the old way).
+   4.2 brings seven frame-rate ideas taken from other places:
+   - **render scale** (as DLSS/FSR mods do): the game is told a screen 75%
+     the size (`VICTORY_RENDER_SCALE`, 50-100) and renders every pass that
+     small; our present scales each frame up to the window with a clamped
+     Catmull-Rom filter and sharpens it (`VICTORY_SHARPEN`, percent, 35);
+   - **no ray tracing** (as "RT off" mods): the console's ray structures
+     are not built here, so the rays walked empty memory, cost the card time
+     and gave black shadows and overbright light; with `VICTORY_SKIP_RT=1`
+     every ray misses at once. **B** switches both of these (on by default);
+   - **frames in between** (as VR's spacewarp): `VICTORY_FRAMEGEN=1` (**M**)
+     finds how each 16x16 block moved between the game's last two frames
+     and shows the last one moved on along that motion every
+     `VICTORY_FRAMEGEN_MS` (33) until the next arrives. The fps line still
+     counts only the game's frames;
+   - **copy back only what is read** (as CUDA's unified memory): buffers in
+     the PC's memory that nothing on the CPU reads are no longer compared
+     after every submission (350-520 MB a frame in the last reports); a
+     read while the results are held has them compared first
+     (`VICTORY_READ_BACK_ONLY_PC=0` restores; `VICTORY_QUIET_LANDINGS`,
+     `VICTORY_PROBE_EVERY`);
+   - **shared small buffers** (as one-memory machines): `VICTORY_INPLACE=3`
+     (**H**) makes buffers up to `VICTORY_INPLACE_SMALL_MB` (8) the game's
+     own memory, shared with the card, so they are neither copied in nor
+     compared; the big ones stay on the card. Off by default (riskier);
+   - **reuse**: a constant buffer many draws of a list name is copied to
+     upload memory once, not once per draw (`VICTORY_SHARE_CONSTANTS=0`);
+   - **textures detiled on 4 threads** (`VICTORY_DETILE_THREADS`, 1 for the
+     old way).
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
@@ -156,6 +184,8 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - **G**: change the game paths;
    - **C**: switch between Series S and Series X (remembered);
    - **P**: prepare all pipelines again (done by itself after each update and run);
+   - **B**: switch the fps boost (75% render scale, no ray tracing; on by
+     default), **M**: frames in between, **H**: shared small buffers (4.2);
    - **F**: switch to the faster speed mode (late waits and card buffers:
      4-5 fps on a 12 GB card, riskier on 8 GB) and back (remembered);
    - **Q**: quit.

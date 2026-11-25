@@ -58,6 +58,20 @@ struct Ray {
     inverse: [V; 3],
 }
 
+/// Skip ray tracing (Try 4.2, idea 3, after the mods that turn a game's
+/// ray tracing off): with `VICTORY_SKIP_RT=1` every ray-tracing node test
+/// misses at once ([`Lower::bvh_miss`]). The console's structure builder
+/// does not run here (`VICTORY_BVH_BUILDER`), so the title's rays walked
+/// memory that holds no structure: work for the card that gave garbage
+/// (black shadows, overbright lighting). A ray that misses everything
+/// ends at its first node: no shadow from it, and the title's own
+/// fallback for a miss (the sky, no occluder). It also lets the trace
+/// programs translate whatever their structure's descriptor says.
+fn skip_rays() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SKIP_RT").is_some_and(|v| v == "1"))
+}
+
 impl<'a> Lower<'a> {
     /// `image_bvh_intersect_ray` and `image_bvh64_intersect_ray`.
     pub(super) fn bvh(&mut self, inst: &Inst, b: usize, i: usize) -> Result<(), Why> {
@@ -94,6 +108,9 @@ impl<'a> Lower<'a> {
         let Operand::Vector { reg: dst, .. } = *data else {
             return Err("a ray-tracing node test's result");
         };
+        if skip_rays() {
+            return self.bvh_miss(inst, regs[0], dst, b, i);
+        }
         let site = (b, i);
         let nodes = self
             .x
@@ -216,6 +233,27 @@ impl<'a> Lower<'a> {
         }
         let results = self.end_guarded(gate, &results);
         for (k, &r) in results.iter().enumerate() {
+            self.write(inst, Reg::V(dst + k as u8), r, guard);
+        }
+        Ok(())
+    }
+
+    /// [`skip_rays`]: every node test misses at once, read from nothing:
+    /// a box node returns no child ([`bvh::NONE`] four times), any other
+    /// node a triangle miss ([`bvh::MISS`]). The node's kind is in its
+    /// pointer's low bits, so nothing of the structure is read.
+    fn bvh_miss(&mut self, inst: &Inst, pointer: u8, dst: u8, b: usize, i: usize) -> Result<(), Why> {
+        let guard = self.guard(b, i)?;
+        let v = inst.read(Reg::V(pointer)).ok_or("an unread operand")?;
+        let pointer = self.i32_of(v)?;
+        let c = self.cur;
+        let (k4, k6) = (self.s.m.i32(4), self.s.m.i32(6));
+        let pair = self.s.m.bin(c, Bin::And, pointer, k6);
+        let is_box = self.s.m.cmp(c, pred::EQ, pair, k4);
+        let none = self.s.m.i32(bvh::NONE);
+        for (k, miss) in bvh::MISS.iter().enumerate() {
+            let miss = self.s.m.i32(miss.to_bits());
+            let r = self.s.m.select(c, is_box, none, miss);
             self.write(inst, Reg::V(dst + k as u8), r, guard);
         }
         Ok(())
