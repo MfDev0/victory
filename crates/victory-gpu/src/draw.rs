@@ -2041,7 +2041,7 @@ impl State {
                     let view = heap.handle(index).and_then(|handle| host.mirror(index, handle, true));
                     let placed = view.as_ref().and_then(crate::descriptor::host::placed_texture);
                     let made = match &placed {
-                        Some(&View::Shader(resource, _)) => crate::resource::host_resource(resource as This).is_some(),
+                        Some(View::Shader(resource, _)) => crate::resource::host_resource(*resource as This).is_some(),
                         _ => false,
                     };
                     (view, placed, made)
