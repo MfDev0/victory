@@ -66,13 +66,29 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    From 3.6 the compute shaders that ask for 64-lane waves, which 32-lane
    NVIDIA cards refuse ("pipelines the card refused"), are translated in a
    slower form that the card accepts (`VICTORY_WAVE_WIDE=0` turns it off).
+   3.7 adds, each with its own switch to turn it off:
+   - fxceless/victory-gta6's newest work: textures a draw needs are put on
+     the card before it, faster defaults (relay, copy-back on all threads),
+     packed textures stay queued, skin and hair colours checked again after
+     upload, and the fx-prs fixes (`VICTORY_RELAY=0`, `VICTORY_WIDE_BACK=0`);
+   - a draw whose pipeline is still being made is drawn with a ready one of
+     the same shaders instead of left out (`VICTORY_STAND_IN=0`);
+   - texture checks (read, compare, detile) on all cores at once
+     (`VICTORY_WIDE_TEXTURES=0`);
+   - upload memory in the card's own memory when Resizable BAR is on
+     (`VICTORY_GPU_UPLOAD=0`);
+   - buffers the card's memory has no room for compared on the card, their
+     shaders' side in the PC's memory, up to 768 MB (`VICTORY_PC_CARD_MB=0`);
+   - empty views no longer counted as refused, and the first calls of the two
+     unknown pipeline methods write their pieces to the log for the next fix
+     (`VICTORY_RAW_TYPED=1` tries a fix for raw views off 16 bytes).
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
    `VIctory-report-<date>.zip` (the game log, crash details, build log and
    the failed shaders). If the graphics card was lost during the run, the
    next run is safer by itself, one step a time: back from F mode to the
-   relay, or the 64-lane compute shaders left out again (3.6), or copy-back
+   relay, or the 3.7 additions off, or the 64-lane compute shaders left out again (3.6), or copy-back
    on one thread (3.5), or the shader loop limit from 256 to 128. Nothing
    changes after a good run.
 6. Then you choose what's next:
