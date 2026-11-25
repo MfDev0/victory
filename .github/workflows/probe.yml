@@ -76,7 +76,7 @@ jobs:
           exe=target/release/victory
           out=disasm-out.txt
           : > $out
-          for pair in pixel-38bf0814e721a1b3:1464 pixel-8445dcb2b63aa197:x compute-ceb5eb68cd99cb07:38 compute-f133e35efed2a48a:1eb4; do
+          for pair in pixel-38bf0814e721a1b3:1464 compute-7f05ddab771799a9:89ec; do
             name=${pair%%:*}; off=${pair##*:}
             f=$(ls shaders/$name*.dxbc 2>/dev/null | head -n 1)
             [ -n "$f" ] || continue
@@ -86,7 +86,7 @@ jobs:
               off=$(grep -aoE "at 0x[0-9a-f]+" one.txt | tail -n 1 | sed 's/at 0x//')
             fi
             echo "==== $name @$off" >> $out
-            grep -aiE -B 26 -A 4 "(^|[^0-9a-f])(0x)?0*${off}([^0-9a-f]|$)" d.txt | cut -c1-110 | head -n 40 >> $out || true
+            grep -aiE -B 40 -A 4 "^ *0*${off}: " d.txt | cut -c1-100 | head -n 46 >> $out || true
           done
           cat $out
       - name: Results as annotations (the log host is not reachable from where they are read)
