@@ -84,6 +84,10 @@ pub fn load(prepared: &PreparedImage, dir: &Path) -> Result<LoadedImage> {
         // SAFETY: just mapped, and no title code has run.
         unsafe { crate::tls::redirect(loaded.base(), &loaded.info) }?;
     }
+    if !loaded.info.is_dll() && std::env::var_os(crate::pool_asserts::ENV).is_some_and(|v| v != "0") {
+        // SAFETY: just mapped, and no title code has run.
+        unsafe { crate::pool_asserts::disarm(loaded.base(), &loaded.info, &prepared.original_hash) };
+    }
     tracing::info!(
         base = format_args!("{:#x}", loaded.base()),
         preferred = format_args!("{:#x}", loaded.info.image_base),
