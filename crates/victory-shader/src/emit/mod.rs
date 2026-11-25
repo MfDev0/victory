@@ -474,11 +474,15 @@ pub fn emit(
                 }
             }
         }
-        // `VICTORY_WAVE_WIDE=last`: the wave-wide form only for programs every other form left
-        // asking for 64-lane waves, which a 32-lane host refuses outright (E_INVALIDARG at
-        // pipeline creation: 02384a60fda6f2d0, 2da4beb386509b77, 6b82bc7d22016cb5 on NVIDIA,
-        // victory-gta6 #7). Opt-in: the form's barriers lost the card for two other programs.
-        if !wide_on && std::env::var_os("VICTORY_WAVE_WIDE").is_some_and(|v| v == "last") {
+        // The wave-wide form for programs every other form left asking for 64-lane waves,
+        // which a 32-lane host refuses outright (E_INVALIDARG at pipeline creation:
+        // 02384a60fda6f2d0, 2cc4c197ee29e291, 2da4beb386509b77, 369cbe906ea72764,
+        // 5dc3b25986622949, 6f225b641c5b0708 in every run on an RTX 4060, their WaveSize(64)
+        // tag the only thing the driver objects to; 6b82bc7d22016cb5, victory-gta6 #7). Once
+        // opt-in (`VICTORY_WAVE_WIDE=last`) because the form's barriers lost the card for two
+        // other programs, but those took it in place of a form that translates (`=1`); here
+        // the alternative is a pipeline that is never made. `VICTORY_WAVE_WIDE=0` turns it off.
+        if !wide_on && std::env::var_os("VICTORY_WAVE_WIDE").is_none_or(|v| v != "0") {
             let base = forms
                 .iter()
                 .rev()
