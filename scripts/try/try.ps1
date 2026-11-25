@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '4.2'
+$TryVersion = '4.3'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -31,7 +31,7 @@ $LogDir = Join-Path $TryHome 'logs'
 $BackupDir = Join-Path $TryHome 'backup'
 New-Item -ItemType Directory -Force -Path $TryHome, $LogDir | Out-Null
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
-try { $Host.UI.RawUI.WindowTitle = 'VIctory Try' } catch {}
+try { $Host.UI.RawUI.WindowTitle = 'VIctory Try - menu' } catch {}
 
 function Say([string]$msg) { Write-Host ('  ' + $msg) }
 function Step([string]$msg) { Write-Host ''; Write-Host ('== ' + $msg) -ForegroundColor Cyan }
@@ -588,7 +588,7 @@ function Run-Game {
     if ($c.console -ne 'series-x') { $c.console = 'series-s' }
     Say "console: Xbox $(if ($c.console -eq 'series-s') { 'Series S' } else { 'Series X' })   (C switches)"
     Say "command: victory.exe run `"$($c.game_exe)`" --execute --console $($c.console)   (VICTORY_GAME_DIR=$($c.game_dir))"
-    Say 'To stop: close the game window. (Ctrl+C closes VIctory Try too.)'
+    Say 'To stop: close the game window.'
     Set-RunEnv
     if ("$($c.prepared)" -ne "$($c.built_key)") { Prepare-Shaders 'new build' }
     elseif ("$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from the last run' }
@@ -609,11 +609,20 @@ function Run-Game {
     Say 'New places compile their pipelines while you play (things may be missing for a while); after you close the game they are all compiled, and the next launch has them from the start.'
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $log = Join-Path $LogDir "game-$stamp.log"
-    Push-Location $TryHome
-    try {
-        & (Victory-Exe) run $c.game_exe --execute --console $c.console 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log
-        $code = $LASTEXITCODE
-    } finally { Pop-Location }
+    # 4.3: the game's output (the rendering lines) goes to a window of its
+    # own; this one keeps the menu, versions and settings.
+    # VICTORY_TRY_ONE_WINDOW=1: everything in this window, as before.
+    $code = $null
+    if ($env:VICTORY_TRY_ONE_WINDOW -ne '1') {
+        $code = Run-InOwnWindow $c $log
+    }
+    if ($null -eq $code) {
+        Push-Location $TryHome
+        try {
+            & (Victory-Exe) run $c.game_exe --execute --console $c.console 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log
+            $code = $LASTEXITCODE
+        } finally { Pop-Location }
+    }
     Write-Host ''
     Say "the game stopped (exit code $code)"
     Say "its output: $log"
@@ -623,6 +632,47 @@ function Run-Game {
     # Everything this run asked for and did not get, compiled now while the
     # game is closed: the next launch shows it from the start.
     if ("$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from this run' }
+}
+
+# The game in a window of its own ('VIctory - game output'), with its output
+# saved to $log as before. Returns the exit code, or $null if the window could
+# not be opened (the caller then runs the game here).
+function Run-InOwnWindow($c, [string]$log) {
+    $runner = Join-Path $TryHome 'run-game.ps1'
+    $codeFile = "$log.exit"
+    $lines = @(
+        'param([string]$Exe, [string]$Game, [string]$Console, [string]$Log, [string]$CodeFile)',
+        'try { $Host.UI.RawUI.WindowTitle = ''VIctory - game output'' } catch {}',
+        'Write-Host ''== VIctory game output (the menu is in the VIctory Try window)'' -ForegroundColor Cyan',
+        'Write-Host ''   This window closes by itself when the game stops.''',
+        'Write-Host ''''',
+        '& $Exe run $Game --execute --console $Console 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $Log',
+        '$code = $LASTEXITCODE',
+        'Set-Content -LiteralPath $CodeFile -Value ([string]$code) -Encoding ASCII',
+        'exit $code'
+    )
+    try {
+        Set-Content -LiteralPath $runner -Value $lines -Encoding ASCII
+        Remove-Item -LiteralPath $codeFile -Force -ErrorAction SilentlyContinue
+        $ps = (Get-Process -Id $PID).Path
+        $q = { param($v) '"' + ([string]$v).Replace('"', '') + '"' }
+        $argLine = "-NoProfile -ExecutionPolicy Bypass -File $(& $q $runner) $(& $q (Victory-Exe)) $(& $q $c.game_exe) $(& $q $c.console) $(& $q $log) $(& $q $codeFile)"
+        $p = Start-Process -FilePath $ps -ArgumentList $argLine -WorkingDirectory $TryHome -PassThru
+    } catch {
+        Bad "could not open the game output window ($_): the game runs in this window"
+        return $null
+    }
+    Say 'the game is running; its output is in the other window (VIctory - game output).'
+    Say 'Close the game window to come back here.'
+    $p.WaitForExit()
+    $code = $null
+    if (Test-Path -LiteralPath $codeFile) {
+        $code = (Get-Content -LiteralPath $codeFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+        Remove-Item -LiteralPath $codeFile -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $code) { try { $code = $p.ExitCode } catch {} }
+    if ($null -eq $code -or "$code" -eq '') { $code = 'unknown' }
+    return $code
 }
 
 # After a run: a short summary of its log, the safer setting for next time

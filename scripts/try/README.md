@@ -169,6 +169,11 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      upload memory once, not once per draw (`VICTORY_SHARE_CONSTANTS=0`);
    - **textures detiled on 4 threads** (`VICTORY_DETILE_THREADS`, 1 for the
      old way).
+   4.3: the game's output (its rendering lines) opens in a window of its
+   own, "VIctory - game output"; the VIctory Try window keeps the menu,
+   updates, versions and settings. It closes by itself when the game stops
+   and the summary appears in the menu window (`VICTORY_TRY_ONE_WINDOW=1`
+   keeps everything in one window, as before).
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
