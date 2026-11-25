@@ -92,6 +92,12 @@ pub extern "system" fn XMemVirtualAlloc(
     protect: u32,
 ) -> *mut c_void {
     let (lowest, highest) = address_range(flags);
+    // Asked for as 2 MiB pages, committed, and for the CPU alone (no
+    // graphics access bits): large pages may serve it.
+    let large_ok = base.is_null()
+        && kind & (PAGES_2M | PAGES_64K_BIT) == PAGES_2M
+        && kind & MEM_COMMIT != 0
+        && protect & GRAPHICS_ACCESS == 0;
     let mut requirements = MEM_ADDRESS_REQUIREMENTS {
         LowestStartingAddress: lowest as *mut c_void,
         HighestEndingAddress: highest as *mut c_void,
@@ -136,6 +142,11 @@ pub extern "system" fn XMemVirtualAlloc(
             kind |= MEM_WRITE_WATCH;
         }
     }
+    if large_ok
+        && let Some(at) = large_alloc(size, kind, protect, &mut parameter)
+    {
+        return at;
+    }
     // SAFETY: the title's own arguments, cleaned of console bits; the
     // parameter points at `requirements`, which outlives the call.
     let at = unsafe {
@@ -163,6 +174,106 @@ pub extern "system" fn XMemVirtualAlloc(
         );
     }
     at
+}
+
+/// The console's graphics access protection bits (read-only to coherent):
+/// memory with none of them is the CPU's alone.
+const GRAPHICS_ACCESS: u32 = 0x3_f000;
+
+/// Large pages (`VICTORY_LARGE_PAGES=0`: never): CPU-only memory the title
+/// asks for as 2 MiB pages is served from the host's 2 MiB pages, so the
+/// CPU's address translation covers it with 512 times fewer entries
+/// (fewer TLB misses in the title's big pools). The host gives them only
+/// to an account with "Lock pages in memory" (SeLockMemoryPrivilege); they
+/// are never paged out, so at most `VICTORY_LARGE_PAGES_MB` (2048 unless
+/// set) are taken. The graphics side never watches such memory, so nothing
+/// is lost by its lacking write watching. Where the host refuses (no
+/// privilege, no free 2 MiB pages), the usual pages serve, as before.
+fn large_minimum() -> Option<usize> {
+    static MIN: LazyLock<Option<usize>> = LazyLock::new(|| {
+        if std::env::var_os("VICTORY_LARGE_PAGES").is_some_and(|v| v == "0") {
+            return None;
+        }
+        // SAFETY: a plain query.
+        let min = unsafe { windows_sys::Win32::System::Memory::GetLargePageMinimum() };
+        let allowed = min != 0 && lock_privilege();
+        tracing::info!(
+            allowed,
+            min,
+            "large pages for CPU-only title memory (VICTORY_LARGE_PAGES=0: never; needs \"Lock pages in memory\" for this account)"
+        );
+        allowed.then_some(min)
+    });
+    *MIN
+}
+
+/// Turns on SeLockMemoryPrivilege for the process; whether the account has
+/// it.
+fn lock_privilege() -> bool {
+    use windows_sys::Win32::Foundation::{GetLastError, LUID};
+    use windows_sys::Win32::Security::{
+        AdjustTokenPrivileges, LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, TOKEN_PRIVILEGES,
+    };
+    use windows_sys::Win32::System::Threading::OpenProcessToken;
+    const TOKEN_ADJUST_PRIVILEGES: u32 = 0x20;
+    const TOKEN_QUERY: u32 = 0x8;
+    const SE_PRIVILEGE_ENABLED: u32 = 2;
+    const ERROR_NOT_ALL_ASSIGNED: u32 = 1300;
+    let name: Vec<u16> = "SeLockMemoryPrivilege".encode_utf16().chain([0]).collect();
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: valid out pointers; the token is closed below.
+    unsafe {
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &mut token) == 0 {
+            return false;
+        }
+        let mut luid = LUID { LowPart: 0, HighPart: 0 };
+        let mut ok = LookupPrivilegeValueW(std::ptr::null(), name.as_ptr(), &mut luid) != 0;
+        if ok {
+            let privileges = TOKEN_PRIVILEGES {
+                PrivilegeCount: 1,
+                Privileges: [LUID_AND_ATTRIBUTES {
+                    Luid: luid,
+                    Attributes: SE_PRIVILEGE_ENABLED,
+                }],
+            };
+            ok = AdjustTokenPrivileges(token, 0, &privileges, 0, std::ptr::null_mut(), std::ptr::null_mut()) != 0
+                && GetLastError() != ERROR_NOT_ALL_ASSIGNED;
+        }
+        CloseHandle(token);
+        ok
+    }
+}
+
+/// Bytes of large pages handed out (never given back to the count: a cap,
+/// not a balance).
+static LARGE_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+/// [`large_minimum`]'s allocation of `size` bytes, if the host gives it.
+fn large_alloc(size: usize, kind: u32, protect: u32, parameter: &mut MEM_EXTENDED_PARAMETER) -> Option<*mut c_void> {
+    const MEM_LARGE_PAGES: u32 = 0x2000_0000;
+    let min = large_minimum()?;
+    if size == 0 || !size.is_multiple_of(min) || protect != PAGE_READWRITE {
+        return None;
+    }
+    let cap = std::env::var("VICTORY_LARGE_PAGES_MB")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(2048)
+        * MIB;
+    if LARGE_BYTES.fetch_add(size, Ordering::Relaxed) + size > cap {
+        LARGE_BYTES.fetch_sub(size, Ordering::Relaxed);
+        return None;
+    }
+    let kind = (kind | MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES) & !MEM_WRITE_WATCH;
+    // SAFETY: as the usual allocation; the parameter outlives the call.
+    let at = unsafe { VirtualAlloc2(GetCurrentProcess(), std::ptr::null(), size, kind, protect, parameter, 1) };
+    if at.is_null() {
+        LARGE_BYTES.fetch_sub(size, Ordering::Relaxed);
+        return None;
+    }
+    static FIRST: std::sync::Once = std::sync::Once::new();
+    FIRST.call_once(|| tracing::info!(size, "title memory on large pages"));
+    Some(at)
 }
 
 /// `MEMORY_BASIC_INFORMATION` (the console's first 0x30 bytes are the
