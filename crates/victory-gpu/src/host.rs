@@ -6076,7 +6076,12 @@ impl Meter {
                  dropped {dropped:.0} without a host pipeline ({making} being made; {stand_ins} drawn with a stand-in so far) and \
                  {indirect:.0} indirect; heap buffers {picked:.1} passes {picked_ms:.1} ms;                  texture slots written so far: {placed} placed, {objects} of objects; \
                  textures picked by index: {picked_textures} uploaded so far ({picked_mb} MB), \
-                 {picked_waiting} waiting, {picked_away} passed over unmapped; depth textures with                  unordered access: {du0} made, bound as depth {du1}x, cleared as depth {du2}x,                  unordered views refused {du3}x; buffer views left null as the host would refuse them: {refused}",
+                 {picked_waiting} waiting, {picked_away} passed over unmapped; depth textures with                  unordered access: {du0} made, bound as depth {du1}x, cleared as depth {du2}x,                  unordered views refused {du3}x; buffer views left null as the host would refuse them: {refused}; \
+                 upload buffers in the card's memory (Resizable BAR) so far: {bar_uploads} ({bar_mb} MB); \
+                 title buffers compared on the card from the PC's memory: {pc_card_mb} MB alive",
+                bar_uploads = GPU_UPLOADS[0].load(Ordering::Relaxed),
+                bar_mb = GPU_UPLOADS[1].load(Ordering::Relaxed) >> 20,
+                pc_card_mb = crate::shadow::pc_card_bytes() >> 20,
                 picked_textures = crate::draw::HEAP_TEXTURES.load(Ordering::Relaxed),
                 picked_mb = crate::draw::HEAP_TEXTURE_BYTES.load(Ordering::Relaxed) >> 20,
                 picked_waiting = crate::draw::HEAP_TEXTURES_WAITING.load(Ordering::Relaxed),

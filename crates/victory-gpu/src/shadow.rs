@@ -241,6 +241,11 @@ pub(crate) fn card_hash_bytes(size: u64) -> u64 {
 /// Bytes alive of shaders' sides of copies in the PC's memory ([`pc_card_for`]).
 static PC_CARD_BYTES: AtomicU64 = AtomicU64::new(0);
 
+/// See [`PC_CARD_BYTES`] (for the frame line).
+pub(crate) fn pc_card_bytes() -> u64 {
+    PC_CARD_BYTES.load(Ordering::Relaxed)
+}
+
 /// `VICTORY_PC_CARD_MB` (768 unless set; 0 turns it off) and
 /// `VICTORY_PC_CARD_MIN_MB` (4): the most bytes of [`pc_card_for`]'s
 /// buffers, and the smallest title buffer that gets one.
