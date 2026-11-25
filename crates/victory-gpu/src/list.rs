@@ -910,7 +910,113 @@ fn buffer_range(buffer: This, offset: u64, len: u64) -> Option<*mut u8> {
     Some(unsafe { data.add(offset as usize) })
 }
 
-/// Buffer to buffer: both are host memory, copied at submission.
+/// What a title buffer copy does (pablogonz12/Scarlight #86).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CopyPlan {
+    /// One `CopyBufferRegion` on the host GPU: both sides have a host copy of
+    /// their range, so the GPU moves the bytes between them and title memory
+    /// gets them after the submission (like a shader write) instead of a
+    /// kernel read and write of title memory at submission time.
+    Gpu,
+    /// On the CPU, as always: a side without a host copy, or
+    /// `VICTORY_GPU_COPIES=0`.
+    Title,
+}
+
+/// [`CopyPlan`] for a copy whose sides do or do not have host copies: the
+/// whole decision, so it can be tested without a device.
+pub(crate) fn copy_plan(enabled: bool, src_hosted: bool, dst_hosted: bool) -> CopyPlan {
+    if enabled && src_hosted && dst_hosted {
+        CopyPlan::Gpu
+    } else {
+        CopyPlan::Title
+    }
+}
+
+/// Records a GPU copy of `len` bytes at `src_address` into `dst_address`
+/// through the buffers' host copies, in this list where the copy was
+/// recorded: `false` (nothing recorded) unless both ranges are inside their
+/// host copies (and do not overlap, when it is one copy).
+///
+/// The source's host copy is brought up to date by the submission-time steps,
+/// before the list runs (so after every CPU-side step recorded before this
+/// one), and the destination is marked GPU-written there: nothing refreshes
+/// title memory over it, and once the submission has run it is copied back
+/// like a shader write. Buffers are in the `COMMON` state, which a buffer copy
+/// promotes to and from without a barrier; a barrier on every unordered
+/// access before and after keeps the copy in order with the shaders around
+/// it (Try 4.7).
+///
+/// With flights in the air this is also what saves the wait: a copy on the
+/// CPU that reads or writes title memory a flight's shaders may write had
+/// to wait for every flight to land first (157 ms a frame in the
+/// 2026-11-25 report, all of it "title memory read by a buffer copy"). On
+/// the card the copy simply runs behind them, in the queue's order.
+#[cfg(windows)]
+pub(crate) fn record_gpu_copy(
+    list: &crate::host::HostList,
+    dst: &std::sync::Arc<crate::shadow::Shadow>,
+    dst_address: usize,
+    src: &std::sync::Arc<crate::shadow::Shadow>,
+    src_address: usize,
+    len: usize,
+) -> bool {
+    use windows::Win32::Graphics::Direct3D12::{D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_TYPE_UAV};
+    // A copy within one buffer whose two ranges overlap is not something
+    // `CopyBufferRegion` does: on the CPU, as before.
+    if std::sync::Arc::ptr_eq(dst, src) && dst_address < src_address + len && src_address < dst_address + len {
+        return false;
+    }
+    let (Some((dst_buffer, dst_offset)), Some((src_buffer, src_offset))) =
+        (dst.gpu_range(dst_address, len), src.gpu_range(src_address, len))
+    else {
+        return false;
+    };
+    // The source first: the copy reads the host copy's bytes, and the refresh
+    // is what makes them the title's (the pages a CPU copy would read).
+    src.refresh(list, src_address as u64, len as u64);
+    // Then the destination, brought up to date too (Try 4.7): the copy-back
+    // keeps a byte the title changed since the copy last took it, so the
+    // copy's bytes must start from the title's or a copied byte is lost
+    // there. Then its bytes before are kept for the copy-back, and a refresh
+    // in the meantime leaves title memory alone there.
+    dst.refresh(list, dst_address as u64, len as u64);
+    dst.gpu_writes(list, dst_address as u64, len as u64);
+    let all_writes = D3D12_RESOURCE_BARRIER {
+        Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
+        ..Default::default()
+    };
+    // SAFETY: an open list and live buffers, both ranges inside their
+    // resources (checked by `gpu_range`); the barriers name no resource.
+    unsafe {
+        list.list.ResourceBarrier(std::slice::from_ref(&all_writes));
+        list.list.CopyBufferRegion(&dst_buffer, dst_offset, &src_buffer, src_offset, len as u64);
+        list.list.ResourceBarrier(std::slice::from_ref(&all_writes));
+    }
+    crate::host::gpu_copied(len);
+    true
+}
+
+/// A title buffer copy of `len` bytes at `from` into `to`: on the host GPU
+/// when both ranges have a host copy, else on the CPU as always.
+#[cfg(windows)]
+fn buffer_copy(list: &crate::host::HostList, to: *mut u8, from: *const u8, len: usize) {
+    let on = crate::host::gpu_copies();
+    if len > 0 && on {
+        let src = crate::shadow::peek(from as u64, len as u64);
+        let dst = crate::shadow::peek(to as u64, len as u64);
+        if copy_plan(on, src.is_some(), dst.is_some()) == CopyPlan::Gpu
+            && let (Some(s), Some(d)) = (&src, &dst)
+            && record_gpu_copy(list, d, to as usize, s, from as usize, len)
+        {
+            return;
+        }
+    }
+    list.defer_copy(to, from, len);
+}
+
+/// Buffer to buffer: both are host memory, copied at submission, or on the
+/// host GPU through their host copies when both have one.
 extern "system" fn copy_buffer_region(
     this: This,
     dst: This,
@@ -923,8 +1029,9 @@ extern "system" fn copy_buffer_region(
     if let Some(list) = host_list(this)
         && let Some(to) = buffer_range(dst, dst_offset, len)
         && let Some(from) = buffer_range(src, src_offset, len)
+        && let Ok(len) = usize::try_from(len)
     {
-        list.defer_copy(to, from, len as usize);
+        buffer_copy(list, to, from, len);
     }
     #[cfg(not(windows))]
     let _ = (this, dst, dst_offset, src, src_offset, len);
@@ -980,7 +1087,7 @@ extern "system" fn copy_resource(this: This, dst: This, src: This) {
             crate::resource::buffer_bytes(dst),
             crate::resource::buffer_bytes(src),
         ) {
-            list.defer_copy(to, from, a.min(b) as usize);
+            buffer_copy(list, to, from, a.min(b) as usize);
         }
     }
     #[cfg(not(windows))]
@@ -2330,5 +2437,18 @@ mod tests {
         let release = |o: This| slot::<extern "system" fn(This) -> u32>(o, 0x10)(o);
         assert_eq!(release(list), 0);
         assert_eq!(release(allocator), 0);
+    }
+
+    /// The copy decision, without a device: only a copy whose source and
+    /// destination both have a host copy goes to the host GPU, and the switch
+    /// turns every one of them back into a CPU copy (pablogonz12/Scarlight
+    /// #86).
+    #[test]
+    fn a_copy_goes_to_the_gpu_only_when_both_sides_have_a_host_copy() {
+        assert_eq!(copy_plan(true, true, true), CopyPlan::Gpu);
+        assert_eq!(copy_plan(true, true, false), CopyPlan::Title);
+        assert_eq!(copy_plan(true, false, true), CopyPlan::Title);
+        assert_eq!(copy_plan(true, false, false), CopyPlan::Title);
+        assert_eq!(copy_plan(false, true, true), CopyPlan::Title);
     }
 }

@@ -2353,6 +2353,19 @@ impl Shadow {
         address - self.start + self.place.as_ref().map_or(0, |place| place.1)
     }
 
+    /// The GPU buffer and the offset in it of `[address, address + len)`,
+    /// when all of it is inside the copy: what a copy on the host GPU names
+    /// (pablogonz12/Scarlight #86). The buffer is the one shaders read and
+    /// write: the placed resource of memory in place, the card's side of a
+    /// copy in the card's memory, the copy itself otherwise.
+    pub(crate) fn gpu_range(&self, address: usize, len: usize) -> Option<(ID3D12Resource, u64)> {
+        let (start, end) = (self.start as usize, (self.start + self.len) as usize);
+        if len == 0 || address < start || address.checked_add(len)? > end {
+            return None;
+        }
+        Some((self.buffer.clone(), self.offset(address as u64)))
+    }
+
     /// Title memory `[start, start + len)` in place: `placed` is a buffer
     /// over it in a heap opened on it. Shaped as a copy so that everything
     /// that binds, views or keeps a copy works on it unchanged; what
@@ -3591,6 +3604,31 @@ pub(crate) fn spans() -> Vec<(u64, u64, bool)> {
 /// (a root view: the caller reads on to the copy's end).
 pub(crate) fn find(address: u64, len: u64) -> Option<Arc<Shadow>> {
     lookup(address, len, false)
+}
+
+/// As [`find`], for a copy that exists already: `None` without making one, so
+/// a title copy does not give every buffer it names a host copy (and a buffer
+/// in the card's memory a mirror in it). pablogonz12/Scarlight #86.
+pub(crate) fn peek(address: u64, len: u64) -> Option<Arc<Shadow>> {
+    let end = address.checked_add(len.max(1))?;
+    let map = buffers();
+    let key = map
+        .range(..=(address, usize::MAX))
+        .rev()
+        .take(64)
+        .find(|(_, e)| e.end >= end)
+        .map(|(k, _)| *k);
+    let Some(key) = key else {
+        // Memory outside buffers: a window that is there and holds it.
+        drop(map);
+        return LOOSE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|&(&(start, len), _)| start <= address && end <= start + len)
+            .map(|(_, shadow)| shadow.clone());
+    };
+    map.get(&key).and_then(|e| e.shadow.clone())
 }
 
 /// As [`find`], for an ask that is done with the copy when its list has

@@ -3136,6 +3136,35 @@ fn join_copies() -> bool {
 /// that continue the one before ([`join_copies`]).
 static COPIES_JOINED: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
 
+/// Whether the title's own buffer copies run on the host GPU when both sides
+/// have a host copy (`VICTORY_GPU_COPIES`, on unless `0`; pablogonz12/
+/// Scarlight #86, Try 4.7): one `CopyBufferRegion` in the list instead of a
+/// read and a write of title memory at submission time, with the destination
+/// copied back like a shader write (`crate::list::record_gpu_copy`). Off,
+/// every copy is a CPU copy, as before.
+///
+/// With flights in the air ([`late`]) a CPU copy that touched memory a
+/// flight's shaders may write waited for all of them to land first: two
+/// such settles a frame, 157 ms of a 485 ms frame, in the 2026-11-25 report.
+pub(crate) fn gpu_copies() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = std::env::var_os("VICTORY_GPU_COPIES").is_none_or(|v| v != "0");
+        tracing::info!(on, "title buffer copies on the card through the buffers' host copies (VICTORY_GPU_COPIES)");
+        on
+    })
+}
+
+/// Since the last frame-rate line: title buffer copies that ran on the card
+/// ([`gpu_copies`]), and their bytes.
+static GPU_COPIES: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// A title buffer copy of `len` bytes was recorded on the card.
+pub(crate) fn gpu_copied(len: usize) {
+    GPU_COPIES[0].fetch_add(1, Ordering::Relaxed);
+    GPU_COPIES[1].fetch_add(len as u64, Ordering::Relaxed);
+}
+
 /// Whether the copy `next` (destination, source, bytes) goes on exactly
 /// where `last` ended, source and destination both, and the two as one do
 /// not overlap (source over destination): then one copy of both moves the
@@ -7013,11 +7042,15 @@ impl Meter {
         }
         {
             let [copies, joined] = [0, 1].map(|i| COPIES_JOINED[i].swap(0, Ordering::Relaxed) as f64 / frames);
-            if copies > 0.0 {
+            let [on_card, card_bytes] = [0, 1].map(|i| GPU_COPIES[i].swap(0, Ordering::Relaxed) as f64 / frames);
+            if copies > 0.0 || on_card > 0.0 {
                 tracing::info!(
-                    "title buffer copies recorded per frame: {copies:.0}, of them {joined:.0} continue the one before \
-                     (VICTORY_JOIN_COPIES=1 makes those one copy with it: now {})",
-                    if join_copies() { "on" } else { "off" }
+                    "title buffer copies recorded per frame: {copies:.0} on the CPU, of them {joined:.0} continue the one before \
+                     (VICTORY_JOIN_COPIES=1 makes those one copy with it: now {}); {on_card:.0} on the card, {:.2} MB \
+                     (VICTORY_GPU_COPIES: now {})",
+                    if join_copies() { "on" } else { "off" },
+                    card_bytes / 1e6,
+                    if gpu_copies() { "on" } else { "off" }
                 );
             }
         }
