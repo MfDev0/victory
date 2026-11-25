@@ -120,6 +120,18 @@ pub(crate) fn floor() -> u64 {
     *BYTES.get_or_init(|| parse_floor(std::env::var("VICTORY_LEVELS_MIN_KB").ok().as_deref()))
 }
 
+/// Tiles (of 64 KiB) a level may have to get them on a card without room
+/// for whole textures (`VICTORY_SQUEEZE_TILES`, 4: 256 KiB, a 512x512
+/// block-compressed level; 0: none, the textures wait as before). In the
+/// 2026-11-25 report an 8 GB card stood at its line for the whole run with
+/// 17,000 slots of textures waiting for room, drawn black or grey; texture
+/// streaming in PC games drops the largest levels under a memory budget
+/// the same way.
+pub(crate) fn small_tiles() -> u32 {
+    static N: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *N.get_or_init(|| std::env::var("VICTORY_SQUEEZE_TILES").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(4))
+}
+
 /// The bytes of the tiles given to textures now: the card's memory they
 /// hold (`resource.rs` `room` counts it with the other host copies).
 pub(crate) fn given_total() -> u64 {
@@ -371,6 +383,30 @@ impl Tiled {
         held: u32,
         room: bool,
     ) -> (bool, bool) {
+        self.uploaded_may(queue, device, texture, held, if room { u32::MAX } else { 0 })
+    }
+
+    /// [`Tiled::uploaded`] on a card without room, when it still has some
+    /// below its hard line (`resource.rs` `squeeze_room`): the small held
+    /// levels get tiles ([`Tiled::small_levels`]), so the texture shows
+    /// blurred instead of black or grey; the large ones wait for room as
+    /// before (the second answer says so).
+    pub(crate) fn uploaded_small(&self, texture: &ID3D12Resource, held: u32) -> (bool, bool) {
+        match host() {
+            Some(host) => self.uploaded_may(host.queue(), &host.device, texture, held, self.small_levels()),
+            None => (false, false),
+        }
+    }
+
+    /// [`Tiled::uploaded_on`] where the held levels in `may` may get tiles.
+    fn uploaded_may(
+        &self,
+        queue: &ID3D12CommandQueue,
+        device: &ID3D12Device,
+        texture: &ID3D12Resource,
+        held: u32,
+        may: u32,
+    ) -> (bool, bool) {
         let held = held & self.every_level();
         let mut given = self.given.lock().unwrap_or_else(|e| e.into_inner());
         self.held.store(held, Ordering::Relaxed);
@@ -378,9 +414,20 @@ impl Tiled {
         let named = held | card;
         // The levels the card itself writes are few and are not kept
         // waiting: a write of the card's into no memory is lost.
-        let changed = self.give_locked(&mut given, queue, device, texture, named, if room { named } else { card });
+        let changed = self.give_locked(&mut given, queue, device, texture, named, (named & may) | card);
         let missing = self.without_locked(&given, named) != 0;
         (changed, missing)
+    }
+
+    /// The levels of [`small_tiles`] tiles or fewer, and the ones the card
+    /// packs together (a bit a level).
+    pub(crate) fn small_levels(&self) -> u32 {
+        let most = small_tiles();
+        if most == 0 {
+            return 0;
+        }
+        let first = self.standard.iter().position(|&tiles| tiles <= most).unwrap_or(self.standard.len());
+        self.every_level() & !((1u32 << first.min(31)) - 1)
     }
 
     /// At the submission of a list in which the card itself writes the

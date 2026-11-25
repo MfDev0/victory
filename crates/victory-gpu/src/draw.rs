@@ -396,6 +396,9 @@ pub(crate) static HEAP_PASS_PARTS: [AtomicU64; 2] = [const { AtomicU64::new(0) }
 pub(crate) static HEAP_TEXTURES: AtomicU64 = AtomicU64::new(0);
 pub(crate) static HEAP_TEXTURE_BYTES: AtomicU64 = AtomicU64::new(0);
 pub(crate) static HEAP_TEXTURES_WAITING: AtomicU64 = AtomicU64::new(0);
+/// Host copies made on a card without room, level by level with only their
+/// small levels given memory (`resource::squeeze_room`), since the start.
+pub(crate) static HEAP_TEXTURES_SQUEEZED: AtomicU64 = AtomicU64::new(0);
 /// Passes that made no texture because the card had no room
 /// (`crate::resource::room`), for the memory line.
 pub(crate) static HEAP_TEXTURES_FULL: AtomicU64 = AtomicU64::new(0);
@@ -1816,6 +1819,7 @@ impl State {
             once!("textures picked by index: the card has no room for more; they wait");
         }
         let mut refused = 0;
+        let mut squeeze_ok = !room && crate::resource::squeeze_room();
         // Room again: the slots held back while the card was full are due
         // now (`full_card_pass`).
         if room {
@@ -1981,10 +1985,24 @@ impl State {
             // had its colour only in the launches that entered the world
             // under the line. `VICTORY_REUPLOAD_WHEN_FULL=0`: refused, as
             // before.
+            // A card without room that still has some below its hard line
+            // (`resource::squeeze_room`, asked with `room`): the copy is made
+            // level by level and only its small levels get memory, so the
+            // texture is drawn blurred until there is room, not black.
+            let mut squeeze = false;
             if !room {
                 let has_its_texture = reupload_when_full()
                     && heap.handle(index).is_some_and(|handle| host.texture_slot_made_from(index, handle));
-                if !has_its_texture {
+                if !has_its_texture && squeeze_ok {
+                    squeeze = true;
+                    let n = HEAP_TEXTURES_SQUEEZED.fetch_add(1, Ordering::Relaxed) + 1;
+                    if n == 1 || n.is_multiple_of(2000) {
+                        tracing::info!(
+                            so_far = n,
+                            "the card has no room for whole textures: a new one gets memory for its small levels only (VICTORY_SQUEEZE_TILES)"
+                        );
+                    }
+                } else if !has_its_texture {
                     refused += 1;
                     if full_card_pass() {
                         // Held back for the frames of about four seconds
@@ -2008,8 +2026,22 @@ impl State {
                     );
                 }
             }
-            let view = heap.handle(index).and_then(|handle| host.mirror(index, handle, true));
-            let placed = view.as_ref().and_then(crate::descriptor::host::placed_texture);
+            let (view, placed) = if squeeze {
+                crate::resource::squeezing(|| {
+                    let view = heap.handle(index).and_then(|handle| host.mirror(index, handle, true));
+                    let placed = view.as_ref().and_then(crate::descriptor::host::placed_texture);
+                    (view, placed)
+                })
+            } else {
+                let view = heap.handle(index).and_then(|handle| host.mirror(index, handle, true));
+                let placed = view.as_ref().and_then(crate::descriptor::host::placed_texture);
+                (view, placed)
+            };
+            if squeeze && placed.is_none() && matches!(view, Some(View::Placed(..))) {
+                // Not made now (too large to make level by level): waits.
+                host.texture_slot_held(index, write, frame + most);
+                continue;
+            }
             let resource = match placed.as_ref().or(view.as_ref()) {
                 Some(&View::Shader(resource, _)) => resource as This,
                 _ => {
@@ -2075,9 +2107,14 @@ impl State {
             crate::texture::unstage(resource);
             SPENT.fetch_add(bytes, Ordering::Relaxed);
             since_asked += bytes;
-            if room && since_asked >= 32 << 20 {
+            if since_asked >= 32 << 20 {
                 since_asked = 0;
-                room = crate::resource::room();
+                if room {
+                    room = crate::resource::room();
+                }
+                if !room {
+                    squeeze_ok = crate::resource::squeeze_room();
+                }
             }
             HEAP_TEXTURE_BYTES.fetch_add(bytes, Ordering::Relaxed);
             HEAP_TEXTURES.fetch_add(1, Ordering::Relaxed);

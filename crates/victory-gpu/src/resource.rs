@@ -1339,10 +1339,11 @@ fn hosted(this: This, make: bool) -> Option<Made> {
             // (`crate::texture` `staging`).
             let readable = texture_layout(&r.desc).is_some_and(|t| !t.planes[0].layout.desc.swizzle.xor());
             let partly = readable
-                && bytes >= crate::tiles::floor()
-                && (!crate::texture::committed(r.data().cast_const(), bytes as usize)
-                    || crate::descriptor::host::next_start(start, start.saturating_add(bytes)).is_some()
-                    || crate::descriptor::host::first_viewed(start).is_some_and(|first| first > 0));
+                && (SQUEEZING.get()
+                    || bytes >= crate::tiles::floor()
+                        && (!crate::texture::committed(r.data().cast_const(), bytes as usize)
+                            || crate::descriptor::host::next_start(start, start.saturating_add(bytes)).is_some()
+                            || crate::descriptor::host::first_viewed(start).is_some_and(|first| first > 0)));
             let reserved = if partly { host_texture_as(&r.desc, r.host.state, clear, true) } else { None };
             let cut = reserved
                 .as_ref()
@@ -1354,6 +1355,12 @@ fn hosted(this: This, make: bool) -> Option<Made> {
                 tiled = cut;
                 texture = reserved;
             }
+        }
+        // On a card without room ([`squeezing`]): a large copy that would
+        // take all of its memory at once is not made now (and not refused:
+        // the slot waits for room).
+        if texture.is_none() && SQUEEZING.get() && footprint(&r.desc).map_or(0, |f| f.size) > crate::tiles::floor() {
+            return None;
         }
         let texture = match texture {
             Some(texture) => Some(texture),
@@ -1449,6 +1456,42 @@ pub(crate) fn room() -> bool {
         }
         None => filled < WITHOUT_BUDGET,
     }
+}
+
+/// Whether a card without [`room`] still has some for small copies of
+/// textures (`crate::tiles::small_tiles`): its memory in use under 97 % of
+/// the system's budget. Past the budget the system moves the card's memory
+/// into the PC's.
+#[cfg(windows)]
+pub(crate) fn squeeze_room() -> bool {
+    if crate::tiles::small_tiles() == 0 || !crate::tiles::wanted() {
+        return false;
+    }
+    match crate::host::host().and_then(|h| h.video_memory()) {
+        Some([budget, used, ..]) => used < budget / 100 * 97,
+        None => false,
+    }
+}
+
+// Set while the pass over textures picked by index makes a host copy on a
+// card without room ([`squeezing`]): such a copy is made level by level
+// whatever it holds, and a large one that cannot be is not made now.
+#[cfg(windows)]
+thread_local! {
+    static SQUEEZING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f`, in which host copies of textures are made as for a card
+/// without room but with some below its hard line ([`squeeze_room`]):
+/// two-dimensional ones with levels are made level by level (the small
+/// levels get memory, `crate::tiles::Tiled::uploaded_small`), others of
+/// more than `crate::tiles::floor` bytes are not made.
+#[cfg(windows)]
+pub(crate) fn squeezing<R>(f: impl FnOnce() -> R) -> R {
+    SQUEEZING.set(true);
+    let r = f();
+    SQUEEZING.set(false);
+    r
 }
 
 /// The bytes of the card's memory the texture queue leaves free for
@@ -2208,7 +2251,12 @@ impl OnDemand {
         let Some(tiled) = &self.0.tiled else {
             return false;
         };
-        let (changed, waiting) = tiled.uploaded(&self.0.texture, held, room());
+        let room = room();
+        let (changed, waiting) = if !room && squeeze_room() {
+            tiled.uploaded_small(&self.0.texture, held)
+        } else {
+            tiled.uploaded(&self.0.texture, held, room)
+        };
         if changed {
             crate::descriptor::host::levels_changed(memory);
         }
