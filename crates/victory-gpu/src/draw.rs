@@ -2115,11 +2115,9 @@ impl State {
         // The ray-tracing structure builder's stages run all or none.
         if crate::pipeline::is_builder(self.pipeline as This) && !crate::pipeline::builder_runs() {
             DROPPED.fetch_add(1, Ordering::Relaxed);
+            crate::pipeline::note_why("a stage of the ray-tracing structure builder, which is off".to_owned());
             #[cfg(feature = "diagnostics")]
-            {
-                crate::pipeline::note_why("a stage of the ray-tracing structure builder, which is off".to_owned());
-                self.list_dropped_roots([x, y, z]);
-            }
+            self.list_dropped_roots([x, y, z]);
             return;
         }
         let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This) else {
@@ -2128,11 +2126,9 @@ impl State {
                 "a dispatch without a host pipeline dropped"
             );
             DROPPED.fetch_add(1, Ordering::Relaxed);
+            crate::pipeline::note_drop(self.pipeline as This);
             #[cfg(feature = "diagnostics")]
-            {
-                crate::pipeline::note_drop(self.pipeline as This);
-                self.list_dropped_roots([x, y, z]);
-            }
+            self.list_dropped_roots([x, y, z]);
             return;
         };
         if !p.compute {
@@ -2141,6 +2137,7 @@ impl State {
         }
         if !self.bind(list, p, true) {
             DROPPED.fetch_add(1, Ordering::Relaxed);
+            crate::pipeline::note_drop(self.pipeline as This);
             // A stage of the structure builder that cannot be bound is a
             // dropped stage: the others stop too.
             if crate::pipeline::is_builder(self.pipeline as This) {
@@ -2439,6 +2436,8 @@ impl State {
             DROPPED.fetch_add(1, Ordering::Relaxed);
             #[cfg(feature = "diagnostics")]
             dropped(self.pipeline);
+            #[cfg(not(feature = "diagnostics"))]
+            crate::pipeline::note_drop(self.pipeline as This);
         }
     }
 
@@ -2849,6 +2848,8 @@ impl State {
             DROPPED.fetch_add(1, Ordering::Relaxed);
             #[cfg(feature = "diagnostics")]
             dropped(self.pipeline);
+            #[cfg(not(feature = "diagnostics"))]
+            crate::pipeline::note_drop(self.pipeline as This);
         }
     }
 
@@ -2950,6 +2951,8 @@ impl State {
             DROPPED.fetch_add(1, Ordering::Relaxed);
             #[cfg(feature = "diagnostics")]
             dropped(self.pipeline);
+            #[cfg(not(feature = "diagnostics"))]
+            crate::pipeline::note_drop(self.pipeline as This);
         }
     }
 }

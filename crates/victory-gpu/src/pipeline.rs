@@ -438,9 +438,11 @@ pub(crate) fn loose_stand_ins() -> u64 {
     make::LOOSE_STAND_INS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Draws and dispatches dropped since the last [`take_drops`], by reason
-/// (diagnostics).
-#[cfg(all(windows, feature = "diagnostics"))]
+/// Draws and dispatches dropped since the last [`take_drops`], by reason.
+/// Kept in every build (4.8): the frame lines said how many draws a frame
+/// were dropped "without a host pipeline", 166 to 2,546 in the user's runs,
+/// but only a diagnostics build said which programs they were.
+#[cfg(windows)]
 static DROPS: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
 
 /// Shader hashes as printed in the pipeline diagnostics.
@@ -486,32 +488,35 @@ pub(crate) fn is_skipped(this: This) -> bool {
 }
 
 /// Counts a draw or dispatch of `this` intentionally skipped or dropped
-/// for want of a host pipeline (diagnostics).
-#[cfg(all(windows, feature = "diagnostics"))]
+/// for want of a host pipeline, or with one that could not be bound.
+#[cfg(windows)]
 pub(crate) fn note_drop(this: This) {
     let why = if this.is_null() {
-        Some("no pipeline set".to_owned())
+        "no pipeline set".to_owned()
     } else {
         let p = pipeline(this);
-        skipped_shader(p)
-            .map(|hash| format!("skipped shader {hash}"))
-            .or_else(|| make::missing(&p.host))
+        #[cfg(feature = "diagnostics")]
+        let skipped = skipped_shader(p).map(|hash| format!("skipped shader {hash}"));
+        #[cfg(not(feature = "diagnostics"))]
+        let skipped: Option<String> = None;
+        skipped.or_else(|| make::missing(&p.host)).unwrap_or_else(|| {
+            format!("its host pipeline is there but the draw could not be bound or run {:?}", p.shaders)
+        })
     };
-    if let Some(why) = why {
-        note_why(why);
-    }
+    note_why(why);
 }
 
-/// Counts a draw or dispatch dropped for `why` (diagnostics).
-#[cfg(all(windows, feature = "diagnostics"))]
+/// Counts a draw or dispatch dropped for `why`.
+#[cfg(windows)]
 pub(crate) fn note_why(why: String) {
+    #[cfg(feature = "diagnostics")]
     crate::capture::op(0, || format!("DROPPED {why}"));
     let mut drops = DROPS.lock().unwrap_or_else(|e| e.into_inner());
     *drops.get_or_insert_with(HashMap::new).entry(why).or_default() += 1;
 }
 
-/// The drops counted since the last call, most first (diagnostics).
-#[cfg(all(windows, feature = "diagnostics"))]
+/// The drops counted since the last call, most first.
+#[cfg(windows)]
 pub(crate) fn take_drops() -> Vec<(String, u64)> {
     let drops = DROPS.lock().unwrap_or_else(|e| e.into_inner()).take();
     let mut drops: Vec<(String, u64)> = drops.into_iter().flatten().collect();

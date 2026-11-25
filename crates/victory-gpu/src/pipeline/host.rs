@@ -1337,6 +1337,12 @@ fn dump_refused(shaders: &[Arc<Shader>], codes: &[Vec<u8>], root_blob: &[u8]) {
     }
     let _ = std::fs::write(dir.join(format!("{}.rootsig", first.hash)), root_blob);
     let _ = std::fs::write(dir.join(format!("{}.txt", first.hash)), format!("{shaders:?}\n"));
+    // The console containers too (4.8), as the title gave them: a refusal
+    // is studied with `victory translate` on them (only the host's DXIL was
+    // kept, which cannot be translated again another way).
+    for s in shaders {
+        let _ = std::fs::write(dir.join(format!("{}-{}.dxbc", s.stage, s.hash)), &s.container);
+    }
 }
 
 fn code_bytes(code: &D3D12_SHADER_BYTECODE) -> Vec<u8> {
