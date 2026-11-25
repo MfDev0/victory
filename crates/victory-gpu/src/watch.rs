@@ -560,6 +560,9 @@ fn uncommitted_end(block: usize) -> usize {
 /// notes them written; true if any was guarded.
 fn open(g: &mut Guards, start: usize, end: usize) -> bool {
     use windows_sys::Win32::System::Memory::{PAGE_READWRITE, VirtualProtect};
+    // Held for a copy-back (`crate::lazy`): its own protection back first,
+    // which the guard's own below then replaces.
+    crate::lazy::release(start, end.saturating_sub(start));
     let blocks: Vec<usize> = g
         .protected
         .range(start / BLOCK..end.div_ceil(BLOCK))
@@ -646,6 +649,8 @@ pub fn title_memory_remapped(at: usize, len: usize) {
     crate::inplace::views_gone(at, len);
     // And nothing stays in place over it.
     crate::inplace::title_memory_freeing(at, len);
+    // Nor held for a copy-back.
+    crate::lazy::forget(at, len);
     let mut g = guards();
     let range = at / BLOCK..at.saturating_add(len).div_ceil(BLOCK);
     let absent: Vec<usize> = g.absent.range(range.clone()).copied().collect();
@@ -678,6 +683,11 @@ fn install() {
             return EXCEPTION_CONTINUE_SEARCH;
         }
         let at = r.ExceptionInformation[1];
+        // Memory held for a copy-back (`crate::lazy`): the write waits for
+        // it, and faults here again if the block is still guarded.
+        if crate::lazy::fault(at) {
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
         // Held across both checks: another thread may have opened the block
         // since this one faulted, and a copy may have guarded it again since
         // (then it is ours again, not read-only for some other reason).

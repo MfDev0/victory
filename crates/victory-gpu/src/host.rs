@@ -2406,6 +2406,7 @@ fn relay_worker() {
         fail(format_args!("no event for the thread that lands submissions sent ahead (VICTORY_RELAY=1)"));
     };
     let mut fetch: Option<RelayFetch> = None;
+    crate::lazy::landing_thread();
     loop {
         let next = {
             let mut line = line();
@@ -2566,6 +2567,9 @@ fn late_line(frames: f64) {
             r[3] / 1000.0,
             r[4] / 1000.0,
         );
+        if crate::lazy::on() {
+            tracing::info!("{}", crate::lazy::line(frames));
+        }
     }
     if late_exact() {
         let [pages, runs, bytes] = crate::shadow::merged_stats().map(|n| n as f64 / frames);
@@ -3448,6 +3452,11 @@ impl Host {
     /// is complete before the title is told anything.
     fn relay_land(&self, items: Vec<Late>, fetch: &mut Option<RelayFetch>) {
         let landing = std::time::Instant::now();
+        // With `crate::lazy`: what was done before the copy-back (the read
+        // backs of every flight, and the signals and writes up to the first
+        // write into held memory).
+        let mut read_back_early = false;
+        let mut early = vec![false; items.len()];
         {
             let flights: Vec<&Flight> = items
                 .iter()
@@ -3468,6 +3477,45 @@ impl Host {
                         last_notes(&runs)
                     ));
                 }
+                // Lazy copy-back: the memory the shaders may have written is
+                // held (no access), and the title hears now that the card is
+                // done; the copy-back below opens it.
+                let lazy = crate::lazy::on() && {
+                    let ranges: Vec<(usize, usize)> =
+                        flights.iter().flat_map(|f| f.back.iter().flat_map(|(_, r)| r.iter().copied())).collect();
+                    // The read backs write title memory: before it is held.
+                    for flight in &flights {
+                        for &i in &flight.order {
+                            read_backs(flight.lists[i].host());
+                        }
+                    }
+                    read_back_early = true;
+                    crate::lazy::hold(&ranges)
+                };
+                if lazy {
+                    let mut sent = 0;
+                    for (k, item) in items.iter().enumerate() {
+                        match item {
+                            Late::Run(_) => {}
+                            Late::Signal(fence, value) => {
+                                crate::fence::set(*fence as crate::object::This, *value);
+                                early[k] = true;
+                                sent += 1;
+                            }
+                            Late::Write(at, what, bytes) => {
+                                // Into held memory: this and what follows
+                                // wait for the copy-back, in order.
+                                if crate::lazy::holds_any(*at, *bytes) {
+                                    break;
+                                }
+                                what.write(*at as *mut u8, *bytes);
+                                early[k] = true;
+                                sent += 1;
+                            }
+                        }
+                    }
+                    crate::lazy::LAZY_STATS[2].fetch_add(sent, Ordering::Relaxed);
+                }
                 let plans: Vec<&CardPlan> = flights.iter().filter_map(|f| f.card.as_ref()).collect();
                 self.relay_card_back(&plans, fetch);
                 let mut back: Vec<Declared> = Vec::new();
@@ -3486,6 +3534,9 @@ impl Host {
                     }
                 }
                 relay_hand_back(&back);
+                if lazy {
+                    crate::lazy::done();
+                }
                 // Only now, and flight by flight: a range another flight
                 // in the air declared too stays closed to refreshes.
                 for flight in &flights {
@@ -3501,18 +3552,21 @@ impl Host {
         // In the order given: what tells the title the card is done.
         let mut last = 0;
         let mut landed = Vec::new();
-        for item in items {
+        for (item, early) in items.into_iter().zip(early) {
             match item {
                 Late::Run(flight) => {
                     last = flight.number;
-                    for &i in &flight.order {
-                        read_backs(flight.lists[i].host());
+                    if !read_back_early {
+                        for &i in &flight.order {
+                            read_backs(flight.lists[i].host());
+                        }
                     }
                     if let Some(card) = flight.card {
                         self.card_done(card);
                     }
                     landed.push((flight.lists, flight.order));
                 }
+                _ if early => {}
                 Late::Write(at, what, bytes) => what.write(at as *mut u8, bytes),
                 Late::Signal(fence, value) => crate::fence::set(fence as crate::object::This, value),
             }
@@ -5615,7 +5669,13 @@ fn read(src: *const u8, dst: *mut u8, len: usize) -> bool {
     let mut done = 0;
     // SAFETY: the destination is mapped writable memory of `len` bytes; the
     // kernel checks the source.
-    unsafe { ReadProcessMemory(GetCurrentProcess(), src.cast(), dst.cast(), len, &mut done) != 0 }
+    if unsafe { ReadProcessMemory(GetCurrentProcess(), src.cast(), dst.cast(), len, &mut done) } != 0 {
+        return true;
+    }
+    // Memory held for a copy-back (`crate::lazy`) is opened, and read again.
+    // SAFETY: as above.
+    crate::lazy::release(src as usize, len)
+        && unsafe { ReadProcessMemory(GetCurrentProcess(), src.cast(), dst.cast(), len, &mut done) } != 0
 }
 
 #[link(name = "ntdll", kind = "raw-dylib")]
@@ -5665,6 +5725,10 @@ pub(crate) fn write_mapped(dst: *mut u8, src: *const u8, len: usize) {
         unsafe { WriteProcessMemory(GetCurrentProcess(), at as _, from.cast(), n, &mut done) != 0 }
     };
     if len == 0 || write(dst as usize, len) {
+        return;
+    }
+    // Memory held for a copy-back (`crate::lazy`) is opened first.
+    if crate::lazy::release(dst as usize, len) && write(dst as usize, len) {
         return;
     }
     for_pieces(dst as usize, len, 64 << 10, |at, n| {
