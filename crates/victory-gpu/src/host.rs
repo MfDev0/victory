@@ -3466,6 +3466,7 @@ impl Host {
     /// behind them, and an idle stretch of the card, if one was under way,
     /// ends here ([`CARD_CLOCK_US`]).
     fn card_sent(&self) {
+        awake::sent(&self.device);
         let Some(clock) = self.card_clock() else {
             return;
         };
@@ -6899,6 +6900,8 @@ static GPU_UPLOAD_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 /// Our passes at the present: render scale and frames in between.
 #[path = "presentfx.rs"]
 mod presentfx;
+#[path = "awake.rs"]
+pub(crate) mod awake;
 
 /// The swap chain formats a presented texture can be copied into: its own
 /// family's.
