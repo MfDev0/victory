@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '4.5'
+$TryVersion = '4.6'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -517,8 +517,10 @@ function Set-RunEnv {
         $name = $kv[0]
         if ($null -eq $script:UserFx[$name]) {
             $want = switch ($name) {
-                'VICTORY_FRAMEGEN' { $c.between -eq '1' }
+                'VICTORY_FRAMEGEN' { $c.between -eq '1' -and $c.console -ne 'series-s' }
                 'VICTORY_INPLACE' { $c.hybrid -eq '1' }
+                # (Series S renders smaller and upscales by itself: 4.6)
+                'VICTORY_RENDER_SCALE' { $c.boost -ne 'off' -and $c.console -ne 'series-s' }
                 default { $c.boost -ne 'off' }
             }
             [Environment]::SetEnvironmentVariable($name, $(if ($want) { $kv[1] } else { $null }), 'Process')
@@ -848,64 +850,96 @@ if ($null -eq $changed) { Bad 'no source to build: check the internet connection
 Run-Newer
 if ($changed -or -not (Test-Path (Victory-Exe))) { if (-not (Build-All)) { exit 1 } }
 
+# Every command of the menu: its key, what it is, whether it is on now, and
+# what it does (4.6).
+function Show-Commands {
+    $c = $script:Config
+    $on = { param($b) if ($b) { 'ON ' } else { 'off' } }
+    $rows = @(
+        @('Enter', 'Run again', '', 'start the game again with the settings below'),
+        @('U', 'Update', '', 'download the newest VIctory, build it, then run the game'),
+        @('V', 'Version', '', 'show which Try and VIctory version you have'),
+        @('G', 'Game paths', '', 'ask again where the game folder and game_scarlett_master.exe are'),
+        @('C', 'Console', $(if ($c.console -eq 'series-s') { 'S  ' } else { 'X  ' }), 'Xbox Series S (renders 1280x720 and scales up: faster) or Series X (full size)'),
+        @('R', 'Screen size', $(if ($c.res -eq '4k') { '4K ' } else { '1080' }), 'the size the game is told the screen has: 1920x1080 or 3840x2160'),
+        @('F', 'Speed mode', $(& $on ($c.fast -eq '1')), 'faster copying between PC and card; riskier (back to stable if the card is lost)'),
+        @('B', 'Fps boost', $(& $on ($c.boost -ne 'off')), 'Series X: renders at 75% and sharpens; both: skips ray tracing (gave black shadows)'),
+        @('M', 'Frames in between', $(& $on ($c.between -eq '1')), 'adds a moved frame between the game''s own (smoother; Series X only)'),
+        @('H', 'Shared buffers', $(& $on ($c.hybrid -eq '1')), 'small buffers shared with the card instead of copied'),
+        @('A', 'Ambient light', $(& $on ($c.ambient -ne 'off')), 'soft light where the sun does not reach (no pitch-black shadows)'),
+        @('L', 'Textures by level', $(& $on ($c.levels -ne 'off')), 'textures take card memory only for the sizes in use (8 GB cards: no black doors)'),
+        @('O', 'Shader clean-up', $(& $on ($c.opt -eq 'on')), 'off keeps walls, roofs and floors (they went missing with it on)'),
+        @('W', 'Shadow fix', $(& $on ($c.shadowfix -ne 'off')), 'NVIDIA: keeps the ceiling and lit rooms (14 shadow programs translated safely)'),
+        @('Z', 'Plain mode', $(& $on ($c.plain -eq '1')), 'VIctory''s own defaults instead of Try''s settings (for comparing)'),
+        @('P', 'Prepare again', '', 'compile all pipelines again with the game closed (done by itself after updates)'),
+        @('Q', 'Quit', '', 'close VIctory Try')
+    )
+    Write-Host ''
+    Write-Host '  ======================= COMMANDS (type the key, then Enter) =======================' -ForegroundColor Cyan
+    Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f 'KEY', 'COMMAND', 'NOW', 'WHAT IT DOES') -ForegroundColor Cyan
+    foreach ($r in $rows) {
+        Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3])
+    }
+    Write-Host '  ====================================================================================' -ForegroundColor Cyan
+    Write-Host '  Switches (C, R, F, B, M, H, A, L, O, W, Z) flip at once and are saved; Enter then runs the game with them.'
+}
+
+function Show-Version {
+    Step 'Version'
+    Say "VIctory Try $TryVersion"
+    $c = $script:Config
+    if ("$($c.built_key)" -match '^fork:([0-9a-f]{7,40})') {
+        $line = (G log -1 --format='%h %ad %s' --date=short $Matches[1]) | Select-Object -First 1
+        Say "VIctory built from: $line"
+    } else {
+        Say 'VIctory: not built yet'
+    }
+    $fetched = (G rev-parse -q --verify refs/remotes/origin/fork) | Select-Object -First 1
+    if ($fetched) {
+        $line = (G log -1 --format='%h %ad %s' --date=short $fetched) | Select-Object -First 1
+        Say "newest downloaded: $line   (U updates)"
+    }
+    Say "game: $($c.game_exe)"
+}
+
 while ($true) {
     Run-Game
-    Write-Host ''
-    Say 'Enter = run again    U = update to the newest version and run'
-    Say 'G = change the game paths    C = switch Series S / Series X    F = switch speed mode'
-    Say 'R = switch the screen size (1080p / 4K)    Z = switch plain mode (VICTORY defaults, like ztrx)'
-    Say 'B = switch fps boost (75% render scale, no ray tracing)    M = switch frames in between    H = switch shared small buffers'
-    Say 'A = switch ambient light (no black shadows)    L = switch textures level by level (no black doors and props on 8 GB cards)'
-    Say 'O = switch shader clean-up (off keeps walls and roofs)    W = switch the shadow fix (ceiling and lit rooms on NVIDIA)'
-    Say 'P = prepare all pipelines again (done by itself after each update and run)    Q = quit'
-    $k = (Read-Host '  Choice').Trim().ToUpper()
+    Show-Commands
+    # Switches only change the setting and show the list again; Enter (or
+    # U, G, P) runs the game, Q quits.
+    $k = ''
+    while ($true) {
+        $k = (Read-Host '  Choice').Trim().ToUpper()
+        if ($k -eq 'V') { Show-Version; Show-Commands; continue }
+        $c = $script:Config
+        $switched = $true
+        switch ($k) {
+            'F' { $c.fast = $(if ($c.fast -eq '1') { '' } else { '1' }) }
+            'Z' { $c.plain = $(if ($c.plain -eq '1') { '' } else { '1' }) }
+            'B' { $c.boost = $(if ($c.boost -eq 'off') { '' } else { 'off' }) }
+            'M' { $c.between = $(if ($c.between -eq '1') { '' } else { '1' }) }
+            'H' { $c.hybrid = $(if ($c.hybrid -eq '1') { '' } else { '1' }) }
+            'A' { $c.ambient = $(if ($c.ambient -eq 'off') { '' } else { 'off' }) }
+            'L' { $c.levels = $(if ($c.levels -eq 'off') { '' } else { 'off' }) }
+            'O' { $c.opt = $(if ($c.opt -eq 'on') { '' } else { 'on' }) }
+            'W' { $c.shadowfix = $(if ($c.shadowfix -eq 'off') { '' } else { 'off' }) }
+            'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
+            'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }) }
+            default { $switched = $false }
+        }
+        if ($switched) {
+            Save-Config
+            Say "switched ($k). Press another switch, or Enter to run the game."
+            Show-Commands
+            continue
+        }
+        if ($k -eq '' -or $k -eq 'U' -or $k -eq 'G' -or $k -eq 'P' -or $k -eq 'Q') { break }
+        Bad "unknown key '$k': use one of the keys in the list"
+        Show-Commands
+    }
     if ($k -eq 'Q') { exit 0 }
     if ($k -eq 'G') { while (-not (Ask-Game $true)) {} }
     if ($k -eq 'P') { $script:Config.prepared = ''; $script:Config.recipes = '' }
-    if ($k -eq 'F') {
-        $script:Config.fast = $(if ($script:Config.fast -eq '1') { '' } else { '1' })
-        Save-Config
-    }
-    if ($k -eq 'Z') {
-        $script:Config.plain = $(if ($script:Config.plain -eq '1') { '' } else { '1' })
-        Save-Config
-    }
-    if ($k -eq 'B') {
-        $script:Config.boost = $(if ($script:Config.boost -eq 'off') { '' } else { 'off' })
-        Save-Config
-    }
-    if ($k -eq 'M') {
-        $script:Config.between = $(if ($script:Config.between -eq '1') { '' } else { '1' })
-        Save-Config
-    }
-    if ($k -eq 'H') {
-        $script:Config.hybrid = $(if ($script:Config.hybrid -eq '1') { '' } else { '1' })
-        Save-Config
-    }
-    if ($k -eq 'A') {
-        $script:Config.ambient = $(if ($script:Config.ambient -eq 'off') { '' } else { 'off' })
-        Save-Config
-    }
-    if ($k -eq 'L') {
-        $script:Config.levels = $(if ($script:Config.levels -eq 'off') { '' } else { 'off' })
-        Save-Config
-    }
-    if ($k -eq 'O') {
-        $script:Config.opt = $(if ($script:Config.opt -eq 'on') { '' } else { 'on' })
-        Save-Config
-    }
-    if ($k -eq 'W') {
-        $script:Config.shadowfix = $(if ($script:Config.shadowfix -eq 'off') { '' } else { 'off' })
-        Save-Config
-    }
-    if ($k -eq 'R') {
-        $script:Config.res = $(if ($script:Config.res -eq '4k') { '' } else { '4k' })
-        Save-Config
-    }
-    if ($k -eq 'C') {
-        $script:Config.console = $(if ($script:Config.console -eq 'series-s') { 'series-x' } else { 'series-s' })
-        Save-Config
-    }
     if ($k -eq 'U') {
         $changed = Update-Source
         if ($changed -or -not (Test-Path (Victory-Exe))) { if (-not (Build-All)) { Bad 'the new build FAILED: the game runs on the last working build (older fixes). Send the error above.' } }

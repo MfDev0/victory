@@ -210,6 +210,20 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      "waiting for pipelines": with none being made they are compute work
      (mostly the ray-tracing builder, which is off), not missing objects.
    The first run after this update translates the shaders again.
+   4.6, Series S and the command list:
+   - **Series S shows the game** (C; fxceless/victory-fork #188 by
+     sagouindupm and Filip722): in Series S mode the game presents two
+     planes, its picture (1920x1080) and its interface over it (3840x2160,
+     see-through where empty), and calls the console's FidelityFX upscaler
+     to make the picture from a 1280x720 render. Only the first plane was
+     shown and the upscaler's output stayed black: a black window after
+     loading. The interface is now drawn over the picture, and the upscale
+     dispatch becomes a plain stretch of the 720p render. In Series S, Try
+     leaves out the 75% render size and the frames in between (the game
+     already renders smaller); ray tracing stays skipped with B;
+   - **the menu lists every command**: its key, what it is, whether it is
+     on now and what it does. Switches flip at once and show the list
+     again; Enter runs the game. V shows the version.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
