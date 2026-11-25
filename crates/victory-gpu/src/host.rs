@@ -2221,10 +2221,10 @@ fn read_only_plan(plans: &[&CardPlan], held: bool) -> Vec<usize> {
                 if entry.1 != u32::MAX {
                     entry.1 = 0;
                 }
-            } else if entry.1 != u32::MAX {
-                entry.1 += 1;
+            } else {
+                entry.1 = entry.1.saturating_add(1);
             }
-            if entry.1 != u32::MAX && entry.1 >= QUIET_LANDINGS && landing % PROBE_EVERY != 0 {
+            if entry.1 != u32::MAX && entry.1 >= QUIET_LANDINGS && !landing.is_multiple_of(PROBE_EVERY) {
                 skip.push(copy);
             }
         }
