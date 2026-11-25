@@ -1973,6 +1973,9 @@ struct Flight {
     order: Vec<usize>,
     card: Option<CardPlan>,
     back: Vec<Declared>,
+    /// The sends of title bytes to copies in the card's memory on the
+    /// queue ahead of its end ([`QUEUE_ORDER`]): done once it has run.
+    sends: u64,
 }
 
 /// One thing in the line of what waits for the card, in order.
@@ -2389,6 +2392,27 @@ struct RelayFetch {
     sent: u64,
     /// Buffer, mapping, bytes.
     buffer: Option<(ID3D12Resource, usize, u64)>,
+    /// With [`copy_fetch`]: a queue of the card's copy engine, and a list
+    /// for it; the fetch goes there, not behind the flights in the air.
+    copy: Option<(ID3D12CommandQueue, Prelude)>,
+}
+
+/// Whether the relay fetches what shaders wrote to copies in the card's
+/// memory on a queue of the card's copy engine (`VICTORY_COPY_FETCH=0`: on
+/// the queue the flights run on, as before). There the fetch ran behind
+/// every flight sent since the landed ones, and the thread that copies
+/// back waited for those to run: 196 ms a frame for 6 fetches in the
+/// 2026-11-24 report. On its own queue it runs at once, beside them.
+///
+/// What it may bring then: bytes of a later flight's shaders, even half
+/// written; that flight's compare flags the pieces it changed and its
+/// landing fetches them again. Which sends of title bytes it saw is known
+/// only up to those ahead of the landed flights (`Flight::sends`), so
+/// later ones are left out of the merge as not received
+/// (`Shadow::card_merge_relay`).
+fn copy_fetch() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_COPY_FETCH").is_none_or(|v| v != "0"))
 }
 
 /// The thread that lands flights ([`relay`]): as soon as the card has run
@@ -3303,6 +3327,31 @@ impl Host {
     /// The relay's own list, fence, event for [`Host::relay_card_back`].
     fn make_relay_fetch(&self) -> Option<RelayFetch> {
         let list = self.make_prelude()?;
+        // SAFETY: plain object creation.
+        let copy = copy_fetch().then(|| unsafe {
+            (|| -> windows::core::Result<(ID3D12CommandQueue, Prelude)> {
+                let queue: ID3D12CommandQueue = self.device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
+                    Type: D3D12_COMMAND_LIST_TYPE_COPY,
+                    ..Default::default()
+                })?;
+                let allocator: ID3D12CommandAllocator = self.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY)?;
+                let list: ID3D12GraphicsCommandList =
+                    self.device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COPY, &allocator, None)?;
+                list.Close()?;
+                Ok((queue, (allocator, list)))
+            })()
+        });
+        let copy = match copy {
+            Some(Ok(copy)) => {
+                tracing::info!("what shaders wrote to the card's memory is fetched on the card's copy engine (VICTORY_COPY_FETCH=0: behind the flights)");
+                Some(copy)
+            }
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "no queue on the card's copy engine: fetches go behind the flights");
+                None
+            }
+            None => None,
+        };
         // SAFETY: plain objects of our own.
         unsafe {
             let fence: ID3D12Fence = self.device.CreateFence(0, D3D12_FENCE_FLAG_NONE).ok()?;
@@ -3313,6 +3362,7 @@ impl Host {
                 event,
                 sent: 0,
                 buffer: None,
+                copy,
             })
         }
     }
@@ -3327,7 +3377,7 @@ impl Host {
     /// whatever was sent meanwhile, so it may bring a later flight's
     /// bytes, which that flight's landing then finds merged already; and
     /// nothing is sent back up.
-    fn relay_card_back(&self, plans: &[&CardPlan], fetch: &mut Option<RelayFetch>) {
+    fn relay_card_back(&self, plans: &[&CardPlan], fetch: &mut Option<RelayFetch>, sends_done: u64) {
         let differs = {
             let work = CARD_WORK.lock().unwrap_or_else(|e| e.into_inner());
             work.as_ref().map(|work| (work.differs.1, (work.differs.2 / 4) as usize))
@@ -3369,8 +3419,14 @@ impl Host {
             }
         }
         if pieces.is_empty() {
-            // Nothing to fetch: every send so far is older than the next fetch.
-            crate::shadow::relay_fetched(*QUEUE_ORDER.lock().unwrap_or_else(|e| e.into_inner()));
+            // Nothing to fetch: every send so far is older than the next
+            // fetch (on the copy engine, which does not wait for them, only
+            // those ahead of the landed flights).
+            crate::shadow::relay_fetched(if copy_fetch() {
+                sends_done
+            } else {
+                *QUEUE_ORDER.lock().unwrap_or_else(|e| e.into_inner())
+            });
             return;
         }
         if fetch.is_none() {
@@ -3388,12 +3444,29 @@ impl Host {
         };
         f.sent += 1;
         let ((allocator, list), fence, event, sent) = (f.list.clone(), f.fence.clone(), f.event, f.sent);
+        let copy = f.copy.clone();
         let waiting = std::time::Instant::now();
         // SAFETY: the list's last run was waited for by this thread; live
         // buffers (the copies are held by the plans); the fence and the
         // event are this thread's.
         let ran = unsafe {
             (|| -> windows::core::Result<u64> {
+                if let Some((queue, (allocator, list))) = &copy {
+                    allocator.Reset()?;
+                    list.Reset(allocator, None)?;
+                    for (shadow, lo, hi, at) in &pieces {
+                        list.CopyBufferRegion(&buffer, *at, &shadow.buffer, *lo as u64, (*hi - *lo) as u64);
+                    }
+                    list.Close()?;
+                    let lists = [Some(list.cast::<ID3D12CommandList>()?)];
+                    queue.ExecuteCommandLists(&lists);
+                    queue.Signal(&fence, sent)?;
+                    fence.SetEventOnCompletion(sent, event)?;
+                    WaitForSingleObject(event, INFINITE);
+                    // The sends known to have run: those ahead of the landed
+                    // flights.
+                    return Ok(sends_done);
+                }
                 allocator.Reset()?;
                 list.Reset(&allocator, None)?;
                 for (shadow, lo, hi, at) in &pieces {
@@ -3517,7 +3590,8 @@ impl Host {
                     crate::lazy::LAZY_STATS[2].fetch_add(sent, Ordering::Relaxed);
                 }
                 let plans: Vec<&CardPlan> = flights.iter().filter_map(|f| f.card.as_ref()).collect();
-                self.relay_card_back(&plans, fetch);
+                let sends_done = flights.iter().map(|f| f.sends).max().unwrap_or(0);
+                self.relay_card_back(&plans, fetch, sends_done);
                 let mut back: Vec<Declared> = Vec::new();
                 for flight in &flights {
                     for (shadow, ranges) in &flight.back {
@@ -3774,6 +3848,8 @@ impl Host {
             return;
         };
         let told = !sent.writes.is_empty();
+        // (Under the submission lock: no send goes up meanwhile.)
+        let sends = *QUEUE_ORDER.lock().unwrap_or_else(|e| e.into_inner());
         let most = {
             let mut line = line();
             let Line { line: items, written, lists: flying, target, .. } = &mut *line;
@@ -3787,6 +3863,7 @@ impl Host {
                 order,
                 card: sent.card,
                 back: sent.back,
+                sends,
             }));
             items.extend(sent.writes.into_iter().map(|(at, what, bytes)| Late::Write(at, what, bytes)));
             *flying >= late_most()
@@ -3818,6 +3895,7 @@ impl Host {
             return 0;
         };
         let number = sent.number;
+        let sends = *QUEUE_ORDER.lock().unwrap_or_else(|e| e.into_inner());
         {
             let mut line = line();
             let Line { line: items, written, lists: flying, target, .. } = &mut *line;
@@ -3831,6 +3909,7 @@ impl Host {
                 order: Vec::new(),
                 card: sent.card,
                 back: sent.back,
+                sends,
             }));
             items.extend(sent.writes.into_iter().map(|(at, what, bytes)| Late::Write(at, what, bytes)));
         }
