@@ -386,11 +386,18 @@ impl Queue {
         Some(prev == NOT_QUEUED)
     }
 
-    /// The next pipeline to make: light requested ones first, then heavy
-    /// requested ones while a heavy slot is free, then those queued early.
-    /// Of the requested ones, the one the most draws asked for so far
-    /// ([`most_asked_first`]), the first queued of those.
+    /// `pop_for(false)`.
+    #[cfg(test)]
     fn pop(&mut self) -> Option<Arc<Pending>> {
+        self.pop_for(false)
+    }
+
+    /// The next pipeline to make: light requested ones first, then heavy
+    /// requested ones while a heavy slot is free, then those queued early
+    /// (not with `asked_only`: the worker kept for requested ones,
+    /// [`kept_worker`]). Of the requested ones, the one the most draws
+    /// asked for so far ([`most_asked_first`]), the first queued of those.
+    fn pop_for(&mut self, asked_only: bool) -> Option<Arc<Pending>> {
         fn requested(lane: &mut VecDeque<Arc<Pending>>) -> Option<Arc<Pending>> {
             if !most_asked_first() {
                 return lane.pop_front();
@@ -410,8 +417,9 @@ impl Queue {
         let heavy_free = self.heavy_making < self.heavy_limit;
         let p = requested(&mut self.requested)
             .or_else(|| heavy_free.then(|| requested(&mut self.heavy_requested)).flatten())
-            .or_else(|| early(&mut self.early))
-            .or_else(|| heavy_free.then(|| early(&mut self.heavy_early)).flatten())?;
+            .or_else(|| (!asked_only).then(|| early(&mut self.early)).flatten())
+            .or_else(|| (heavy_free && !asked_only).then(|| early(&mut self.heavy_early)).flatten())?;
+        ASKED_WAITING.store((self.requested.len() + self.heavy_requested.len()) as u64, Ordering::Relaxed);
         if p.heavy() {
             self.heavy_making += 1;
         }
@@ -450,14 +458,50 @@ fn start(p: &Arc<Pending>, priority: u8) {
         if new {
             PEAK.fetch_max(WAITING.fetch_add(1, Ordering::Relaxed) + 1, Ordering::Relaxed);
         }
-        AVAILABLE.notify_one();
+        ASKED_WAITING.store((queue.requested.len() + queue.heavy_requested.len()) as u64, Ordering::Relaxed);
+        // All: the worker kept for requested pipelines ([`kept_worker`])
+        // may be the one woken, and it leaves an early one where it is.
+        AVAILABLE.notify_all();
     }
 }
 
-fn next() -> Arc<Pending> {
+/// Requested pipelines (draws wait for them) left in the queue at the last
+/// claim: what raises the workers above the title ([`worker_level`]).
+static ASKED_WAITING: AtomicU64 = AtomicU64::new(0);
+
+/// Whether worker `worker` of `workers` makes requested pipelines only:
+/// the first, when there are three or more. At the intro every worker was
+/// busy with pipelines started early from the last run's list (heavy ones
+/// take a driver 10-40 s), so the one the intro's next draw asked for
+/// waited for a worker while each frame waited up to
+/// `VICTORY_PIPELINE_WAIT_MS` for it: the stutter at the first load.
+/// `VICTORY_PIPELINE_KEEP_WORKER=0`: every worker takes any pipeline.
+fn kept_worker(worker: usize, workers: usize) -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    worker == 0
+        && workers >= 3
+        && *ON.get_or_init(|| std::env::var_os("VICTORY_PIPELINE_KEEP_WORKER").is_none_or(|v| v != "0"))
+}
+
+/// The priority level of a worker: [`priority_level`] by the requested
+/// backlog; pipelines only started early (no draw waits for them) raise the
+/// workers to normal at most, so a long early list no longer runs above
+/// the title's own threads while it plays its intro video (it stuttered
+/// at 10-21 fps there with 84-230 early pipelines queued, 2026-11-25).
+/// `VICTORY_PIPELINE_EARLY_BOOST=1`: every queued pipeline counts, as before.
+fn worker_level(worker: usize, workers: usize) -> u8 {
+    static ALL: OnceLock<bool> = OnceLock::new();
+    let waiting = WAITING.load(Ordering::Relaxed);
+    if *ALL.get_or_init(|| std::env::var_os("VICTORY_PIPELINE_EARLY_BOOST").is_some_and(|v| v == "1")) {
+        return priority_level(waiting, worker, workers);
+    }
+    priority_level(ASKED_WAITING.load(Ordering::Relaxed), worker, workers).max(priority_level(waiting, worker, workers).min(1))
+}
+
+fn next(asked_only: bool) -> Arc<Pending> {
     let mut queue = QUEUE.lock().unwrap_or_else(|e| e.into_inner());
     loop {
-        if let Some(p) = queue.pop() {
+        if let Some(p) = queue.pop_for(asked_only) {
             return p;
         }
         queue = AVAILABLE.wait(queue).unwrap_or_else(|e| e.into_inner());
@@ -527,13 +571,13 @@ fn workers() -> bool {
                 .spawn(move || {
                     let mut raised = None;
                     loop {
-                        let p = next();
+                        let p = next(kept_worker(i, workers));
                         // Below the title's own threads (loading, recording)
                         // unless a backlog waits: the title then runs at
                         // full load and starved the workers (4-9 pipelines a
                         // minute in the world on an i5-12400F; see
                         // `priority_level`).
-                        let level = priority_level(WAITING.load(Ordering::Relaxed), i, workers);
+                        let level = worker_level(i, workers);
                         if raised != Some(level) {
                             raised = Some(level);
                             // SAFETY: a plain call on our own thread.
