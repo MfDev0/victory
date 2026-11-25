@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '3.7'
+$TryVersion = '3.8'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -40,11 +40,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new37 = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new37')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -461,10 +461,10 @@ function Set-RunEnv {
     # itself if a run loses the card (see Check-Run).
     $script:WaveWideFromTry = (-not $script:UserWaveWide) -and $c.wavewide -ne 'off'
     if (-not $script:UserWaveWide) { [Environment]::SetEnvironmentVariable('VICTORY_WAVE_WIDE', $(if ($c.wavewide -eq 'off') { '0' } else { $null }), 'Process') }
-    # 3.7: stand-in pipelines, upload memory on the card (Resizable BAR) and
+    # 3.8: stand-in pipelines, upload memory on the card (Resizable BAR) and
     # buffers compared on the card from the PC's memory. All three off again
     # by themselves if a run loses the card (see Check-Run).
-    $script:NewFromTry = $c.new37 -ne 'off'
+    $script:NewFromTry = $c.new38 -ne 'off'
     if (-not $script:NewFromTry) {
         foreach ($k in @('VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB')) { [Environment]::SetEnvironmentVariable($k, '0', 'Process') }
     }
@@ -594,8 +594,8 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
             $c.fast = ''
             Say 'next run: back to the stable relay speed mode (F switches again).'
         } elseif ($script:NewFromTry) {
-            $c.new37 = 'off'
-            Say 'next run: the 3.7 additions (stand-in pipelines, Resizable BAR uploads, PC-side card copies) are off.'
+            $c.new38 = 'off'
+            Say 'next run: the 3.8 additions (stand-in pipelines, Resizable BAR uploads, PC-side card copies) are off.'
         } elseif ($script:WaveWideFromTry) {
             $c.wavewide = 'off'
             Say 'next run: the 64-lane compute shaders are left out again, as before 3.6.'
