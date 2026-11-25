@@ -2026,19 +2026,26 @@ impl State {
                     );
                 }
             }
-            let (view, placed) = if squeeze {
+            let (view, placed, made) = if squeeze {
+                // (The host copy is made here, in the squeeze, not later on
+                // first use.)
                 crate::resource::squeezing(|| {
                     let view = heap.handle(index).and_then(|handle| host.mirror(index, handle, true));
                     let placed = view.as_ref().and_then(crate::descriptor::host::placed_texture);
-                    (view, placed)
+                    let made = match &placed {
+                        Some(&View::Shader(resource, _)) => crate::resource::host_resource(resource as This).is_some(),
+                        _ => false,
+                    };
+                    (view, placed, made)
                 })
             } else {
                 let view = heap.handle(index).and_then(|handle| host.mirror(index, handle, true));
                 let placed = view.as_ref().and_then(crate::descriptor::host::placed_texture);
-                (view, placed)
+                (view, placed, true)
             };
-            if squeeze && placed.is_none() && matches!(view, Some(View::Placed(..))) {
-                // Not made now (too large to make level by level): waits.
+            if squeeze && (!made || !matches!(view, Some(View::Placed(..)))) {
+                // Not made now (too large to make level by level, or not a
+                // texture placed in memory, whose copy is made whole): waits.
                 host.texture_slot_held(index, write, frame + most);
                 continue;
             }
