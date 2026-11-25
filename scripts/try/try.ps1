@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '4.3'
+$TryVersion = '4.4'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -40,11 +40,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -524,6 +524,21 @@ function Set-RunEnv {
             [Environment]::SetEnvironmentVariable($name, $(if ($want) { $kv[1] } else { $null }), 'Process')
         }
     }
+    # 4.4: the picture fixes. Ambient light (Belobug/VIctory-Belobug-AMD):
+    # the game's light that bounces around comes from ray-traced probes that
+    # do not run here, so whatever the sun did not reach was black; a soft
+    # constant light replaces it, shaded in corners from the depth. A
+    # switches it. Levels on demand (fxceless): a texture takes the card's
+    # memory only for the sizes of it the game holds; the 8 GB card filled
+    # at about 4.9 GB of textures and 16,000 more waited for good (doors,
+    # props and people that came in later stayed black or missing). L
+    # switches it. And the pool-full stop about 8 minutes in (mangrove,
+    # VIctory #698): the allocation returns nothing instead. (Each only when
+    # not set before VIctory Try started.)
+    if ($null -eq $script:UserFx['VICTORY_AMBIENT']) { $env:VICTORY_AMBIENT = $(if ($c.ambient -eq 'off') { 'off' } else { '0.6' }) }
+    if ($null -eq $script:UserFx['VICTORY_LEVELS_ON_DEMAND']) { $env:VICTORY_LEVELS_ON_DEMAND = $(if ($c.levels -eq 'off') { '0' } else { '1' }) }
+    if ($null -eq $script:UserFx['VICTORY_POOL_NO_ASSERT']) { $env:VICTORY_POOL_NO_ASSERT = '1' }
+    Say "picture: ambient light $(if ($env:VICTORY_AMBIENT -ne 'off') { 'ON' } else { 'off' })   (A switches)   textures level by level $(if ($env:VICTORY_LEVELS_ON_DEMAND -eq '1') { 'ON' } else { 'off' })   (L switches)"
     Say "fps boost: $(if ($c.boost -ne 'off') { 'ON (75% render scale + sharpen, no ray tracing)' } else { 'off' })   frames in between: $(if ($c.between -eq '1') { 'ON' } else { 'off' })   shared small buffers: $(if ($c.hybrid -eq '1') { 'ON' } else { 'off' })"
     # Its own cache: the old base's pipeline library and shaders do not mix.
     if (-not $env:VICTORY_CACHE_DIR) { $env:VICTORY_CACHE_DIR = Join-Path $TryHome 'cache-gta6' }
@@ -813,7 +828,7 @@ $script:UserLoop = $env:VICTORY_SHADER_LOOP_LIMIT
 $script:UserWaveWide = $env:VICTORY_WAVE_WIDE
 $script:UserDisplay = $env:VICTORY_DISPLAY_MODE
 $script:UserFx = @{}
-foreach ($name in @('VICTORY_RENDER_SCALE', 'VICTORY_SKIP_RT', 'VICTORY_FRAMEGEN', 'VICTORY_INPLACE')) { $script:UserFx[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+foreach ($name in @('VICTORY_RENDER_SCALE', 'VICTORY_SKIP_RT', 'VICTORY_FRAMEGEN', 'VICTORY_INPLACE', 'VICTORY_AMBIENT', 'VICTORY_LEVELS_ON_DEMAND', 'VICTORY_POOL_NO_ASSERT')) { $script:UserFx[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 while (-not (Ask-Game $false)) {}
 if (-not (Ensure-Tools)) { exit 1 }
 $changed = Update-Source
@@ -828,6 +843,7 @@ while ($true) {
     Say 'G = change the game paths    C = switch Series S / Series X    F = switch speed mode'
     Say 'R = switch the screen size (1080p / 4K)    Z = switch plain mode (VICTORY defaults, like ztrx)'
     Say 'B = switch fps boost (75% render scale, no ray tracing)    M = switch frames in between    H = switch shared small buffers'
+    Say 'A = switch ambient light (no black shadows)    L = switch textures level by level (no black doors and props on 8 GB cards)'
     Say 'P = prepare all pipelines again (done by itself after each update and run)    Q = quit'
     $k = (Read-Host '  Choice').Trim().ToUpper()
     if ($k -eq 'Q') { exit 0 }
@@ -851,6 +867,14 @@ while ($true) {
     }
     if ($k -eq 'H') {
         $script:Config.hybrid = $(if ($script:Config.hybrid -eq '1') { '' } else { '1' })
+        Save-Config
+    }
+    if ($k -eq 'A') {
+        $script:Config.ambient = $(if ($script:Config.ambient -eq 'off') { '' } else { 'off' })
+        Save-Config
+    }
+    if ($k -eq 'L') {
+        $script:Config.levels = $(if ($script:Config.levels -eq 'off') { '' } else { 'off' })
         Save-Config
     }
     if ($k -eq 'R') {

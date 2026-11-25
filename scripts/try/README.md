@@ -174,6 +174,22 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    updates, versions and settings. It closes by itself when the game stops
    and the summary appears in the menu window (`VICTORY_TRY_ONE_WINDOW=1`
    keeps everything in one window, as before).
+   4.4, the picture fixes (each on by default):
+   - **ambient light** (A; from Belobug/VIctory-Belobug-AMD): the game's
+     bounced light comes from ray-traced probes that do not run here, so
+     everything the sun missed was black. A soft constant light replaces
+     it, shaded in corners from the depth (`VICTORY_AMBIENT=<level>`, 0.6;
+     `off`; `VICTORY_AMBIENT_TINT=r,g,b`, `VICTORY_AMBIENT_SHADE`);
+   - **textures level by level** (L; fxceless's `VICTORY_LEVELS_ON_DEMAND`):
+     a texture takes the card's memory only for the sizes the game holds.
+     On an 8 GB card about 4.9 GB of textures filled it and some 16,000
+     more waited for good: doors, props and people that streamed in later
+     stayed black or missing;
+   - **no stop when a pool is full** (mangrove's `VICTORY_POOL_NO_ASSERT`,
+     VIctory #698): the game stopped about 8 minutes in;
+   - pixel shaders read the other pixels of their 2x2 group through quad
+     reads (Belobug's fix for lines on car paint, glass and skin). The
+     first run after this update translates the shaders again.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
