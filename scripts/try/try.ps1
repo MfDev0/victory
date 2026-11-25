@@ -564,6 +564,10 @@ function Set-RunEnv {
     # records at a time, and title copies that continue each other joined.
     if ($null -eq $script:UserFx['VICTORY_INDIRECT_WINDOW']) { $env:VICTORY_INDIRECT_WINDOW = '1' }
     if ($null -eq $script:UserFx['VICTORY_JOIN_COPIES']) { $env:VICTORY_JOIN_COPIES = '1' }
+    # 4.9: the card is kept busy between the title's submissions so its clocks
+    # stay up (avatarmanz's VICTORY_CARD_AWAKE): in 4.8 logs the card stood
+    # idle 180 ms a frame behind the submitting thread.
+    if ($null -eq $script:UserFx['VICTORY_CARD_AWAKE']) { $env:VICTORY_CARD_AWAKE = '1' }
     if ($null -eq $script:UserFx['VICTORY_CARD_REHASH_RUNS']) { [Environment]::SetEnvironmentVariable('VICTORY_CARD_REHASH_RUNS', $(if ($c.gpucopy -eq 'off') { $null } else { '1' }), 'Process') }
     Say "speed: copies on the card $(if ($env:VICTORY_GPU_COPIES -ne '0') { 'ON' } else { 'off' }), checks joined $(if ($env:VICTORY_CARD_REHASH_RUNS -eq '1') { 'ON' } else { 'off' })   (K switches)"
     Say "walls: shader clean-up $(if ($env:VICTORY_SHADER_OPT -eq '0') { 'off (walls and roofs kept)' } else { 'ON' })   (O switches)   shadow fix $(if ($env:VICTORY_WAVE_DEEP_SKIPS_NOT -eq 'none') { 'off' } else { 'ON' })   (W switches)"
@@ -744,6 +748,22 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
         if ($Matches[2] -eq '0') { Say "at the end: $($Matches[1]) draws a frame skipped (compute work, not objects: mostly the ray-tracing builder, which is off, and the programs counted below)" }
         else { Say "at the end: $($Matches[1]) draws a frame still waiting for $($Matches[2]) pipelines being compiled (fewer each launch: run it again)" }
     }
+    # 4.8: which programs those draws belong to and why (every build logs
+    # it now): the last value of each reason, most first.
+    $why = @{}
+    foreach ($l in @($lines | Where-Object { $_ -match 'dropped [0-9.]+/frame without a host pipeline: ' } | Select-Object -Last 36)) {
+        if ($l -match 'dropped ([0-9.]+)/frame without a host pipeline: (.+?)\s*$') {
+            $why[$Matches[2]] = [double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture)
+        }
+    }
+    if ($why.Count -gt 0) {
+        Say 'draws a frame not drawn at the end, and why:'
+        $why.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 6 | ForEach-Object {
+            $text = "$($_.Key)"
+            if ($text.Length -gt 110) { $text = $text.Substring(0, 110) + '...' }
+            Say ('  {0,7}  {1}' -f $_.Value.ToString('0.0', [Globalization.CultureInfo]::InvariantCulture), $text)
+        }
+    }
     Say "shaders that do not translate: $(& $count 'shader does not translate')"
     Say "pipelines the card refused: $(& $count 'host pipeline refused')"
     Say "slow submissions (over 250 ms on the card): $(& $count 'slow host submission')"
@@ -858,7 +878,7 @@ $script:UserLoop = $env:VICTORY_SHADER_LOOP_LIMIT
 $script:UserWaveWide = $env:VICTORY_WAVE_WIDE
 $script:UserDisplay = $env:VICTORY_DISPLAY_MODE
 $script:UserFx = @{}
-foreach ($name in @('VICTORY_RENDER_SCALE', 'VICTORY_SKIP_RT', 'VICTORY_FRAMEGEN', 'VICTORY_INPLACE', 'VICTORY_AMBIENT', 'VICTORY_LEVELS_ON_DEMAND', 'VICTORY_POOL_NO_ASSERT', 'VICTORY_SHADER_OPT', 'VICTORY_WAVE_DEEP_SKIPS_NOT', 'VICTORY_GPU_COPIES', 'VICTORY_CARD_REHASH_RUNS', 'VICTORY_INDIRECT_WINDOW', 'VICTORY_JOIN_COPIES')) { $script:UserFx[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+foreach ($name in @('VICTORY_RENDER_SCALE', 'VICTORY_SKIP_RT', 'VICTORY_FRAMEGEN', 'VICTORY_INPLACE', 'VICTORY_AMBIENT', 'VICTORY_LEVELS_ON_DEMAND', 'VICTORY_POOL_NO_ASSERT', 'VICTORY_SHADER_OPT', 'VICTORY_WAVE_DEEP_SKIPS_NOT', 'VICTORY_GPU_COPIES', 'VICTORY_CARD_REHASH_RUNS', 'VICTORY_INDIRECT_WINDOW', 'VICTORY_JOIN_COPIES', 'VICTORY_CARD_AWAKE')) { $script:UserFx[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 while (-not (Ask-Game $false)) {}
 if (-not (Ensure-Tools)) { exit 1 }
 $changed = Update-Source
