@@ -195,6 +195,22 @@ pub struct Io {
 /// Raises the I/O of `p`, built from `native`'s patched code. Fails for
 /// stages whose stage data is not read and on constructs not covered yet.
 pub fn raise(p: &Program, native: &NativeProgram) -> Result<Io, ShaderError> {
+    raise_with(p, native, false)
+}
+
+/// [`raise`], keeping every first half of an interpolation as an
+/// interpolation of its own ([`Interp::Weighted`]: P0 + i P10, what the
+/// hardware writes), also those a second half completes. For a pixel
+/// program whose lowering stopped at "the first half of an
+/// interpolation": one that also reads a first half's result for its own
+/// sake (three world pixel shaders in a run on an RTX 4060, their draws
+/// lost). Its rows are then read per vertex, weighed with `SV_Barycentrics`
+/// (as for P10 and P20), which gives the same values.
+pub fn raise_keeping_first_halves(p: &Program, native: &NativeProgram) -> Result<Io, ShaderError> {
+    raise_with(p, native, true)
+}
+
+fn raise_with(p: &Program, native: &NativeProgram, keep_firsts: bool) -> Result<Io, ShaderError> {
     let unsupported = |offset, what| ShaderError::Unsupported { offset, what };
     let (loaded, ps_inputs, params) = match (&native.io, native.stage) {
         (
@@ -410,7 +426,12 @@ pub fn raise(p: &Program, native: &NativeProgram) -> Result<Io, ShaderError> {
                     }
                 }
                 Fields::Valu(v) if name.starts_with("v_interp_") => match name {
-                    "v_interp_p1ll_f16" => {}
+                    "v_interp_p1ll_f16" => {
+                        if keep_firsts {
+                            let attribute = attribute(inst, &v.src[0])?;
+                            io.interps.push((site, Interp::Weighted { attribute }));
+                        }
+                    }
                     "v_interp_p2_f16" => {
                         let attribute = attribute(inst, &v.src[0])?;
                         let read = |k: usize| match v.src.get(k) {
@@ -482,7 +503,7 @@ pub fn raise(p: &Program, native: &NativeProgram) -> Result<Io, ShaderError> {
         .flatten()
         .collect();
     io.interps.retain(|(site, interp)| match interp {
-        Interp::Weighted { .. } => !paired.contains(site),
+        Interp::Weighted { .. } => keep_firsts || !paired.contains(site),
         _ => true,
     });
     Ok(io)
@@ -746,6 +767,43 @@ mod tests {
             [
                 ((0, 1), Interp::Weighted { attribute }),
                 ((0, 2), Interp::Weighted { attribute }),
+            ]
+        );
+    }
+
+    #[test]
+    fn kept_first_halves_stand_beside_their_pair() {
+        // The blit pair: with first halves kept, the first half is an
+        // interpolation of its own as well as the pair's.
+        let p = program(&[
+            0xC808_0000, // v_interp_p1_f32 v2, v0, attr0.x
+            0xC809_0001, // v_interp_p2_f32 v2, v1, attr0.x
+            S_ENDPGM,
+        ]);
+        let native = pixel(vec![TEXCOORD], 2);
+        let attribute = Attribute {
+            usage: Usage::Generic,
+            row: 1,
+            channel: 0,
+            high: false,
+        };
+        let plain = raise(&p, &native).unwrap();
+        assert!(!plain.interps.iter().any(|i| i.0 == (0, 0)));
+        let kept = raise_keeping_first_halves(&p, &native).unwrap();
+        let mut interps = kept.interps.clone();
+        interps.sort_by_key(|i| i.0);
+        assert_eq!(
+            interps,
+            [
+                ((0, 0), Interp::Weighted { attribute }),
+                (
+                    (0, 1),
+                    Interp::Interpolated {
+                        attribute,
+                        barycentric: Barycentric::PerspectiveCenter,
+                        first: vec![(0, 0)],
+                    }
+                ),
             ]
         );
     }

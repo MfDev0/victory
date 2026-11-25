@@ -296,7 +296,18 @@ pub fn translate(container: &[u8]) -> Result<HostShader, ShaderError> {
     let res = resource::track(&p, &native.layout, native.stage, st.as_ref().ok())?;
     let io = io::raise(&p, &native)?;
     let st = st?;
-    emit(&c, &native, &p, &st, &io, &res)
+    let out = emit(&c, &native, &p, &st, &io, &res);
+    // A pixel program that also reads a first half of an interpolation
+    // beside the second half: once more with every first half its own
+    // interpolation (`VICTORY_KEEP_FIRST_HALVES=0` turns this off).
+    if matches!(&out, Err(ShaderError::Unsupported { what, .. }) if *what == lower::FIRST_HALF)
+        && std::env::var_os("VICTORY_KEEP_FIRST_HALVES").is_none_or(|v| v != "0")
+        && let Ok(io) = io::raise_keeping_first_halves(&p, &native)
+        && let Ok(shader) = emit(&c, &native, &p, &st, &io, &res)
+    {
+        return Ok(shader);
+    }
+    out
 }
 
 /// Emits a program whose earlier stages already ran.
