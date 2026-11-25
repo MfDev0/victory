@@ -38,6 +38,9 @@ pub(crate) struct Pending {
     shape: Option<String>,
     /// Whether it is in [`SIBLINGS`] (or was looked at for it).
     listed: AtomicBool,
+    /// Draws and dispatches that asked for it before it was made: the
+    /// queue makes the most asked for first ([`most_asked_first`]).
+    asks: AtomicU64,
 }
 
 // SAFETY: D3D12 objects are free-threaded; the graphics state (whose input
@@ -73,6 +76,7 @@ impl Pending {
             used: AtomicBool::new(false),
             shape,
             listed: AtomicBool::new(false),
+            asks: AtomicU64::new(0),
         }
     }
 
@@ -153,6 +157,7 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
         super::recipe::note(&p.key, &p.shaders, p.graphics.as_deref());
     }
     if p.made.get().is_none() {
+        p.asks.fetch_add(1, Ordering::Relaxed);
         start(p, REQUESTED);
         wait(p, crate::frame::current());
         if p.made.get().is_none() {
@@ -343,17 +348,28 @@ impl Queue {
 
     /// The next pipeline to make: light requested ones first, then heavy
     /// requested ones while a heavy slot is free, then those queued early.
+    /// Of the requested ones, the one the most draws asked for so far
+    /// ([`most_asked_first`]), the first queued of those.
     fn pop(&mut self) -> Option<Arc<Pending>> {
+        fn requested(lane: &mut VecDeque<Arc<Pending>>) -> Option<Arc<Pending>> {
+            if !most_asked_first() {
+                return lane.pop_front();
+            }
+            let at = lane
+                .iter()
+                .enumerate()
+                .max_by_key(|(i, p)| (p.asks.load(Ordering::Relaxed), std::cmp::Reverse(*i)))
+                .map(|(i, _)| i)?;
+            lane.remove(at)
+        }
         fn early(lane: &mut VecDeque<Arc<Pending>>) -> Option<Arc<Pending>> {
             // An early entry can have been promoted and claimed already.
             std::iter::from_fn(|| lane.pop_front())
                 .find(|p| p.queue_state.load(Ordering::Relaxed) == EARLY)
         }
         let heavy_free = self.heavy_making < self.heavy_limit;
-        let p = self
-            .requested
-            .pop_front()
-            .or_else(|| heavy_free.then(|| self.heavy_requested.pop_front()).flatten())
+        let p = requested(&mut self.requested)
+            .or_else(|| heavy_free.then(|| requested(&mut self.heavy_requested)).flatten())
             .or_else(|| early(&mut self.early))
             .or_else(|| heavy_free.then(|| early(&mut self.heavy_early)).flatten())?;
         if p.heavy() {
@@ -362,6 +378,16 @@ impl Queue {
         p.queue_state.store(MAKING, Ordering::Relaxed);
         Some(p)
     }
+}
+
+/// Whether requested pipelines are made most asked for first, not in the
+/// order first asked for (`VICTORY_PIPELINE_MOST_ASKED=0`). A backlog of
+/// 1,600 pipelines took minutes to work through; the pipeline of the
+/// ground that 400 draws a frame wait for went behind a hundred that one
+/// draw each asked for once.
+fn most_asked_first() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_PIPELINE_MOST_ASKED").is_none_or(|v| v != "0"))
 }
 
 static QUEUE: Mutex<Queue> = Mutex::new(Queue::new());
