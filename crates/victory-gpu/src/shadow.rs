@@ -238,6 +238,23 @@ pub(crate) fn card_hash_bytes(size: u64) -> u64 {
     (size / PIECE as u64 + 2) * 16
 }
 
+/// Whether refreshes of copies in the card's memory send only the bytes
+/// that changed ([`Shadow::copy_changed`]; `VICTORY_SAME_SKIP=0`: every
+/// page the title wrote, as before).
+fn same_skips() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SAME_SKIP").is_none_or(|v| v != "0"))
+}
+
+/// Bytes the title wrote again unchanged, not sent to the card
+/// ([`Shadow::copy_changed`]), since the frame line last took them.
+static SAME_SKIPPED: AtomicU64 = AtomicU64::new(0);
+
+/// For the frame line: [`SAME_SKIPPED`], taken.
+pub(crate) fn same_skipped() -> u64 {
+    SAME_SKIPPED.swap(0, Ordering::Relaxed)
+}
+
 /// Bytes alive of shaders' sides of copies in the PC's memory ([`pc_card_for`]).
 static PC_CARD_BYTES: AtomicU64 = AtomicU64::new(0);
 
@@ -2628,6 +2645,15 @@ impl Shadow {
     fn copy(&self, from: usize, to: usize) -> usize {
         let (start, end) = (self.start as usize, (self.start + self.len) as usize);
         let (from, to) = (from.max(start), to.min(end));
+        if from >= to {
+            return 0;
+        }
+        if self.card.is_some()
+            && same_skips()
+            && let Some(copied) = self.copy_changed(from, to)
+        {
+            return copied;
+        }
         // SAFETY: inside the mapping (`from` and `to` are within the buffer).
         let at = unsafe { self.data.add(from - start) };
         crate::host::copy_mapped(at, from as *const u8, to - from, false);
@@ -2635,6 +2661,57 @@ impl Shadow {
         self.changed(from - start, to - start);
         self.card_changed(from - start, to - start);
         to - from
+    }
+
+    /// [`Shadow::copy`] of a copy in the card's memory ([`same_skips`]):
+    /// title memory `[from, to)` (within the buffer) is read aside, and only
+    /// the 4 KiB runs that differ from the CPU's side go into it and to the
+    /// card. Write watching tells which pages the title wrote, not whether
+    /// their bytes changed, and titles write the same constants again frame
+    /// after frame; each such page went up to the card and was hashed there
+    /// again. `None` if title memory there could not all be read (then it
+    /// is copied as before). The bytes that went in.
+    fn copy_changed(&self, from: usize, to: usize) -> Option<usize> {
+        const RUN: usize = 4096;
+        thread_local! {
+            static ASIDE: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        let start = self.start as usize;
+        let n = to - from;
+        ASIDE.with_borrow_mut(|aside| {
+            aside.clear();
+            aside.resize(n, 0);
+            if !crate::host::read_into(from as *const u8, aside) {
+                return None;
+            }
+            let mut copied = 0;
+            let mut put = |a: usize, b: usize| {
+                // SAFETY: `[a, b)` lies in `[from, to)`, inside the buffer
+                // and so inside the mapping; `aside` holds `[from, to)`.
+                unsafe { std::ptr::copy_nonoverlapping(aside.as_ptr().add(a - from), self.data.add(a - start), b - a) };
+                self.changed(a - start, b - start);
+                self.card_changed(a - start, b - start);
+                copied += b - a;
+            };
+            let mut run: Option<usize> = None;
+            let mut at = from;
+            while at < to {
+                let next = ((at / RUN + 1) * RUN).min(to);
+                // SAFETY: as above; read only.
+                let held = unsafe { std::slice::from_raw_parts(self.data.add(at - start), next - at) };
+                if *held != aside[at - from..next - from] {
+                    run.get_or_insert(at);
+                } else if let Some(first) = run.take() {
+                    put(first, at);
+                }
+                at = next;
+            }
+            if let Some(first) = run {
+                put(first, to);
+            }
+            SAME_SKIPPED.fetch_add((n - copied) as u64, Ordering::Relaxed);
+            Some(copied)
+        })
     }
 
     /// Whether shaders read and write this copy in the card's own memory

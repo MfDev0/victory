@@ -6142,7 +6142,9 @@ impl Meter {
                  textures picked by index: {picked_textures} uploaded so far ({picked_mb} MB), \
                  {picked_waiting} waiting, {picked_away} passed over unmapped; depth textures with                  unordered access: {du0} made, bound as depth {du1}x, cleared as depth {du2}x,                  unordered views refused {du3}x; buffer views left null as the host would refuse them: {refused}; \
                  upload buffers in the card's memory (Resizable BAR) so far: {bar_uploads} ({bar_mb} MB); \
-                 title buffers compared on the card from the PC's memory: {pc_card_mb} MB alive",
+                 title buffers compared on the card from the PC's memory: {pc_card_mb} MB alive; \
+                 rewritten unchanged, not sent to the card: {same_mb:.1} MB a frame",
+                same_mb = crate::shadow::same_skipped() as f64 / (1 << 20) as f64 / frames.max(1.0),
                 bar_uploads = GPU_UPLOADS[0].load(Ordering::Relaxed),
                 bar_mb = GPU_UPLOADS[1].load(Ordering::Relaxed) >> 20,
                 pc_card_mb = crate::shadow::pc_card_bytes() >> 20,
