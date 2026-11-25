@@ -526,6 +526,25 @@ pub(crate) fn is_texture_view(view: &View) -> bool {
 /// ([`buffer_view_ok`]), since the start.
 pub(crate) static REFUSED_VIEWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Buffer views of no elements, left null: what the console's view does
+/// too (reads give zero, writes go nowhere), so not counted as refused.
+pub(crate) static EMPTY_VIEWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Raw shader views not on 16 bytes made as typed 32-bit views of the same
+/// dwords ([`raw_as_typed`]).
+pub(crate) static RAW_TYPED_VIEWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `VICTORY_RAW_TYPED=1`: a raw shader view whose first dword is not on 16
+/// bytes (the console takes any dword, the host refuses it) is made as a
+/// typed R32_UINT view of the same dwords instead of left null.
+/// shortcut: off by default. A shader declares the view raw; reading a
+/// typed descriptor through it is what NVIDIA's buffer descriptors allow
+/// but D3D12 leaves undefined, so it is untried on other cards.
+fn raw_as_typed() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_RAW_TYPED").is_some_and(|v| v == "1"))
+}
+
 /// Whether the host device is gone, and why (the first time it is asked
 /// after that): for passes that make many views, to name the one that did
 /// it.
@@ -1813,7 +1832,17 @@ fn buffer_srv(
         buffer.FirstElement += offset / element;
     }
     let (first, count, stride) = (buffer.FirstElement, buffer.NumElements, buffer.StructureByteStride);
-    let raw = buffer.Flags.0 & D3D12_BUFFER_SRV_FLAG_RAW.0 != 0;
+    let mut raw = buffer.Flags.0 & D3D12_BUFFER_SRV_FLAG_RAW.0 != 0;
+    if count == 0 {
+        EMPTY_VIEWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return None;
+    }
+    if raw && !first.is_multiple_of(4) && raw_as_typed() {
+        buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+        desc.Format = DXGI_FORMAT_R32_UINT;
+        raw = false;
+        RAW_TYPED_VIEWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     // SAFETY: a live buffer.
     let width = unsafe { shadow.buffer.GetDesc() }.Width;
     if !buffer_view_ok(desc.Format, first, count, stride, raw, width) {
@@ -1893,6 +1922,10 @@ fn buffer_uav(
         // (Left out at first: every structured unordered access view was then
         // refused by `buffer_view_ok` and left null, runs 15 and 16.)
         desc.Format = DXGI_FORMAT_R32_TYPELESS;
+    }
+    if count == 0 {
+        EMPTY_VIEWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return None;
     }
     // SAFETY: a live buffer.
     let width = unsafe { shadow.buffer.GetDesc() }.Width;

@@ -395,6 +395,37 @@ extern "system" fn unknown_pipeline<const SLOT: usize>(
             first_points_at = format_args!("{first:x?}"),
             "a pipeline creation method that is not implemented: the title goes without this pipeline"
         );
+        // The first calls also log the bytes of each (address, length) pair
+        // of the description (words 1-12: the root signature is word 0), for
+        // writing the methods from them.
+        #[cfg(windows)]
+        if calls <= 3
+            && let Some(w) = &description
+        {
+            for i in (1..12).step_by(2) {
+                let (at, len) = (w[i] as usize, w[i + 1] as usize);
+                if at == 0 || len == 0 || len > 0x800 {
+                    continue;
+                }
+                let mut bytes = vec![0u8; len];
+                if crate::host::read_into(at as *const u8, &mut bytes) {
+                    let hex: String = bytes
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| format!("{:08x} ", u32::from_le_bytes(*c)))
+                        .collect();
+                    tracing::warn!(
+                        slot = format_args!("{:#x}", SLOT),
+                        calls,
+                        word = i,
+                        at = format_args!("{at:#x}"),
+                        len = format_args!("{len:#x}"),
+                        "pipeline description piece: {hex}"
+                    );
+                }
+            }
+        }
     }
     E_NOTIMPL
 }
