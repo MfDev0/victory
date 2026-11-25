@@ -174,11 +174,17 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
     if made.is_some() && p.shape.is_some() && !p.listed.swap(true, Ordering::Relaxed) {
         let mut siblings = SIBLINGS.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(shape) = &p.shape {
-            let leaked: &'static Arc<Pending> = &*Box::leak(Box::new(p.clone()));
             let map = siblings.get_or_insert_with(std::collections::HashMap::new);
-            map.entry(shape.clone()).or_insert(leaked);
-            if let Some(loose) = &p.loose {
-                map.entry(loose.clone()).or_insert(leaked);
+            let new_shape = !map.contains_key(shape);
+            let new_loose = p.loose.as_ref().filter(|l| !map.contains_key(*l));
+            if new_shape || new_loose.is_some() {
+                let leaked: &'static Arc<Pending> = &*Box::leak(Box::new(p.clone()));
+                if new_shape {
+                    map.insert(shape.clone(), leaked);
+                }
+                if let Some(loose) = new_loose {
+                    map.insert(loose.clone(), leaked);
+                }
             }
         }
     }
