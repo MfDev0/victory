@@ -1820,6 +1820,7 @@ impl State {
         }
         let mut refused = 0;
         let mut squeeze_ok = !room && crate::resource::squeeze_room();
+        let mut squeezed_here = 0u32;
         // Room again: the slots held back while the card was full are due
         // now (`full_card_pass`).
         if room {
@@ -1993,8 +1994,15 @@ impl State {
             if !room {
                 let has_its_texture = reupload_when_full()
                     && heap.handle(index).is_some_and(|handle| host.texture_slot_made_from(index, handle));
-                if !has_its_texture && squeeze_ok {
+                // (A few hundred a pass and 40 ms of it at most: a backlog of
+                // thousands drains over frames, not in one long stall.)
+                if !has_its_texture
+                    && squeeze_ok
+                    && squeezed_here < 384
+                    && began.elapsed() < std::time::Duration::from_millis(40)
+                {
                     squeeze = true;
+                    squeezed_here += 1;
                     let n = HEAP_TEXTURES_SQUEEZED.fetch_add(1, Ordering::Relaxed) + 1;
                     if n == 1 || n.is_multiple_of(2000) {
                         tracing::info!(
