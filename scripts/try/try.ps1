@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '4.6'
+$TryVersion = '4.7'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -40,11 +40,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -550,6 +550,17 @@ function Set-RunEnv {
     # (VICTORY_WAVE_DEEP_SKIPS_NOT=none) for a comparison.
     if ($null -eq $script:UserFx['VICTORY_SHADER_OPT']) { [Environment]::SetEnvironmentVariable('VICTORY_SHADER_OPT', $(if ($c.opt -eq 'on') { $null } else { '0' }), 'Process') }
     if ($null -eq $script:UserFx['VICTORY_WAVE_DEEP_SKIPS_NOT']) { [Environment]::SetEnvironmentVariable('VICTORY_WAVE_DEEP_SKIPS_NOT', $(if ($c.shadowfix -eq 'off') { 'none' } else { $null }), 'Process') }
+    # 4.7: speed. The game's own buffer-to-buffer copies run on the card
+    # (pablogonz12/Scarlight #86): on the CPU each one that touched memory
+    # the card was still writing made us wait for the card to finish
+    # everything first, about 157 ms of every 485 ms frame in the 2026-11-25
+    # report. And the card's checks of what we sent up are done in one pass
+    # per run of pieces instead of one per range (about 1,900 tiny passes a
+    # frame). K switches both. (Each only when not set before VIctory Try
+    # started.)
+    if ($null -eq $script:UserFx['VICTORY_GPU_COPIES']) { $env:VICTORY_GPU_COPIES = $(if ($c.gpucopy -eq 'off') { '0' } else { '1' }) }
+    if ($null -eq $script:UserFx['VICTORY_CARD_REHASH_RUNS']) { [Environment]::SetEnvironmentVariable('VICTORY_CARD_REHASH_RUNS', $(if ($c.gpucopy -eq 'off') { $null } else { '1' }), 'Process') }
+    Say "speed: copies on the card $(if ($env:VICTORY_GPU_COPIES -ne '0') { 'ON' } else { 'off' }), checks joined $(if ($env:VICTORY_CARD_REHASH_RUNS -eq '1') { 'ON' } else { 'off' })   (K switches)"
     Say "walls: shader clean-up $(if ($env:VICTORY_SHADER_OPT -eq '0') { 'off (walls and roofs kept)' } else { 'ON' })   (O switches)   shadow fix $(if ($env:VICTORY_WAVE_DEEP_SKIPS_NOT -eq 'none') { 'off' } else { 'ON' })   (W switches)"
     Say "picture: ambient light $(if ($env:VICTORY_AMBIENT -ne 'off') { 'ON' } else { 'off' })   (A switches)   textures level by level $(if ($env:VICTORY_LEVELS_ON_DEMAND -eq '1') { 'ON' } else { 'off' })   (L switches)"
     Say "fps boost: $(if ($c.boost -ne 'off') { 'ON (75% render scale + sharpen, no ray tracing)' } else { 'off' })   frames in between: $(if ($c.between -eq '1') { 'ON' } else { 'off' })   shared small buffers: $(if ($c.hybrid -eq '1') { 'ON' } else { 'off' })"
@@ -842,7 +853,7 @@ $script:UserLoop = $env:VICTORY_SHADER_LOOP_LIMIT
 $script:UserWaveWide = $env:VICTORY_WAVE_WIDE
 $script:UserDisplay = $env:VICTORY_DISPLAY_MODE
 $script:UserFx = @{}
-foreach ($name in @('VICTORY_RENDER_SCALE', 'VICTORY_SKIP_RT', 'VICTORY_FRAMEGEN', 'VICTORY_INPLACE', 'VICTORY_AMBIENT', 'VICTORY_LEVELS_ON_DEMAND', 'VICTORY_POOL_NO_ASSERT', 'VICTORY_SHADER_OPT', 'VICTORY_WAVE_DEEP_SKIPS_NOT')) { $script:UserFx[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+foreach ($name in @('VICTORY_RENDER_SCALE', 'VICTORY_SKIP_RT', 'VICTORY_FRAMEGEN', 'VICTORY_INPLACE', 'VICTORY_AMBIENT', 'VICTORY_LEVELS_ON_DEMAND', 'VICTORY_POOL_NO_ASSERT', 'VICTORY_SHADER_OPT', 'VICTORY_WAVE_DEEP_SKIPS_NOT', 'VICTORY_GPU_COPIES', 'VICTORY_CARD_REHASH_RUNS')) { $script:UserFx[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 while (-not (Ask-Game $false)) {}
 if (-not (Ensure-Tools)) { exit 1 }
 $changed = Update-Source
@@ -870,6 +881,7 @@ function Show-Commands {
         @('L', 'Textures by level', $(& $on ($c.levels -ne 'off')), 'textures take card memory only for the sizes in use (8 GB cards: no black doors)'),
         @('O', 'Shader clean-up', $(& $on ($c.opt -eq 'on')), 'off keeps walls, roofs and floors (they went missing with it on)'),
         @('W', 'Shadow fix', $(& $on ($c.shadowfix -ne 'off')), 'NVIDIA: keeps the ceiling and lit rooms (14 shadow programs translated safely)'),
+        @('K', 'Copies on the card', $(& $on ($c.gpucopy -ne 'off')), 'faster: the game''s buffer copies run on the card (no waiting for it); off if things look wrong'),
         @('Z', 'Plain mode', $(& $on ($c.plain -eq '1')), 'VIctory''s own defaults instead of Try''s settings (for comparing)'),
         @('P', 'Prepare again', '', 'compile all pipelines again with the game closed (done by itself after updates)'),
         @('Q', 'Quit', '', 'close VIctory Try')
@@ -881,7 +893,7 @@ function Show-Commands {
         Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3])
     }
     Write-Host '  ====================================================================================' -ForegroundColor Cyan
-    Write-Host '  Switches (C, R, F, B, M, H, A, L, O, W, Z) flip at once and are saved; Enter then runs the game with them.'
+    Write-Host '  Switches (C, R, F, B, M, H, A, L, O, W, K, Z) flip at once and are saved; Enter then runs the game with them.'
 }
 
 function Show-Version {
@@ -923,6 +935,7 @@ while ($true) {
             'L' { $c.levels = $(if ($c.levels -eq 'off') { '' } else { 'off' }) }
             'O' { $c.opt = $(if ($c.opt -eq 'on') { '' } else { 'on' }) }
             'W' { $c.shadowfix = $(if ($c.shadowfix -eq 'off') { '' } else { 'off' }) }
+            'K' { $c.gpucopy = $(if ($c.gpucopy -eq 'off') { '' } else { 'off' }) }
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
             'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }) }
             default { $switched = $false }

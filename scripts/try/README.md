@@ -224,6 +224,20 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - **the menu lists every command**: its key, what it is, whether it is
      on now and what it does. Switches flip at once and show the list
      again; Enter runs the game. V shows the version.
+   4.7, speed (K switches both):
+   - **the game's buffer copies run on the card** (pablogonz12/Scarlight #86,
+     `VICTORY_GPU_COPIES`): a copy between two buffers that already have a
+     copy on the card is one copy command in the card's list, in order with
+     the game's work, and the result goes back to the game like anything
+     else the card writes. On the CPU, each such copy that touched memory
+     the card was still writing made us wait for the card to finish all it
+     had been sent: about 157 ms of every 485 ms frame in the 2026-11-25
+     report (the card was idle almost half the frame). The frame-rate line
+     now says how many copies ran on the card;
+   - **the card's checks are joined** (`VICTORY_CARD_REHASH_RUNS=1`): after
+     each upload the card re-checks the pieces it received, about 1,900
+     tiny one-after-the-other passes a frame; now one pass per run of
+     pieces. The same pieces are checked either way.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
