@@ -101,6 +101,8 @@ struct Card {
     sent: Mutex<Vec<(usize, usize, u64)>>,
     /// The buffers' bytes (the title buffer's, rounded up to 64 KiB).
     size: u64,
+    /// The shaders' side is in the PC's memory too ([`pc_card_for`]).
+    in_pc: bool,
 }
 
 /// Whether the host copies of big title buffers are in the card's own
@@ -234,6 +236,57 @@ pub(crate) fn card_stats() -> [u64; 10] {
 /// has one piece more).
 pub(crate) fn card_hash_bytes(size: u64) -> u64 {
     (size / PIECE as u64 + 2) * 16
+}
+
+/// Bytes alive of shaders' sides of copies in the PC's memory ([`pc_card_for`]).
+static PC_CARD_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// `VICTORY_PC_CARD_MB` (768 unless set; 0 turns it off) and
+/// `VICTORY_PC_CARD_MIN_MB` (4): the most bytes of [`pc_card_for`]'s
+/// buffers, and the smallest title buffer that gets one.
+fn pc_card_limits() -> (u64, u64) {
+    static LIMITS: std::sync::OnceLock<(u64, u64)> = std::sync::OnceLock::new();
+    *LIMITS.get_or_init(|| {
+        let env_mb = |name: &str, or: u64| std::env::var(name).ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(or);
+        let limits = (env_mb("VICTORY_PC_CARD_MIN_MB", 4).max(1) << 20, env_mb("VICTORY_PC_CARD_MB", 768) << 20);
+        tracing::info!(
+            min_mb = limits.0 >> 20,
+            most_mb = limits.1 >> 20,
+            "copies whose shaders' side is in the PC's memory, compared on the card"
+        );
+        limits
+    })
+}
+
+/// For a title buffer whose copy [`card_for`] does not put in the card's
+/// memory (smaller than its least, or the card full): the shaders' side in
+/// the PC's memory, with everything else of a card copy. The CPU's side
+/// stays the bytes from before the submission, so what shaders wrote is
+/// found by the card's hash compare and only the pieces that differ come
+/// back, where every submission took a snapshot of every range its
+/// shaders may write and compared it on the CPU: 340-370 MB snapshotted
+/// and 70-230 MB compared a frame (2026-11-24 reports), with the card's
+/// 512 MiB of copies full after ten buffers. What changes on the CPU's
+/// side goes over by the card's copy, not the CPU. Costs the PC's memory
+/// twice for those buffers, up to [`pc_card_limits`].
+fn pc_card_for(size: u64) -> Option<ID3D12Resource> {
+    let (least, most) = pc_card_limits();
+    if !cards() || size < least || size >= 1 << 30 || most == 0 {
+        return None;
+    }
+    let host = host()?;
+    if !host.card_ready() {
+        return None;
+    }
+    if PC_CARD_BYTES.fetch_add(size, Ordering::Relaxed) + size > most {
+        PC_CARD_BYTES.fetch_sub(size, Ordering::Relaxed);
+        return None;
+    }
+    let buffer = host.shared_buffer(size).map(|(buffer, _)| buffer);
+    if buffer.is_none() {
+        PC_CARD_BYTES.fetch_sub(size, Ordering::Relaxed);
+    }
+    buffer
 }
 
 /// A buffer of `size` bytes in the card's memory for a title buffer's
@@ -1458,6 +1511,8 @@ impl Drop for Shadow {
         if let Some(card) = &mut self.card {
             if window {
                 WINDOW_CARD_BYTES.fetch_sub(card.size, Ordering::Relaxed);
+            } else if card.in_pc {
+                PC_CARD_BYTES.fetch_sub(card.size, Ordering::Relaxed);
             } else {
                 CARD_BYTES[0].fetch_sub(card.size, Ordering::Relaxed);
             }
@@ -2946,13 +3001,20 @@ fn lookup(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
         crate::host::name(&buffer, || format!("title buffer {:#x}+{len:#x}", key.0));
         // A big one, with `cards`: shaders get a buffer in the card's own
         // memory, and the one just made is the CPU's side.
-        let (buffer, card) = match card_for(size) {
-            Some(on_card) => {
-                crate::host::name(&on_card, || format!("title buffer {:#x}+{len:#x} on the card", key.0));
+        let sides = match card_for(size) {
+            Some(on_card) => Some((on_card, false)),
+            None => pc_card_for(size).map(|in_pc| (in_pc, true)),
+        };
+        let (buffer, card) = match sides {
+            Some((on_card, in_pc)) => {
+                crate::host::name(&on_card, || {
+                    format!("title buffer {:#x}+{len:#x}, shaders' side{}", key.0, if in_pc { " in the PC's memory" } else { " on the card" })
+                });
                 tracing::info!(
                     start = format_args!("{:#x}", key.0),
                     len,
-                    "a buffer's host copy is in the card's memory"
+                    in_pc,
+                    "a buffer's host copy is in the card's memory (in_pc: its shaders' side in the PC's, compared on the card)"
                 );
                 let card = Card {
                     staging: buffer,
@@ -2960,6 +3022,7 @@ fn lookup(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
                     dirty: Mutex::default(),
                     sent: Mutex::default(),
                     size,
+                    in_pc,
                 };
                 (on_card, Some(card))
             }
@@ -3176,6 +3239,7 @@ fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Sha
                 dirty: Mutex::default(),
                 sent: Mutex::default(),
                 size: len,
+                in_pc: false,
             };
             (on_card, Some(card))
         }
