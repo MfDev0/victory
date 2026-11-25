@@ -1,0 +1,69 @@
+name: Shader probe
+
+# Translates the shaders the user's latest reports name as failing
+# (failed-shaders in the report zips on main) as the user's RTX 4060 does
+# (32-lane waves), with each wave switch, and prints why each stops.
+# Runs when scripts/try/probe.txt changes; the report names are in it.
+
+on:
+  push:
+    branches: [arena/59fabb00-victory]
+    paths: [scripts/try/probe.txt, .github/workflows/probe.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: probe
+      - name: Build
+        shell: bash
+        run: cargo build --release -p victory
+      - name: Reports
+        shell: bash
+        run: |
+          git fetch -q --depth=1 origin main
+          mkdir -p probe
+          while IFS= read -r name; do
+            [ -z "$name" ] && continue
+            case "$name" in \#*) continue;; esac
+            git show "origin/main:$name" > probe/r.zip
+            (cd probe && unzip -qo r.zip -x '*.log' '*.txt' || true)
+            rm -f probe/r.zip
+          done < scripts/try/probe.txt
+          mkdir -p shaders
+          find probe -iname '*.dxbc' -exec cp {} shaders/ \;
+          # (zips made on Windows keep "failed-shaders\name" as one name)
+          for f in probe/*; do case "$f" in *.dxbc) cp "$f" "shaders/$(basename "${f##*\\}")";; esac; done
+          ls -la shaders
+      - name: Translate
+        shell: bash
+        env:
+          VICTORY_HOST_WAVE: "32"
+          VICTORY_WAVE_WHY: "1"
+          VICTORY_SHADER_LOOP_LIMIT: "256"
+        run: |
+          exe=target/release/victory
+          for mode in default 0 1 last; do
+            echo "::group::VICTORY_WAVE_WIDE=$mode"
+            for f in shaders/*; do
+              echo "---- $f (WAVE_WIDE=$mode)"
+              if [ "$mode" = default ]; then
+                "$exe" translate --list --jobs 1 "$f" 2>&1 | tail -n 40 || true
+              else
+                VICTORY_WAVE_WIDE=$mode "$exe" translate --list --jobs 1 "$f" 2>&1 | tail -n 40 || true
+              fi
+            done
+            echo "::endgroup::"
+          done
