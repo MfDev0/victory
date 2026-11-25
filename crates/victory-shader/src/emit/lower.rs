@@ -989,22 +989,6 @@ pub(super) fn with_local_waves_any<R>(f: impl FnOnce() -> R) -> R {
     r
 }
 
-/// Runs `f` with console wave64 programs on 32-lane hosts lowered with each
-/// host wave as a wave of its own ("local"): no exchange between the two
-/// halves of a console wave, so no barriers and no need for every lane to
-/// reach the code. What HLSL's wave operations promise holds for any
-/// division of the threads into waves, and the idiom the title's compute
-/// programs use them for does not care which wave a thread is in: count or
-/// sum over the wave, the first lane reserves that many slots with an atomic
-/// add, every lane takes the base (`WaveReadLaneFirst`) plus its prefix.
-/// Each lane still gets a slot of its own; only the order differs.
-/// Only that idiom's operations are lowered this way: a lane mask read as
-/// a number by anything but a bit count, a first-set-bit or `v_mbcnt`, and
-/// lane reads and writes outside whole-wave sections, stop the translation.
-/// shortcut: where a count or sum goes is not checked. A program that uses
-/// a wave-wide result as data for the whole console wave (a tile's maximum,
-/// say, with one wave per thread group) gets its half's result. It is used
-/// only for programs that do not translate otherwise.
 thread_local! {
     /// While [`with_approximate_first_halves`] runs `f`.
     static APPROX_FIRST_HALVES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -1022,6 +1006,22 @@ pub(super) fn with_approximate_first_halves<R>(f: impl FnOnce() -> R) -> R {
     r
 }
 
+/// Runs `f` with console wave64 programs on 32-lane hosts lowered with each
+/// host wave as a wave of its own ("local"): no exchange between the two
+/// halves of a console wave, so no barriers and no need for every lane to
+/// reach the code. What HLSL's wave operations promise holds for any
+/// division of the threads into waves, and the idiom the title's compute
+/// programs use them for does not care which wave a thread is in: count or
+/// sum over the wave, the first lane reserves that many slots with an atomic
+/// add, every lane takes the base (`WaveReadLaneFirst`) plus its prefix.
+/// Each lane still gets a slot of its own; only the order differs.
+/// Only that idiom's operations are lowered this way: a lane mask read as
+/// a number by anything but a bit count, a first-set-bit or `v_mbcnt`, and
+/// lane reads and writes outside whole-wave sections, stop the translation.
+/// shortcut: where a count or sum goes is not checked. A program that uses
+/// a wave-wide result as data for the whole console wave (a tile's maximum,
+/// say, with one wave per thread group) gets its half's result. It is used
+/// only for programs that do not translate otherwise.
 pub(super) fn with_local_waves<R>(f: impl FnOnce() -> R) -> R {
     let was = LOCAL_WAVES.replace(true);
     let r = f();
@@ -7266,44 +7266,6 @@ impl<'a> Lower<'a> {
                 let r = self.s.m.cast(c, op, a, self.s.t.i32);
                 int(self, r)
             }
-            "v_permlane16_b32" | "v_permlanex16_b32" => {
-                // Each lane reads src0 of a lane of its own 32-lane half,
-                // picked by nibble (lane & 15) of {src2, src1}: within its
-                // own row of 16 (`v_permlane16`) or the other row of its
-                // half (`v_permlanex16`). The pick stays inside a half, so a
-                // console wave of 64 run as two host waves of 32 needs no
-                // exchange.
-                // shortcut: a source lane with EXEC clear is read as the host
-                // gives it (the console keeps vdst unless op_sel's fetch
-                // inactive bit is set).
-                self.cross_lane(false)?;
-                let x = s(self, 0)?;
-                let (s1, s2) = (s(self, 1)?, s(self, 2)?);
-                let i32t = self.s.t.i32;
-                let lane = self.s.op(c, "waveGetLaneIndex", Attr::ReadOnly, i32t, 111, &[]);
-                let [k15, k8, k7, k2, k16, not31, not15] =
-                    [15, 8, 7, 2, 16, !31, !15].map(|x| self.s.m.i32(x));
-                let low = self.s.m.bin(c, Bin::And, lane, k15);
-                // nibble `low` of the 64-bit selector: src1 holds lanes 0-7
-                let hi_word = self.s.m.cmp(c, pred::IUGE, low, k8);
-                let word = self.s.m.select(c, hi_word, s2, s1);
-                let n = self.s.m.bin(c, Bin::And, low, k7);
-                let sh = self.s.m.bin(c, Bin::Shl, n, k2);
-                let pick = self.s.m.bin(c, Bin::LShr, word, sh);
-                let pick = self.s.m.bin(c, Bin::And, pick, k15);
-                let row = if name == "v_permlanex16_b32" {
-                    // the other row of this half
-                    let half = self.s.m.bin(c, Bin::And, lane, not31);
-                    let other = self.s.m.bin(c, Bin::And, lane, k16);
-                    let other = self.s.m.bin(c, Bin::Xor, other, k16);
-                    self.s.m.bin(c, Bin::Or, half, other)
-                } else {
-                    self.s.m.bin(c, Bin::And, lane, not15)
-                };
-                let from = self.s.m.bin(c, Bin::Or, row, pick);
-                let r = self.read_lane(x, from);
-                int(self, r)
-            }
             "v_cvt_f32_f64" => {
                 let (lo, hi) = self.f64_pair(inst, 0)?;
                 let bits = self.f64_to_f32_bits(lo, hi);
@@ -7325,12 +7287,6 @@ impl<'a> Lower<'a> {
                     Cast::UiToFp
                 };
                 let r = self.s.m.cast(c, op, a, self.s.t.f32);
-                float(self, r)
-            }
-            "v_cvt_f32_f64" => {
-                let (lo, hi) = self.f64_pair(inst, 0)?;
-                let bits = self.f64_to_f32_bits(lo, hi);
-                let r = self.as_float(bits);
                 float(self, r)
             }
             "v_fma_mix_f32" | "v_fma_mixlo_f16" | "v_fma_mixhi_f16" => {
