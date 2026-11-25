@@ -1005,6 +1005,23 @@ pub(super) fn with_local_waves_any<R>(f: impl FnOnce() -> R) -> R {
 /// a wave-wide result as data for the whole console wave (a tile's maximum,
 /// say, with one wave per thread group) gets its half's result. It is used
 /// only for programs that do not translate otherwise.
+thread_local! {
+    /// While [`with_approximate_first_halves`] runs `f`.
+    static APPROX_FIRST_HALVES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` (a lowering) with every first half of an interpolation that a
+/// second half completes lowered as the whole pair: approximate where its
+/// result is also read as data (P0 + i P10 on the console). `emit::translate`
+/// takes this last, after the exact form (`io::raise_keeping_first_halves`)
+/// did not translate; `VICTORY_FIRST_HALF=0` refuses it.
+pub(super) fn with_approximate_first_halves<R>(f: impl FnOnce() -> R) -> R {
+    let was = APPROX_FIRST_HALVES.replace(true);
+    let r = f();
+    APPROX_FIRST_HALVES.set(was);
+    r
+}
+
 pub(super) fn with_local_waves<R>(f: impl FnOnce() -> R) -> R {
     let was = LOCAL_WAVES.replace(true);
     let r = f();
@@ -1523,7 +1540,7 @@ impl<'a> Lower<'a> {
                 // the other half of its dst, PS_DeferredTextured): evaluated as the pair it
                 // starts. Approximate for those other bits (P0 + i P10 on the console); a
                 // first half only the second half reads is gone before lowering.
-                if std::env::var_os("VICTORY_FIRST_HALF").is_none_or(|v| v != "0") {
+                if APPROX_FIRST_HALVES.get() && std::env::var_os("VICTORY_FIRST_HALF").is_none_or(|v| v != "0") {
                     for (_, i) in &x.io.interps {
                         if let Interp::Interpolated { first, .. } = i {
                             for s in first {

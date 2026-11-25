@@ -307,6 +307,13 @@ pub fn translate(container: &[u8]) -> Result<HostShader, ShaderError> {
     {
         return Ok(shader);
     }
+    // Else (or with that off) each such first half evaluated as its pair,
+    // approximate for what reads it as data (the fx-prs form).
+    if matches!(&out, Err(ShaderError::Unsupported { what, .. }) if *what == lower::FIRST_HALF)
+        && let Ok(shader) = lower::with_approximate_first_halves(|| emit(&c, &native, &p, &st, &io, &res))
+    {
+        return Ok(shader);
+    }
     out
 }
 
