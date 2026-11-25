@@ -86,7 +86,8 @@ pub fn warm(container: &[u8]) -> Result<bool, String> {
     let ran = AtomicBool::new(false);
     let translate = |c: &[u8]| {
         ran.store(true, Ordering::Relaxed);
-        victory_shader::emit::translate(c).map_err(|e| e.to_string())
+        let hash = program_hash(c);
+        victory_shader::emit::for_program(&hash, || victory_shader::emit::translate(c)).map_err(|e| e.to_string())
     };
     cached(cache, &build(), victory_shader::emit::host_uses_wave32(), container, translate).map(|_| ran.load(Ordering::Relaxed))
 }
@@ -113,11 +114,21 @@ pub fn prepared_counts() -> (u64, u64) {
 /// The translation of a console shader container, from the cache when
 /// there is one.
 pub(crate) fn host_shader(container: &[u8]) -> Result<HostShader, String> {
-    let translate = |c: &[u8]| victory_shader::emit::translate(c).map_err(|e| e.to_string());
+    let translate = |c: &[u8]| {
+        let hash = program_hash(c);
+        victory_shader::emit::for_program(&hash, || victory_shader::emit::translate(c)).map_err(|e| e.to_string())
+    };
     match CACHE.get() {
         Some(cache) => cached(cache, &build(), victory_shader::emit::host_uses_wave32(), container, translate),
         None => translate(container),
     }
+}
+
+/// The hash the log names a shader by (`pipeline.rs`: the first 16 hex
+/// digits of the container's BLAKE3), which the translator's per-program
+/// switches take (`victory_shader::emit::for_program`).
+fn program_hash(container: &[u8]) -> String {
+    blake3::hash(container).to_hex()[..16].to_owned()
 }
 
 /// The cache entry's converter: the build, host wave mode and container in, the
