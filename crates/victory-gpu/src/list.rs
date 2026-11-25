@@ -736,6 +736,34 @@ const UAV_BARRIER: Barrier = Barrier {
     last: 0,
 };
 
+/// Barrier trimming (`VICTORY_TRIM_BARRIERS=0`: every barrier as before):
+/// a buffer transition from a state nothing writes in to another such
+/// state (vertex or index data, constants, shader reads, indirect
+/// arguments, copy source) no longer waits for every shader write on the
+/// card, as there is no write to wait for; a wait for every shader write
+/// drops the waits on single resources beside it; a barrier given twice
+/// in one call is made once.
+#[cfg(windows)]
+fn trim_barriers() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_TRIM_BARRIERS").is_none_or(|v| v != "0"))
+}
+
+/// Barriers and full waits [`trim_barriers`] left out, since the start.
+#[cfg(windows)]
+pub(crate) static TRIMMED_BARRIERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Whether `b` is a transition between two states nothing writes in
+/// (neither common nor any write state).
+#[cfg(windows)]
+fn read_to_read(b: &Barrier) -> bool {
+    // Render target, unordered access, depth write, stream out, copy
+    // destination, resolve destination, and video and ray tracing ones.
+    const WRITES: u32 = 0x4 | 0x8 | 0x10 | 0x100 | 0x400 | 0x1000 | 0x00ff_0000;
+    let (before, after) = ((b.second >> 32) as u32, b.last as u32);
+    b.kind == 0 && before != 0 && after != 0 && (before | after) & WRITES == 0 && (before | after) & 0xff00_0000 == 0
+}
+
 /// Returns the console's barrier "actions" (none).
 extern "system" fn barrier(this: This, count: u32, barriers: *const Barrier) -> u32 {
     #[cfg(windows)]
@@ -751,11 +779,48 @@ extern "system" fn barrier(this: This, count: u32, barriers: *const Barrier) -> 
         // Buffers have host copies, not resources the barrier can name:
         // a barrier on one waits for every shader write before it.
         if barriers.iter().any(|b| {
-            b.kind != 1 && !b.first.is_null() && crate::resource::buffer_bytes(b.first).is_some()
+            b.kind != 1
+                && !b.first.is_null()
+                && !(trim_barriers() && read_to_read(b))
+                && crate::resource::buffer_bytes(b.first).is_some()
         }) {
             host.push(UAV_BARRIER);
             #[cfg(feature = "diagnostics")]
             crate::copystat::add(crate::copystat::C::WaitsForBuffers, 1);
+        } else if trim_barriers()
+            && barriers.iter().any(|b| b.kind == 0 && !b.first.is_null() && crate::resource::buffer_bytes(b.first).is_some())
+        {
+            TRIMMED_BARRIERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        if trim_barriers() {
+            // One wait for every shader write covers the waits on single
+            // resources beside it, and a barrier twice is one barrier.
+            let before = host.len();
+            if host.iter().any(|b| b.kind == 2 && b.first.is_null()) {
+                let mut global = false;
+                host.retain(|b| {
+                    if b.kind != 2 {
+                        return true;
+                    }
+                    if b.first.is_null() && !global {
+                        global = true;
+                        return true;
+                    }
+                    false
+                });
+            }
+            let mut seen: Vec<(u32, usize, u64, u64)> = Vec::with_capacity(host.len());
+            host.retain(|b| {
+                let key = (b.kind, b.first as usize, b.second, b.last);
+                if seen.contains(&key) {
+                    return false;
+                }
+                seen.push(key);
+                true
+            });
+            if host.len() < before {
+                TRIMMED_BARRIERS.fetch_add((before - host.len()) as u64, std::sync::atomic::Ordering::Relaxed);
+            }
         }
         if !host.is_empty() {
             use windows::Win32::Graphics::Direct3D12::D3D12_RESOURCE_BARRIER;

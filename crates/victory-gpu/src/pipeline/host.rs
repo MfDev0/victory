@@ -389,6 +389,35 @@ impl GraphicsState {
         )
     }
 
+    /// [`GraphicsState::shape`] without the depth and stencil writes: for
+    /// the second tier of stand-ins (`crate::pipeline::make`), a pipeline
+    /// that differs only in those may draw for one still being made.
+    pub(crate) fn loose_shape(&self) -> String {
+        let inputs: Vec<String> = self
+            .inputs
+            .iter()
+            .zip(&self.names)
+            .map(|(e, name)| format!("{name:?} {} {} {} {}", e.SemanticIndex, e.Format.0, e.InputSlot, e.AlignedByteOffset))
+            .collect();
+        let targets: Vec<(i32, u8)> = self
+            .blend
+            .RenderTarget
+            .iter()
+            .map(|t| (t.BlendEnable.0, t.RenderTargetWriteMask))
+            .collect();
+        format!(
+            "loose {inputs:?} {} {} {:?} {} {:?} {} {:?} {}",
+            self.strip_cut.0,
+            self.topology.0,
+            self.targets,
+            self.depth_format.0,
+            self.samples,
+            self.bounds(),
+            targets,
+            self.blend.IndependentBlendEnable.0
+        )
+    }
+
     /// Everything the state holds, as bytes (a pipeline recipe kept for
     /// `victory prepare`, read back by [`GraphicsState::decode`]). Field by
     /// field: the descriptions' padding is never read.

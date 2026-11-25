@@ -2706,6 +2706,12 @@ fn late_line(frames: f64) {
             );
         }
         tracing::info!(
+            "barriers and full waits left out so far (VICTORY_TRIM_BARRIERS=0: none): {}; draws with a stand-in pipeline so far: {} of the same shape, {} with other depth writes (VICTORY_STAND_IN_LOOSE=0: none)",
+            crate::list::TRIMMED_BARRIERS.load(Ordering::Relaxed),
+            crate::pipeline::stand_ins().saturating_sub(crate::pipeline::loose_stand_ins()),
+            crate::pipeline::loose_stand_ins()
+        );
+        tracing::info!(
             "fills of upload memory that took results one flight late, not waiting (VICTORY_LATE_RESULTS=0: wait): {:.1} a frame",
             LATE_RESULTS.swap(0, Ordering::Relaxed) as f64 / frames
         );

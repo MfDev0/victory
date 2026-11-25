@@ -425,6 +425,12 @@ pub(crate) fn stand_ins() -> u64 {
     make::STAND_INS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Of [`stand_ins`], those of the second tier (other depth writes).
+#[cfg(windows)]
+pub(crate) fn loose_stand_ins() -> u64 {
+    make::LOOSE_STAND_INS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Draws and dispatches dropped since the last [`take_drops`], by reason
 /// (diagnostics).
 #[cfg(all(windows, feature = "diagnostics"))]

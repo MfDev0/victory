@@ -36,6 +36,9 @@ pub(crate) struct Pending {
     /// Its shaders and [`GraphicsState::shape`], for a stand-in while it is
     /// being made ([`stand_in`]); `None` for compute.
     shape: Option<String>,
+    /// Its shaders and [`GraphicsState::loose_shape`], for the second tier
+    /// of stand-ins ([`stand_in`]).
+    loose: Option<String>,
     /// Whether it is in [`SIBLINGS`] (or was looked at for it).
     listed: AtomicBool,
     /// Draws and dispatches that asked for it before it was made: the
@@ -57,7 +60,7 @@ impl Pending {
             key.update(s.hash.as_bytes());
         }
         key.update(graphics.as_ref().map(|g| g.describe()).unwrap_or_default().as_bytes());
-        let shape = graphics.as_ref().filter(|_| !shaders.is_empty()).map(|g| {
+        let names = || {
             let mut s = String::new();
             for shader in &shaders {
                 s.push_str(shader.stage);
@@ -65,8 +68,10 @@ impl Pending {
                 s.push_str(&shader.hash);
                 s.push(' ');
             }
-            s + &g.shape()
-        });
+            s
+        };
+        let shape = graphics.as_ref().filter(|_| !shaders.is_empty()).map(|g| names() + &g.shape());
+        let loose = graphics.as_ref().filter(|_| !shaders.is_empty()).map(|g| names() + &g.loose_shape());
         Pending {
             shaders,
             graphics,
@@ -75,6 +80,7 @@ impl Pending {
             key: key.finalize().to_hex()[..32].to_owned(),
             used: AtomicBool::new(false),
             shape,
+            loose,
             listed: AtomicBool::new(false),
             asks: AtomicU64::new(0),
         }
@@ -168,10 +174,12 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
     if made.is_some() && p.shape.is_some() && !p.listed.swap(true, Ordering::Relaxed) {
         let mut siblings = SIBLINGS.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(shape) = &p.shape {
-            siblings
-                .get_or_insert_with(std::collections::HashMap::new)
-                .entry(shape.clone())
-                .or_insert_with(|| &*Box::leak(Box::new(p.clone())));
+            let leaked: &'static Arc<Pending> = &*Box::leak(Box::new(p.clone()));
+            let map = siblings.get_or_insert_with(std::collections::HashMap::new);
+            map.entry(shape.clone()).or_insert(leaked);
+            if let Some(loose) = &p.loose {
+                map.entry(loose.clone()).or_insert(leaked);
+            }
         }
     }
     made
@@ -200,12 +208,38 @@ fn stand_in_on() -> bool {
 /// that was missing (or a frame late) is there.
 /// shortcut: for those frames such a draw may cull or blend as its
 /// sibling does.
+///
+/// Second tier, Dolphin's ubershader idea (a pipeline that draws anything
+/// while the real one is made): with none of the same shape, one of the
+/// same shaders, formats and blending whose depth and stencil writes differ
+/// (`VICTORY_STAND_IN_LOOSE=0`: not taken). The object is drawn rather than
+/// missing; for those frames it may write depth where it would not.
 fn stand_in(p: &Pending) -> Option<&HostPipeline> {
     let shape = p.shape.as_ref().filter(|_| stand_in_on())?;
-    let sibling: &'static Arc<Pending> = *SIBLINGS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.get(shape)?;
-    let made = sibling.made.get()?.as_ref()?;
+    let siblings = SIBLINGS.lock().unwrap_or_else(|e| e.into_inner());
+    let siblings = siblings.as_ref()?;
+    let made_of = |key: &String| -> Option<&'static HostPipeline> {
+        let sibling: &'static Arc<Pending> = *siblings.get(key)?;
+        sibling.made.get()?.as_ref()
+    };
+    if let Some(made) = made_of(shape) {
+        STAND_INS.fetch_add(1, Ordering::Relaxed);
+        return Some(made);
+    }
+    let loose = p.loose.as_ref().filter(|_| loose_on())?;
+    let made = made_of(loose)?;
     STAND_INS.fetch_add(1, Ordering::Relaxed);
+    LOOSE_STAND_INS.fetch_add(1, Ordering::Relaxed);
     Some(made)
+}
+
+/// Draws that went out with a second-tier stand-in since the start.
+pub(crate) static LOOSE_STAND_INS: AtomicU64 = AtomicU64::new(0);
+
+/// See [`stand_in`].
+fn loose_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_STAND_IN_LOOSE").is_none_or(|v| v != "0"))
 }
 
 /// Makes `p` on this thread if it is not made yet (waiting for a worker
