@@ -419,6 +419,12 @@ pub(crate) fn making() -> u64 {
     make::waiting()
 }
 
+/// Draws that went out with a stand-in while their pipeline was being made.
+#[cfg(windows)]
+pub(crate) fn stand_ins() -> u64 {
+    make::STAND_INS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Draws and dispatches dropped since the last [`take_drops`], by reason
 /// (diagnostics).
 #[cfg(all(windows, feature = "diagnostics"))]

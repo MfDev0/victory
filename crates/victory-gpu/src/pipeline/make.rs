@@ -33,6 +33,11 @@ pub(crate) struct Pending {
     /// whether a draw or dispatch has requested it yet.
     key: String,
     used: AtomicBool,
+    /// Its shaders and [`GraphicsState::shape`], for a stand-in while it is
+    /// being made ([`stand_in`]); `None` for compute.
+    shape: Option<String>,
+    /// Whether it is in [`SIBLINGS`] (or was looked at for it).
+    listed: AtomicBool,
 }
 
 // SAFETY: D3D12 objects are free-threaded; the graphics state (whose input
@@ -49,6 +54,16 @@ impl Pending {
             key.update(s.hash.as_bytes());
         }
         key.update(graphics.as_ref().map(|g| g.describe()).unwrap_or_default().as_bytes());
+        let shape = graphics.as_ref().filter(|_| !shaders.is_empty()).map(|g| {
+            let mut s = String::new();
+            for shader in &shaders {
+                s.push_str(shader.stage);
+                s.push(' ');
+                s.push_str(&shader.hash);
+                s.push(' ');
+            }
+            s + &g.shape()
+        });
         Pending {
             shaders,
             graphics,
@@ -56,6 +71,8 @@ impl Pending {
             made: OnceLock::new(),
             key: key.finalize().to_hex()[..32].to_owned(),
             used: AtomicBool::new(false),
+            shape,
+            listed: AtomicBool::new(false),
         }
     }
 
@@ -138,8 +155,52 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
     if p.made.get().is_none() {
         start(p, REQUESTED);
         wait(p, crate::frame::current());
+        if p.made.get().is_none() {
+            return stand_in(p);
+        }
     }
-    p.made.get()?.as_ref()
+    let made = p.made.get()?.as_ref();
+    if made.is_some() && p.shape.is_some() && !p.listed.swap(true, Ordering::Relaxed) {
+        let mut siblings = SIBLINGS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(shape) = &p.shape {
+            siblings
+                .get_or_insert_with(std::collections::HashMap::new)
+                .entry(shape.clone())
+                .or_insert_with(|| &*Box::leak(Box::new(p.clone())));
+        }
+    }
+    made
+}
+
+/// The first made pipeline of each [`Pending::shape`] that a draw used:
+/// kept for the rest of the run (one host pipeline per shape).
+static SIBLINGS: Mutex<Option<std::collections::HashMap<String, &'static Arc<Pending>>>> = Mutex::new(None);
+
+/// Draws that went out with a stand-in pipeline since the start.
+pub(crate) static STAND_INS: AtomicU64 = AtomicU64::new(0);
+
+/// `VICTORY_STAND_IN=0`: a draw whose pipeline is still being made is
+/// dropped, as before.
+fn stand_in_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_STAND_IN").is_none_or(|v| v != "0"))
+}
+
+/// For a graphics pipeline still being made (never one refused or that does
+/// not translate): a made pipeline of the same shaders and
+/// [`GraphicsState::shape`], which differs from it only in state that
+/// leaves nothing behind for later passes (culling, the depth test's
+/// function, blend factors). Its draws go out where they were dropped
+/// until the pipeline is made: in the first frames of a scene, geometry
+/// that was missing (or a frame late) is there.
+/// shortcut: for those frames such a draw may cull or blend as its
+/// sibling does.
+fn stand_in(p: &Pending) -> Option<&HostPipeline> {
+    let shape = p.shape.as_ref().filter(|_| stand_in_on())?;
+    let sibling: &'static Arc<Pending> = *SIBLINGS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.get(shape)?;
+    let made = sibling.made.get()?.as_ref()?;
+    STAND_INS.fetch_add(1, Ordering::Relaxed);
+    Some(made)
 }
 
 /// Makes `p` on this thread if it is not made yet (waiting for a worker

@@ -354,6 +354,41 @@ impl GraphicsState {
         ) + if self.bounds() { " depth bounds" } else { "" }
     }
 
+    /// What another pipeline of the same shaders must share with this one to
+    /// draw in its place ([`super::make::stand_in`]): what the host checks
+    /// against the list (input layout, topology, target and depth formats,
+    /// samples, the depth bounds test) and what would leave something
+    /// behind for later passes (depth and stencil writes, which targets are
+    /// written and blended). The rest (culling, the depth test's function
+    /// and bias, blend factors) may differ.
+    pub(crate) fn shape(&self) -> String {
+        let inputs: Vec<String> = self
+            .inputs
+            .iter()
+            .zip(&self.names)
+            .map(|(e, name)| format!("{name:?} {} {} {} {}", e.SemanticIndex, e.Format.0, e.InputSlot, e.AlignedByteOffset))
+            .collect();
+        let targets: Vec<(i32, u8)> = self
+            .blend
+            .RenderTarget
+            .iter()
+            .map(|t| (t.BlendEnable.0, t.RenderTargetWriteMask))
+            .collect();
+        format!(
+            "{inputs:?} {} {} {:?} {} {:?} {} {} {} {:?} {}",
+            self.strip_cut.0,
+            self.topology.0,
+            self.targets,
+            self.depth_format.0,
+            self.samples,
+            self.bounds(),
+            self.depth.DepthWriteMask.0,
+            self.depth.StencilEnable.0,
+            targets,
+            self.blend.IndependentBlendEnable.0
+        )
+    }
+
     /// Everything the state holds, as bytes (a pipeline recipe kept for
     /// `victory prepare`, read back by [`GraphicsState::decode`]). Field by
     /// field: the descriptions' padding is never read.
