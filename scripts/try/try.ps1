@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '4.4'
+$TryVersion = '4.5'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -40,11 +40,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -538,6 +538,17 @@ function Set-RunEnv {
     if ($null -eq $script:UserFx['VICTORY_AMBIENT']) { $env:VICTORY_AMBIENT = $(if ($c.ambient -eq 'off') { 'off' } else { '0.6' }) }
     if ($null -eq $script:UserFx['VICTORY_LEVELS_ON_DEMAND']) { $env:VICTORY_LEVELS_ON_DEMAND = $(if ($c.levels -eq 'off') { '0' } else { '1' }) }
     if ($null -eq $script:UserFx['VICTORY_POOL_NO_ASSERT']) { $env:VICTORY_POOL_NO_ASSERT = '1' }
+    # 4.5: walls, ceilings and floors. The shader clean-up passes left the
+    # prison cell's walls, roof and floor out (sky where they should be) on an
+    # RTX 4080 and an RX 7800 XT, and VICTORY_SHADER_OPT=0 brought them back
+    # (Xeltax/VIcky, same save A/B): off by default now, O switches. The 14
+    # cascade-shadow programs are wrong in one 64-lane form on 32-lane NVIDIA
+    # cards (missing ceiling, dark room: fxceless/victory-fork #62): the
+    # translator keeps them out of it by itself now; W switches that off
+    # (VICTORY_WAVE_DEEP_SKIPS_NOT=none) for a comparison.
+    if ($null -eq $script:UserFx['VICTORY_SHADER_OPT']) { [Environment]::SetEnvironmentVariable('VICTORY_SHADER_OPT', $(if ($c.opt -eq 'on') { $null } else { '0' }), 'Process') }
+    if ($null -eq $script:UserFx['VICTORY_WAVE_DEEP_SKIPS_NOT']) { [Environment]::SetEnvironmentVariable('VICTORY_WAVE_DEEP_SKIPS_NOT', $(if ($c.shadowfix -eq 'off') { 'none' } else { $null }), 'Process') }
+    Say "walls: shader clean-up $(if ($env:VICTORY_SHADER_OPT -eq '0') { 'off (walls and roofs kept)' } else { 'ON' })   (O switches)   shadow fix $(if ($env:VICTORY_WAVE_DEEP_SKIPS_NOT -eq 'none') { 'off' } else { 'ON' })   (W switches)"
     Say "picture: ambient light $(if ($env:VICTORY_AMBIENT -ne 'off') { 'ON' } else { 'off' })   (A switches)   textures level by level $(if ($env:VICTORY_LEVELS_ON_DEMAND -eq '1') { 'ON' } else { 'off' })   (L switches)"
     Say "fps boost: $(if ($c.boost -ne 'off') { 'ON (75% render scale + sharpen, no ray tracing)' } else { 'off' })   frames in between: $(if ($c.between -eq '1') { 'ON' } else { 'off' })   shared small buffers: $(if ($c.hybrid -eq '1') { 'ON' } else { 'off' })"
     # Its own cache: the old base's pipeline library and shaders do not mix.
@@ -712,7 +723,8 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
     # (see-through objects) until the next launches have compiled them.
     $lastFrame = @($lines | Where-Object { $_ -match 'dropped ([0-9]+) without a host pipeline \(([0-9]+) being made' }) | Select-Object -Last 1
     if ($lastFrame -and $lastFrame -match 'dropped ([0-9]+) without a host pipeline \(([0-9]+) being made') {
-        Say "at the end: $($Matches[1]) draws a frame still waiting for $($Matches[2]) pipelines being compiled (fewer each launch: run it again)"
+        if ($Matches[2] -eq '0') { Say "at the end: $($Matches[1]) draws a frame skipped (compute work, not objects: mostly the ray-tracing builder, which is off, and the programs counted below)" }
+        else { Say "at the end: $($Matches[1]) draws a frame still waiting for $($Matches[2]) pipelines being compiled (fewer each launch: run it again)" }
     }
     Say "shaders that do not translate: $(& $count 'shader does not translate')"
     Say "pipelines the card refused: $(& $count 'host pipeline refused')"
@@ -828,7 +840,7 @@ $script:UserLoop = $env:VICTORY_SHADER_LOOP_LIMIT
 $script:UserWaveWide = $env:VICTORY_WAVE_WIDE
 $script:UserDisplay = $env:VICTORY_DISPLAY_MODE
 $script:UserFx = @{}
-foreach ($name in @('VICTORY_RENDER_SCALE', 'VICTORY_SKIP_RT', 'VICTORY_FRAMEGEN', 'VICTORY_INPLACE', 'VICTORY_AMBIENT', 'VICTORY_LEVELS_ON_DEMAND', 'VICTORY_POOL_NO_ASSERT')) { $script:UserFx[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+foreach ($name in @('VICTORY_RENDER_SCALE', 'VICTORY_SKIP_RT', 'VICTORY_FRAMEGEN', 'VICTORY_INPLACE', 'VICTORY_AMBIENT', 'VICTORY_LEVELS_ON_DEMAND', 'VICTORY_POOL_NO_ASSERT', 'VICTORY_SHADER_OPT', 'VICTORY_WAVE_DEEP_SKIPS_NOT')) { $script:UserFx[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 while (-not (Ask-Game $false)) {}
 if (-not (Ensure-Tools)) { exit 1 }
 $changed = Update-Source
@@ -844,6 +856,7 @@ while ($true) {
     Say 'R = switch the screen size (1080p / 4K)    Z = switch plain mode (VICTORY defaults, like ztrx)'
     Say 'B = switch fps boost (75% render scale, no ray tracing)    M = switch frames in between    H = switch shared small buffers'
     Say 'A = switch ambient light (no black shadows)    L = switch textures level by level (no black doors and props on 8 GB cards)'
+    Say 'O = switch shader clean-up (off keeps walls and roofs)    W = switch the shadow fix (ceiling and lit rooms on NVIDIA)'
     Say 'P = prepare all pipelines again (done by itself after each update and run)    Q = quit'
     $k = (Read-Host '  Choice').Trim().ToUpper()
     if ($k -eq 'Q') { exit 0 }
@@ -875,6 +888,14 @@ while ($true) {
     }
     if ($k -eq 'L') {
         $script:Config.levels = $(if ($script:Config.levels -eq 'off') { '' } else { 'off' })
+        Save-Config
+    }
+    if ($k -eq 'O') {
+        $script:Config.opt = $(if ($script:Config.opt -eq 'on') { '' } else { 'on' })
+        Save-Config
+    }
+    if ($k -eq 'W') {
+        $script:Config.shadowfix = $(if ($script:Config.shadowfix -eq 'off') { '' } else { 'off' })
         Save-Config
     }
     if ($k -eq 'R') {

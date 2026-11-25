@@ -190,6 +190,26 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - pixel shaders read the other pixels of their 2x2 group through quad
      reads (Belobug's fix for lines on car paint, glass and skin). The
      first run after this update translates the shaders again.
+   4.5, walls, ceilings and loading (from the 4.3 reports; each on by default):
+   - **shader clean-up off** (O; `VICTORY_SHADER_OPT=0`): the clean-up
+     passes left the prison cell's walls, roof and floor out (sky where
+     they should be) on an RTX 4080 and an RX 7800 XT; off, they are back
+     (Xeltax/VIcky, same-save A/B);
+   - **shadow fix** (W; from Xeltax/VIcky 05ee4e9, fxceless/victory-fork
+     #62): on 32-lane NVIDIA cards the 14 cascade-shadow programs are wrong
+     in one 64-lane form (missing ceiling, dark room); they are kept out of
+     it (`VICTORY_WAVE_DEEP_SKIPS_NOT=<hash>,...` sets the list, `none`
+     empties it; `VICTORY_WAVE_DEEP_SKIPS_ONLY` the other way round);
+   - one more compute program translates on 32-lane cards (`f133e35efed2a48a`,
+     fxceless/victory-fork #190 by gdawid94);
+   - streaming: the card's page-mapping copies map runs of pages as one
+     view instead of one 64 KiB page at a time under the lock texture reads
+     wait on (Felix2180, fxceless/victory-fork #823): up to 2 s a frame of
+     waiting while the world streams in;
+   - the summary no longer calls the ~370 draws a frame skipped at the end
+     "waiting for pipelines": with none being made they are compute work
+     (mostly the ray-tracing builder, which is off), not missing objects.
+   The first run after this update translates the shaders again.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
