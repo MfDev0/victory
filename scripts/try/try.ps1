@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '3.6'
+$TryVersion = '3.7'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -440,7 +440,8 @@ function Set-RunEnv {
     $fastVars = @(@('VICTORY_LATE_WAIT', '3'), @('VICTORY_WIDE_BACK', '1'), @('VICTORY_CARD_BUFFERS_MIN_MB', '1'), @('VICTORY_CARD_BUFFERS_MB', '1024'))
     if ($c.fast -eq '1') {
         foreach ($kv in $fastVars) { [Environment]::SetEnvironmentVariable($kv[0], $kv[1], 'Process') }
-        [Environment]::SetEnvironmentVariable('VICTORY_RELAY', $null, 'Process')
+        # (3.7: the relay is on by default now; F mode keeps it off as before.)
+        [Environment]::SetEnvironmentVariable('VICTORY_RELAY', '0', 'Process')
         $script:WideFromTry = $false
         Say 'speed: F mode (late waits, card buffers)   (F switches back)'
     } else {
@@ -451,7 +452,8 @@ function Set-RunEnv {
         # copying back was one core's memory speed. Off again by itself if a
         # run loses the card (see Check-Run).
         $script:WideFromTry = $c.wide -ne 'off'
-        if ($script:WideFromTry) { [Environment]::SetEnvironmentVariable('VICTORY_WIDE_BACK', '1', 'Process') }
+        # (3.7: on by default now, so off has to be said.)
+        [Environment]::SetEnvironmentVariable('VICTORY_WIDE_BACK', $(if ($script:WideFromTry) { '1' } else { '0' }), 'Process')
         Say "speed: relay (stable)$(if ($script:WideFromTry) { ', copy-back on several threads' })   (F switches to the faster, riskier mode)"
     }
     # 3.6: compute shaders that need 64-lane waves (refused by 32-lane
