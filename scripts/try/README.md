@@ -130,6 +130,17 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    cheaper descriptor sync, and a shader cache that survives updates (no
    re-translating every shader after each update, so less stutter at the
    intro).
+   Also new in 4.1:
+   - the screen the game is told it has is 1080p (a Series X on a 1080p
+     TV); at 4K it rendered 2560x1440 inside and upscaled to 3840x2160 every
+     frame. **R** switches between 1080p and 4K;
+   - **Z** switches plain mode: VICTORY's own defaults for every speed and
+     safety switch, exactly as ztrx's launcher runs the game, to compare
+     the picture with Try's settings;
+   - the intro stutter: one pipeline worker is kept for pipelines the game
+     is drawing with right now, and pipelines only started early no longer
+     run above the game's own threads (`VICTORY_PIPELINE_KEEP_WORKER=0`,
+     `VICTORY_PIPELINE_EARLY_BOOST=1` restore the old way).
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,

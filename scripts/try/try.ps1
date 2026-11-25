@@ -40,11 +40,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -483,10 +483,29 @@ function Set-RunEnv {
     if (-not $script:NewFromTry) {
         foreach ($k in @('VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH', 'VICTORY_TRIM_BARRIERS')) { [Environment]::SetEnvironmentVariable($k, '0', 'Process') }
     }
+    # 4.1: the screen the console says it is plugged into. 1080p by default
+    # (a Series X on a 1080p TV): at 4K the game renders 2560x1440 inside and
+    # upscales to 3840x2160 every frame, on an 8 GB card that is also
+    # emulating. R switches to 4K. (Not when VICTORY_DISPLAY_MODE was set
+    # before VIctory Try started.)
+    if (-not $script:UserDisplay) { $env:VICTORY_DISPLAY_MODE = $(if ($c.res -eq '4k') { '3840x2160' } else { '1920x1080' }) }
+    Say "screen: $($env:VICTORY_DISPLAY_MODE)   (R switches 1080p / 4K)"
     # The hit-detection program that page-faults the card (upstream #981),
     # skipped as the NVIDIA world runs on victory-gta6 did.
     # And the meshlet culling that hung at load (b83629b90cd2b7bc, #18 there).
     if (-not $env:VICTORY_SKIP_PIPELINES) { $env:VICTORY_SKIP_PIPELINES = 'eeed82b877b44b5f,b83629b90cd2b7bc' }
+    # 4.1: plain mode (Z): every speed and safety switch above back at
+    # VICTORY's own defaults, as ztrx's launcher (scripts\play.ps1 there)
+    # runs the game; only the paths, cache folders, screen size and the two
+    # skipped programs stay. The lost-card steps then have nothing to undo.
+    if ($c.plain -eq '1') {
+        foreach ($k in @('VICTORY_SHADER_LOOP_LIMIT', 'VICTORY_LATE_WAIT', 'VICTORY_WIDE_BACK', 'VICTORY_CARD_BUFFERS_MIN_MB', 'VICTORY_CARD_BUFFERS_MB', 'VICTORY_RELAY', 'VICTORY_WAVE_WIDE', 'VICTORY_LAZY_BACK', 'VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH', 'VICTORY_TRIM_BARRIERS')) {
+            [Environment]::SetEnvironmentVariable($k, $null, 'Process')
+        }
+        $script:LoopFromTry = $false; $script:WideFromTry = $false; $script:WaveWideFromTry = $false
+        $script:NewFromTry = $false; $script:LazyFromTry = $false
+        Say 'PLAIN mode: VICTORY''s defaults, as ztrx runs the game   (Z switches back to Try''s settings)'
+    }
     # Its own cache: the old base's pipeline library and shaders do not mix.
     if (-not $env:VICTORY_CACHE_DIR) { $env:VICTORY_CACHE_DIR = Join-Path $TryHome 'cache-gta6' }
     # Shaders that do not translate are saved here (zip and send this folder).
@@ -723,6 +742,7 @@ function Run-Newer {
 $script:Config = Load-Config
 $script:UserLoop = $env:VICTORY_SHADER_LOOP_LIMIT
 $script:UserWaveWide = $env:VICTORY_WAVE_WIDE
+$script:UserDisplay = $env:VICTORY_DISPLAY_MODE
 while (-not (Ask-Game $false)) {}
 if (-not (Ensure-Tools)) { exit 1 }
 $changed = Update-Source
@@ -735,6 +755,7 @@ while ($true) {
     Write-Host ''
     Say 'Enter = run again    U = update to the newest version and run'
     Say 'G = change the game paths    C = switch Series S / Series X    F = switch speed mode'
+    Say 'R = switch the screen size (1080p / 4K)    Z = switch plain mode (VICTORY defaults, like ztrx)'
     Say 'P = prepare all pipelines again (done by itself after each update and run)    Q = quit'
     $k = (Read-Host '  Choice').Trim().ToUpper()
     if ($k -eq 'Q') { exit 0 }
@@ -742,6 +763,14 @@ while ($true) {
     if ($k -eq 'P') { $script:Config.prepared = ''; $script:Config.recipes = '' }
     if ($k -eq 'F') {
         $script:Config.fast = $(if ($script:Config.fast -eq '1') { '' } else { '1' })
+        Save-Config
+    }
+    if ($k -eq 'Z') {
+        $script:Config.plain = $(if ($script:Config.plain -eq '1') { '' } else { '1' })
+        Save-Config
+    }
+    if ($k -eq 'R') {
+        $script:Config.res = $(if ($script:Config.res -eq '4k') { '' } else { '4k' })
         Save-Config
     }
     if ($k -eq 'C') {
