@@ -1,0 +1,42 @@
+name: Release notice
+
+# Posts the first lines of scripts/try/RELEASE.md (the Try version and its
+# fixes, short) to Discord when a push changes the version there. The
+# webhook is the repository secret DISCORD_WEBHOOK (Settings > Secrets and
+# variables > Actions); without it nothing is posted.
+
+on:
+  push:
+    branches: [arena/59fabb00-victory]
+    paths: [scripts/try/RELEASE.md]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+      - name: Post to Discord
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "::notice::No DISCORD_WEBHOOK secret: nothing posted"
+            exit 0
+          fi
+          now=$(head -n 1 scripts/try/RELEASE.md)
+          before=$(git show HEAD~1:scripts/try/RELEASE.md 2>/dev/null | head -n 1 || true)
+          if [ "$now" = "$before" ] && [ "$MANUAL" != "true" ]; then
+            echo "Same version as before ($now): nothing posted"
+            exit 0
+          fi
+          text=$(printf '**%s**\n%s' "$now" "$(tail -n +2 scripts/try/RELEASE.md | head -c 1800)")
+          jq -n --arg c "$text" '{username: "VIctory Try", content: $c}' > body.json
+          curl -sS -f -H 'Content-Type: application/json' -d @body.json "$WEBHOOK"
+          echo "Posted: $now"

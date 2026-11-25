@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '4.7'
+$TryVersion = '4.8'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -29,6 +29,14 @@ $Target = Join-Path $TryHome 'target'
 $ConfigPath = Join-Path $TryHome 'config.json'
 $LogDir = Join-Path $TryHome 'logs'
 $BackupDir = Join-Path $TryHome 'backup'
+# 4.8: AvatarManz's VIctory (avatarmanz/VIctory-7900XTX), the build PortWatch
+# verified at about 16 fps in game with a picture close to the console. Built
+# exactly as it is, at this commit (a newer Try moves it on), in folders of
+# its own; E switches between it and this fork.
+$AvatarUrl = 'https://github.com/avatarmanz/VIctory-7900XTX.git'
+$AvatarPin = '0a43566532c57b34a5397d6fdc91e419de32e8e9'
+$SrcAvatar = Join-Path $TryHome 'victory-avatarmanz'
+$TargetAvatar = Join-Path $TryHome 'target-avatarmanz'
 New-Item -ItemType Directory -Force -Path $TryHome, $LogDir | Out-Null
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 try { $Host.UI.RawUI.WindowTitle = 'VIctory Try - menu' } catch {}
@@ -40,11 +48,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; engine = ''; avatar_built = ''; avatar_shaders = ''; avsafe = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'engine', 'avatar_built', 'avatar_shaders', 'avsafe')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -289,7 +297,7 @@ function Update-Source {
     if (-not $fork) { Bad "the source download is broken: delete the victory folder in $TryHome and start again"; return $null }
     $up = (G rev-parse -q --verify refs/remotes/upstream/main) | Select-Object -First 1
     $key = "fork:$fork+$up"
-    if (($key -eq $script:Config.built_key) -and (Test-Path (Victory-Exe))) {
+    if (($key -eq $script:Config.built_key) -and (Test-Path (Ours-Exe))) {
         Say 'no changes since last time'
         return $false
     }
@@ -363,7 +371,11 @@ function Prepare-Source([bool]$withUpstream) {
     $script:Added = $added; return
 }
 
-function Victory-Exe { return Join-Path $Target 'release\victory.exe' }
+function Ours-Exe { return Join-Path $Target 'release\victory.exe' }
+# Which VIctory runs (4.8): AvatarManz's unless E chose this fork's.
+function Use-Avatar { return $script:Config.engine -ne 'ours' }
+function Avatar-Exe { return Join-Path $TargetAvatar 'diag\victory.exe' }
+function Victory-Exe { if (Use-Avatar) { return (Avatar-Exe) } return (Ours-Exe) }
 
 function Build {
     Step 'Building VIctory (the first build takes a while; later ones are quicker)'
@@ -387,7 +399,7 @@ function Build {
         & cargo build --release -p victory 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
         $code = $LASTEXITCODE
     } finally { Pop-Location }
-    if ($code -ne 0 -or -not (Test-Path (Victory-Exe))) {
+    if ($code -ne 0 -or -not (Test-Path (Ours-Exe))) {
         Bad "the build failed (code $code). The full output is in $log"
         $lines = @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue)
         $first = -1
@@ -428,12 +440,170 @@ function Build-All {
     return $ok
 }
 
+# ------------------------------------------------------------- AvatarManz (4.8)
+
+# Runs git in AvatarManz's source folder; the exit code lands in $script:GCode.
+function GA {
+    $out = @(& $script:Git -C $SrcAvatar -c core.autocrlf=false -c advice.detachedHead=false @args 2>&1 | ForEach-Object { "$_" })
+    $script:GCode = $LASTEXITCODE
+    return $out
+}
+
+# Whether the graphics card is an NVIDIA one (cached).
+function Is-Nvidia {
+    if ($null -eq $script:Nvidia) {
+        $script:Nvidia = $false
+        try { $script:Nvidia = [bool](@(Get-CimInstance Win32_VideoController -ErrorAction Stop | Where-Object { $_.Name -match 'NVIDIA' }).Count) } catch {}
+    }
+    return $script:Nvidia
+}
+
+# Downloads AvatarManz's VIctory at $AvatarPin and builds it the way its
+# README does (diag profile, diagnostics feature), unless that build is
+# there already. $true when its victory.exe is ready.
+function Ensure-Avatar([bool]$update) {
+    $c = $script:Config
+    Step 'AvatarManz''s VIctory (avatarmanz/VIctory-7900XTX: fully rendered, about 16 fps on its PC)'
+    $short = $AvatarPin.Substring(0, 8)
+    $key = "avatar:$AvatarPin"
+    if (($c.avatar_built -eq $key) -and (Test-Path (Avatar-Exe))) { Say "built already (commit $short)"; return $true }
+    if ((Test-Path $SrcAvatar) -and -not (Test-Path (Join-Path $SrcAvatar '.git'))) { Remove-Item -Recurse -Force $SrcAvatar }
+    if (-not (Test-Path $SrcAvatar)) {
+        Say 'downloading it (first time only)'
+        & $script:Git -c core.autocrlf=false clone -q --no-checkout $AvatarUrl $SrcAvatar 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) { Bad 'could not download AvatarManz''s VIctory: check the internet connection'; return $false }
+    }
+    $null = GA cat-file -e "$AvatarPin^{commit}"
+    if ($script:GCode -ne 0 -or $update) { $null = GA fetch -q origin; $null = GA cat-file -e "$AvatarPin^{commit}" }
+    if ($script:GCode -ne 0) { Bad "AvatarManz's commit $short is not in its repository any more"; return $false }
+    $null = GA checkout -q -f $AvatarPin
+    $null = GA clean -fdq
+    Step "Building AvatarManz's VIctory, commit $short (the first build takes a while)"
+    $tc = Join-Path $SrcAvatar 'rust-toolchain.toml'
+    if (Test-Path $tc) {
+        $m = Select-String -LiteralPath $tc -Pattern '^\s*channel\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if ($m) {
+            $channel = $m.Matches[0].Groups[1].Value
+            Say "Rust $channel"
+            & rustup toolchain install $channel --profile minimal --target x86_64-pc-windows-msvc 2>&1 | ForEach-Object { "$_" } | Out-Host
+        }
+    }
+    $env:CARGO_TARGET_DIR = $TargetAvatar
+    $log = Join-Path $LogDir 'build-avatarmanz.log'
+    Push-Location $SrcAvatar
+    try {
+        & cargo build --locked --profile diag -p victory --features diagnostics 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
+        $code = $LASTEXITCODE
+    } finally { Pop-Location; $env:CARGO_TARGET_DIR = $Target }
+    if ($code -ne 0 -or -not (Test-Path (Avatar-Exe))) {
+        Bad "AvatarManz's build failed (code $code). The full output is in $log"
+        $lines = @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue)
+        $first = -1
+        for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^error') { $first = $i; break } }
+        if ($first -lt 0) { $first = [Math]::Max(0, $lines.Count - 25) }
+        if ($lines.Count -gt 0) { $lines[$first..([Math]::Min($lines.Count - 1, $first + 24))] | ForEach-Object { Write-Host ('    ' + $_) } }
+        return $false
+    }
+    $c.avatar_built = $key
+    $c.avatar_shaders = ''
+    Save-Config
+    Say 'build finished'
+    return $true
+}
+
+# The settings AvatarManz plays with (its scripts\play.ps1), exactly; with Y
+# its -Safe set. Everything else Try sets is left out, as play.ps1 does;
+# only the paths, the screen size and, on NVIDIA cards, Try's two guards
+# against losing the card stay (the 256-turn shader loop limit and the two
+# programs that hang 32-lane NVIDIA cards).
+function Set-AvatarEnv {
+    $c = $script:Config
+    $keep = @('VICTORY_CONFIG', 'VICTORY_DATA_DIR', 'VICTORY_TRY_RUNNING', 'VICTORY_TRY_HANDOFF', 'VICTORY_TRY_ONE_WINDOW')
+    Get-ChildItem Env:VICTORY_* | Where-Object { $_.Name -notin $keep } | ForEach-Object { Remove-Item "Env:$($_.Name)" }
+    $env:VICTORY_GAME_DIR = $c.game_dir
+    $env:RUST_BACKTRACE = '1'
+    $env:VICTORY_CACHE_DIR = Join-Path $TryHome 'cache-avatarmanz'
+    $env:VICTORY_DUMP_FAILED = Join-Path $TryHome 'failed-shaders'
+    $env:VICTORY_DISPLAY_MODE = $(if ($script:UserDisplay) { $script:UserDisplay } elseif ($c.res -eq '4k') { '3840x2160' } else { '1920x1080' })
+    $set = [ordered]@{
+        VICTORY_TEXTURE_NO_WAIT = '1'; VICTORY_RELAY = '2'; VICTORY_WIDE_BACK = '1'; VICTORY_CARD_REHASH_RUNS = '1'
+        VICTORY_JOIN_COPIES = '1'; VICTORY_INDIRECT_WINDOW = '1'; VICTORY_RELAY_COPY = '1'; VICTORY_CARD_STEPS = '2'
+        VICTORY_INDIRECT_BATCH = '2'; VICTORY_MAP_THREADS = '1'; VICTORY_TITLE_PRIORITIES = '0'; VICTORY_CARD_AWAKE = '1'
+        VICTORY_SHOW_AFTER = '1'; VICTORY_AMBIENT = '0.8'; VICTORY_D3D12_DRED = 'light'; VICTORY_SKIP_PIPELINES = 'none'
+    }
+    if ($c.avsafe -eq '1') {
+        $set.VICTORY_UNDER_WIDE = '0'; $set.VICTORY_LAND_ECHO = '0'
+    } else {
+        $set.VICTORY_THIN = '1'; $set.VICTORY_JOIN_PARTS = '8'; $set.VICTORY_UPLOAD_AHEAD = '1'
+    }
+    $guards = Is-Nvidia
+    if ($guards) {
+        $set.VICTORY_SHADER_LOOP_LIMIT = $(if ($script:UserLoop) { $script:UserLoop } elseif ($c.loop) { $c.loop } else { '256' })
+        $set.VICTORY_SKIP_PIPELINES = 'eeed82b877b44b5f,b83629b90cd2b7bc'
+    }
+    foreach ($k in $set.Keys) { Set-Item "Env:$k" $set[$k] }
+    $script:AvatarEnv = $true
+    # Nothing of this fork's own lost-card steps applies to this build.
+    $script:LoopFromTry = $false; $script:WideFromTry = $false; $script:WaveWideFromTry = $false
+    $script:NewFromTry = $false; $script:LazyFromTry = $false
+    Say "engine: AvatarManz's VIctory, commit $($AvatarPin.Substring(0, 8)), its own settings$(if ($c.avsafe -eq '1') { ' in SAFE mode' })   (E switches engine, Y safe mode)"
+    if ($guards) { Say 'NVIDIA card: shader loop limit 256 and the two programs that hang NVIDIA cards skipped (Try''s guards)' }
+    Say "screen: $($env:VICTORY_DISPLAY_MODE)   (R switches 1080p / 4K)"
+    try {
+        $gb = [math]::Round((Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory / 1GB)
+        if ($gb -lt 48) {
+            Bad "this build used 40-46 GB of memory on its PC (64 GB recommended); this PC has $gb GB."
+            Bad 'Windows will use the page file for the rest: it may stutter or stop. Let the page file grow (System managed) on a fast drive. E switches back to this fork.'
+        }
+    } catch {}
+}
+
+# Translates every shader of the game into AvatarManz's cache once per build
+# of it (its `victory shaders`; can be stopped, and goes on next time).
+function Prepare-AvatarShaders {
+    $c = $script:Config
+    if ($c.avatar_shaders -eq $c.avatar_built) { return }
+    Step 'Translating the game''s shaders ahead (first run of this build only; a few minutes)'
+    $log = Join-Path $LogDir 'shaders-avatarmanz.log'
+    Push-Location $TryHome
+    try {
+        & (Avatar-Exe) shaders 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Select-Object -Last 3 | ForEach-Object { Say $_ }
+        $code = $LASTEXITCODE
+    } finally { Pop-Location }
+    if ($code -eq 0) { Say 'shaders translated' } else { Bad "translating stopped (code $code; output in $log): the game translates the rest itself" }
+    $c.avatar_shaders = $c.avatar_built
+    Save-Config
+}
+
+# The chosen engine is built (4.8): AvatarManz's, or if that fails this
+# fork's. $false when neither can run.
+function Ensure-Engine([bool]$update) {
+    if (Use-Avatar) {
+        if (Ensure-Avatar $update) { return $true }
+        Bad 'AvatarManz''s VIctory is not ready: running this fork''s VIctory instead (E tries AvatarManz''s again).'
+        $script:Config.engine = 'ours'
+        Save-Config
+    }
+    if ($script:OursChanged -or -not (Test-Path (Ours-Exe))) {
+        $ok = Build-All
+        if ($ok) { $script:OursChanged = $false }
+        return ($ok -or (Test-Path (Ours-Exe)))
+    }
+    return $true
+}
+
 # ------------------------------------------------------------- run
 
 # The settings a run uses, also for Prepare-Shaders (the shader cache keys
 # its translations by some of them: the same ones are needed both times).
 function Set-RunEnv {
     $c = $script:Config
+    # After a run of AvatarManz's build (4.8): its settings and cache folder go first.
+    if ($script:AvatarEnv) {
+        $keep = @('VICTORY_CONFIG', 'VICTORY_DATA_DIR', 'VICTORY_TRY_RUNNING', 'VICTORY_TRY_HANDOFF', 'VICTORY_TRY_ONE_WINDOW')
+        Get-ChildItem Env:VICTORY_* | Where-Object { $_.Name -notin $keep } | ForEach-Object { Remove-Item "Env:$($_.Name)" }
+        $script:AvatarEnv = $false
+    }
     $env:VICTORY_GAME_DIR = $c.game_dir
     $env:RUST_BACKTRACE = '1'
     # Long shader loops pass the 2 s driver timeout; 256 turns was the
@@ -559,6 +729,12 @@ function Set-RunEnv {
     # frame). K switches both. (Each only when not set before VIctory Try
     # started.)
     if ($null -eq $script:UserFx['VICTORY_GPU_COPIES']) { $env:VICTORY_GPU_COPIES = $(if ($c.gpucopy -eq 'off') { '0' } else { '1' }) }
+    # 4.8: two more of AvatarManz's settings this fork has too: indirect mesh
+    # draws clamped a window of records at a time (one compute pass of ours
+    # per record before, ~3,400 a frame), and title copies that continue each
+    # other joined.
+    if ($null -eq $script:UserFx['VICTORY_INDIRECT_WINDOW']) { $env:VICTORY_INDIRECT_WINDOW = '1' }
+    if ($null -eq $script:UserFx['VICTORY_JOIN_COPIES']) { $env:VICTORY_JOIN_COPIES = '1' }
     if ($null -eq $script:UserFx['VICTORY_CARD_REHASH_RUNS']) { [Environment]::SetEnvironmentVariable('VICTORY_CARD_REHASH_RUNS', $(if ($c.gpucopy -eq 'off') { $null } else { '1' }), 'Process') }
     Say "speed: copies on the card $(if ($env:VICTORY_GPU_COPIES -ne '0') { 'ON' } else { 'off' }), checks joined $(if ($env:VICTORY_CARD_REHASH_RUNS -eq '1') { 'ON' } else { 'off' })   (K switches)"
     Say "walls: shader clean-up $(if ($env:VICTORY_SHADER_OPT -eq '0') { 'off (walls and roofs kept)' } else { 'ON' })   (O switches)   shadow fix $(if ($env:VICTORY_WAVE_DEEP_SKIPS_NOT -eq 'none') { 'off' } else { 'ON' })   (W switches)"
@@ -593,7 +769,7 @@ function Prepare-Shaders([string]$why) {
     $log = Join-Path $LogDir 'prepare.log'
     Push-Location $TryHome
     try {
-        & (Victory-Exe) prepare 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Where-Object { $_ -match '^(prepar|translated)' }
+        & (Ours-Exe) prepare 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Where-Object { $_ -match '^(prepar|translated)' }
         $code = $LASTEXITCODE
     } finally { Pop-Location }
     if ($code -eq 0) { Say 'pipelines prepared' }
@@ -614,6 +790,7 @@ function Run-Game {
     $built = ''
     if ("$($c.built_key)" -match '^fork:([0-9a-f]{7,40})') { $built = $Matches[1] }
     $fetched = (G rev-parse -q --verify refs/remotes/origin/fork) | Select-Object -First 1
+    if (Use-Avatar) { $built = ''; $fetched = '' }
     if ($built) {
         $line = (G log -1 --format='%h %s' $built) | Select-Object -First 1
         Say "VIctory: built from $line"
@@ -623,14 +800,20 @@ function Run-Game {
         Bad "this is an OLDER build: the newest fork ($new) did not build."
         Bad "Press U to try again; if it fails, send $(Join-Path $LogDir 'build.log')"
     }
-    if ($c.added) { Say "plus upstream: $(@($c.added -split "`n").Count) new fix(es) on top" }
+    if ($c.added -and -not (Use-Avatar)) { Say "plus upstream: $(@($c.added -split "`n").Count) new fix(es) on top" }
     if ($c.console -ne 'series-x') { $c.console = 'series-s' }
     Say "console: Xbox $(if ($c.console -eq 'series-s') { 'Series S' } else { 'Series X' })   (C switches)"
     Say "command: victory.exe run `"$($c.game_exe)`" --execute --console $($c.console)   (VICTORY_GAME_DIR=$($c.game_dir))"
     Say 'To stop: close the game window.'
-    Set-RunEnv
-    if ("$($c.prepared)" -ne "$($c.built_key)") { Prepare-Shaders 'new build' }
-    elseif ("$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from the last run' }
+    if (Use-Avatar) {
+        Set-AvatarEnv
+        Prepare-AvatarShaders
+    } else {
+        Say 'engine: this fork''s VIctory   (E switches to AvatarManz''s)'
+        Set-RunEnv
+        if ("$($c.prepared)" -ne "$($c.built_key)") { Prepare-Shaders 'new build' }
+        elseif ("$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from the last run' }
+    }
     # The shared pipeline list (keys of pipelines other players met, no
     # game files): the game starts making them while it loads.
     $shared = Join-Path $Src 'scripts\try\shared-pipelines.txt'
@@ -670,7 +853,7 @@ function Run-Game {
     try { Check-Run $log $stamp $crashes } catch { Bad "could not summarize the run: $_" }
     # Everything this run asked for and did not get, compiled now while the
     # game is closed: the next launch shows it from the start.
-    if ("$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from this run' }
+    if (-not (Use-Avatar) -and "$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from this run' }
 }
 
 # The game in a window of its own ('VIctory - game output'), with its output
@@ -754,7 +937,12 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
     $lost = & $count 'device removed|DEVICE_REMOVED|DEVICE_HUNG'
     if ($lost -gt 0) {
         Bad 'the graphics card was lost (device removed) in this run.'
-        if ($c.fast -eq '1') {
+        if (Use-Avatar) {
+            if ($c.avsafe -ne '1') {
+                $c.avsafe = '1'
+                Say 'next run: AvatarManz''s build in its safe mode (Y switches it off again).'
+            }
+        } elseif ($c.fast -eq '1') {
             $c.fast = ''
             Say 'next run: back to the stable relay speed mode (F switches again).'
         } elseif ($script:NewFromTry) {
@@ -784,7 +972,7 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
         # This PC's pipeline list (keys only), for the shared list.
         $early = Join-Path $env:VICTORY_CACHE_DIR 'pipelines\early-pipelines.txt'
         if (Test-Path -LiteralPath $early) { Copy-Item -LiteralPath $early -Destination $stage }
-        $buildLog = Join-Path $LogDir 'build.log'
+        $buildLog = Join-Path $LogDir $(if (Use-Avatar) { 'build-avatarmanz.log' } else { 'build.log' })
         if (Test-Path $buildLog) { Copy-Item -LiteralPath $buildLog -Destination $stage }
         $dump = $env:VICTORY_DUMP_FAILED
         if ($dump -and (Test-Path $dump)) {
@@ -853,13 +1041,14 @@ $script:UserLoop = $env:VICTORY_SHADER_LOOP_LIMIT
 $script:UserWaveWide = $env:VICTORY_WAVE_WIDE
 $script:UserDisplay = $env:VICTORY_DISPLAY_MODE
 $script:UserFx = @{}
-foreach ($name in @('VICTORY_RENDER_SCALE', 'VICTORY_SKIP_RT', 'VICTORY_FRAMEGEN', 'VICTORY_INPLACE', 'VICTORY_AMBIENT', 'VICTORY_LEVELS_ON_DEMAND', 'VICTORY_POOL_NO_ASSERT', 'VICTORY_SHADER_OPT', 'VICTORY_WAVE_DEEP_SKIPS_NOT', 'VICTORY_GPU_COPIES', 'VICTORY_CARD_REHASH_RUNS')) { $script:UserFx[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+foreach ($name in @('VICTORY_RENDER_SCALE', 'VICTORY_SKIP_RT', 'VICTORY_FRAMEGEN', 'VICTORY_INPLACE', 'VICTORY_AMBIENT', 'VICTORY_LEVELS_ON_DEMAND', 'VICTORY_POOL_NO_ASSERT', 'VICTORY_SHADER_OPT', 'VICTORY_WAVE_DEEP_SKIPS_NOT', 'VICTORY_GPU_COPIES', 'VICTORY_CARD_REHASH_RUNS', 'VICTORY_INDIRECT_WINDOW', 'VICTORY_JOIN_COPIES')) { $script:UserFx[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 while (-not (Ask-Game $false)) {}
 if (-not (Ensure-Tools)) { exit 1 }
 $changed = Update-Source
 if ($null -eq $changed) { Bad 'no source to build: check the internet connection'; exit 1 }
 Run-Newer
-if ($changed -or -not (Test-Path (Victory-Exe))) { if (-not (Build-All)) { exit 1 } }
+$script:OursChanged = [bool]$changed
+if (-not (Ensure-Engine $false)) { exit 1 }
 
 # Every command of the menu: its key, what it is, whether it is on now, and
 # what it does (4.6).
@@ -871,6 +1060,8 @@ function Show-Commands {
         @('U', 'Update', '', 'download the newest VIctory, build it, then run the game'),
         @('V', 'Version', '', 'show which Try and VIctory version you have'),
         @('G', 'Game paths', '', 'ask again where the game folder and game_scarlett_master.exe are'),
+        @('E', 'Engine', $(if (Use-Avatar) { 'AVM' } else { 'own' }), 'AVM = AvatarManz''s VIctory exactly (fully rendered, ~16 fps on its PC); own = this fork''s'),
+        @('Y', 'AvatarManz safe', $(& $on ($c.avsafe -eq '1')), 'AvatarManz''s build without its newest, faster ways (its -Safe; on by itself if the card is lost)'),
         @('C', 'Console', $(if ($c.console -eq 'series-s') { 'S  ' } else { 'X  ' }), 'Xbox Series S (renders 1280x720 and scales up: faster) or Series X (full size)'),
         @('R', 'Screen size', $(if ($c.res -eq '4k') { '4K ' } else { '1080' }), 'the size the game is told the screen has: 1920x1080 or 3840x2160'),
         @('F', 'Speed mode', $(& $on ($c.fast -eq '1')), 'faster copying between PC and card; riskier (back to stable if the card is lost)'),
@@ -893,7 +1084,8 @@ function Show-Commands {
         Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3])
     }
     Write-Host '  ====================================================================================' -ForegroundColor Cyan
-    Write-Host '  Switches (C, R, F, B, M, H, A, L, O, W, K, Z) flip at once and are saved; Enter then runs the game with them.'
+    Write-Host '  Switches (E, Y, C, R, F, B, M, H, A, L, O, W, K, Z) flip at once and are saved; Enter then runs the game with them.'
+    if (Use-Avatar) { Write-Host '  Engine AVM: F, B, M, H, A, L, O, W, K and Z are for this fork''s engine only (AvatarManz''s runs with its own settings).' -ForegroundColor Yellow }
 }
 
 function Show-Version {
@@ -911,11 +1103,13 @@ function Show-Version {
         $line = (G log -1 --format='%h %ad %s' --date=short $fetched) | Select-Object -First 1
         Say "newest downloaded: $line   (U updates)"
     }
+    Say "AvatarManz's VIctory: commit $($AvatarPin.Substring(0, 8)) (avatarmanz/VIctory-7900XTX)$(if ($c.avatar_built) { ', built' } else { ', not built yet' })"
+    Say "engine now: $(if (Use-Avatar) { 'AvatarManz''s' } else { 'this fork''s' })   (E switches)"
     Say "game: $($c.game_exe)"
 }
 
 while ($true) {
-    Run-Game
+    if (Ensure-Engine $false) { Run-Game } else { Bad 'nothing to run: no VIctory build works. Send the build log above.' }
     Show-Commands
     # Switches only change the setting and show the list again; Enter (or
     # U, G, P) runs the game, Q quits.
@@ -936,6 +1130,8 @@ while ($true) {
             'O' { $c.opt = $(if ($c.opt -eq 'on') { '' } else { 'on' }) }
             'W' { $c.shadowfix = $(if ($c.shadowfix -eq 'off') { '' } else { 'off' }) }
             'K' { $c.gpucopy = $(if ($c.gpucopy -eq 'off') { '' } else { 'off' }) }
+            'E' { $c.engine = $(if ($c.engine -eq 'ours') { '' } else { 'ours' }) }
+            'Y' { $c.avsafe = $(if ($c.avsafe -eq '1') { '' } else { '1' }) }
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
             'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }) }
             default { $switched = $false }
@@ -955,6 +1151,7 @@ while ($true) {
     if ($k -eq 'P') { $script:Config.prepared = ''; $script:Config.recipes = '' }
     if ($k -eq 'U') {
         $changed = Update-Source
-        if ($changed -or -not (Test-Path (Victory-Exe))) { if (-not (Build-All)) { Bad 'the new build FAILED: the game runs on the last working build (older fixes). Send the error above.' } }
+        if ($changed) { $script:OursChanged = $true }
+        if (-not (Ensure-Engine $true)) { Bad 'the new build FAILED: the game runs on the last working build (older fixes). Send the error above.' }
     }
 }

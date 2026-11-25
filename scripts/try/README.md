@@ -238,6 +238,26 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      each upload the card re-checks the pieces it received, about 1,900
      tiny one-after-the-other passes a frame; now one pass per run of
      pieces. The same pieces are checked either way.
+   4.8, AvatarManz's engine (E):
+   - **AvatarManz's VIctory** (avatarmanz/VIctory-7900XTX), the build
+     PortWatch verified at about 16 fps in game with a picture close to the
+     console, is downloaded and built exactly as it is (one pinned commit,
+     its own `diag` build) in folders of its own, and run with the settings
+     of its `scripts\play.ps1`. It is the engine by default now; E switches
+     to this fork's VIctory and back. If it does not build, Try runs this
+     fork's by itself. Its shaders are translated ahead once per build
+     (`victory shaders`). On NVIDIA cards Try keeps two guards with it: the
+     256-turn shader loop limit and the two programs that hang 32-lane
+     cards. It used 40-46 GB of memory on its PC: with less RAM Windows
+     uses the page file (Try says so);
+   - **Y**: its safe mode (`-Safe` in play.ps1: without its newest, faster
+     ways); switched on by itself after a run that lost the card;
+   - this fork's engine takes two of its settings it has too: indirect mesh
+     draws clamped a window of records at a time (`VICTORY_INDIRECT_WINDOW`)
+     and title copies that continue each other joined (`VICTORY_JOIN_COPIES`);
+   - each release is announced on Discord (`.github/workflows/discord.yml`,
+     the first lines of `scripts/try/RELEASE.md`; the webhook is the
+     repository secret `DISCORD_WEBHOOK`).
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
