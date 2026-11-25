@@ -670,6 +670,13 @@ impl Staging {
         preparing[3].fetch_add(read as u64, Relaxed);
     }
 
+    /// [`Staging::refresh`] without adding to the frame line's texture
+    /// time (a caller that runs several at once counts its own): the bytes
+    /// of title memory read.
+    pub(crate) fn refresh_uncounted(&self) -> usize {
+        self.refresh_now()
+    }
+
     /// Returns the bytes of title memory read.
     fn refresh_now(&self) -> usize {
         let whole = std::time::Instant::now();

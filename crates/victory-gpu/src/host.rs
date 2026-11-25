@@ -5167,7 +5167,13 @@ impl HostList {
     fn run_deferred(&self, batch: &mut Batch) {
         #[cfg(feature = "diagnostics")]
         use crate::copystat::{C, add};
+        // Texture checks in a row, done together on several threads before
+        // the next step that writes title memory, and at the end.
+        let mut textures: Vec<std::sync::Arc<crate::texture::Staging>> = Vec::new();
         for step in &self.deferred().copies {
+            if matches!(step, Step::Copy(..) | Step::Run(_)) {
+                refresh_textures(&mut textures);
+            }
             let started = std::time::Instant::now();
             let copied = match step {
                 &Step::Copy(dst, src, len) => {
@@ -5236,7 +5242,7 @@ impl HostList {
                 }
                 Step::Texture(staging) => {
                     if batch.texture_due(staging) {
-                        staging.refresh();
+                        textures.push(staging.clone());
                     }
                     continue;
                 }
@@ -5244,7 +5250,47 @@ impl HostList {
             PREPARING[0].fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
             PREPARING[1].fetch_add(copied as u64, Ordering::Relaxed);
         }
+        refresh_textures(&mut textures);
     }
+}
+
+/// Whether a submission's texture checks (read, hash, detile into each
+/// texture's own staging buffer) run on several threads, the textures of
+/// a run of them spread over the threads kept for the snapshots. They ran
+/// one after another on the submitting thread: the frame line's
+/// "textures", 120-390 ms a frame while the world streams in (2026-11-24
+/// reports). Each texture has its own lock, staging buffer and read buffer
+/// (one per thread); the write-watch journal and the mapping lock (shared
+/// by readers) are behind their own locks. On with [`wide_refresh`];
+/// `VICTORY_WIDE_TEXTURES=0` checks them one by one as before.
+fn wide_textures() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| wide_refresh() && std::env::var_os("VICTORY_WIDE_TEXTURES").is_none_or(|v| v != "0"))
+}
+
+/// Brings the staging buffers of `textures` up to date ([`wide_textures`]),
+/// and empties it.
+fn refresh_textures(textures: &mut Vec<std::sync::Arc<crate::texture::Staging>>) {
+    if textures.len() < 2 || !wide_textures() {
+        for staging in textures.drain(..) {
+            staging.refresh();
+        }
+        return;
+    }
+    let started = std::time::Instant::now();
+    let read = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let jobs: Vec<Box<dyn FnOnce() + Send>> = textures
+        .drain(..)
+        .map(|staging| {
+            let read = read.clone();
+            Box::new(move || {
+                read.fetch_add(staging.refresh_uncounted() as u64, Ordering::Relaxed);
+            }) as Box<dyn FnOnce() + Send>
+        })
+        .collect();
+    crate::shadow::wide_run(jobs);
+    PREPARING[2].fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+    PREPARING[3].fetch_add(read.load(Ordering::Relaxed), Ordering::Relaxed);
 }
 
 /// Whether a submission's refreshes of host copies run on several threads,
