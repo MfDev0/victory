@@ -118,6 +118,18 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      (`VICTORY_TRIM_BARRIERS=0`; off by itself after the card is lost).
    Occlusion queries already answer "visible" at once (nothing hidden by
    them).
+   4.1 fixes the build: up to 4.0 a failed build still counted as built
+   (cargo's lines became the build step's answer), so the old victory.exe
+   kept running and none of 3.9 or 4.0 reached the game. Upstream's new
+   commits are no longer added by default (one of them, upstream #1180,
+   does not build with this fork; `VICTORY_TRY_UPSTREAM=1` adds them, and
+   falls back to the fork alone when they do not build). It also brings
+   fxceless's newest fixes (the ones ztrx is made from): a write through one
+   view of a memory page is seen at its other views, descriptors the game
+   copies as bytes are mirrored (the first room renders right), a much
+   cheaper descriptor sync, and a shader cache that survives updates (no
+   re-translating every shader after each update, so less stutter at the
+   intro).
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,

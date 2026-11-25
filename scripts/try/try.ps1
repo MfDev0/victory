@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '4.0'
+$TryVersion = '4.1'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -375,13 +375,16 @@ function Build {
     }
     if ($channel) {
         Say "Rust $channel"
-        & rustup toolchain install $channel --profile minimal --target x86_64-pc-windows-msvc
+        & rustup toolchain install $channel --profile minimal --target x86_64-pc-windows-msvc 2>&1 | ForEach-Object { "$_" } | Out-Host
     }
     $env:CARGO_TARGET_DIR = $Target
     $log = Join-Path $LogDir 'build.log'
     Push-Location $Src
     try {
-        & cargo build --release -p victory 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log
+        # Out-Host: the lines must not become this function's result (they
+        # did up to Try 4.0, so a failed build counted as built and the old
+        # victory.exe ran on).
+        & cargo build --release -p victory 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
         $code = $LASTEXITCODE
     } finally { Pop-Location }
     if ($code -ne 0 -or -not (Test-Path (Victory-Exe))) {
@@ -398,16 +401,23 @@ function Build {
     return $true
 }
 
-# The fork with upstream's new fixes; if that does not build, the fork alone.
+# Whether a Build call succeeded: its last result is $true (anything else
+# it lets slip out of a command comes before).
+function Built { $r = @($input); return ($r.Count -gt 0) -and ($r[-1] -eq $true) }
+
+# The fork alone; with VICTORY_TRY_UPSTREAM=1 upstream's new fixes on top
+# first, and if that does not build, the fork alone. (Up to Try 4.0 they
+# were always added: one of them, upstream #1180, does not build with this
+# fork's shader code.)
 function Build-All {
-    $null = Prepare-Source $true
+    $null = Prepare-Source ($env:VICTORY_TRY_UPSTREAM -eq '1')
     $added = @($script:Added | Where-Object { $_ })
-    $ok = Build
+    $ok = Build | Built
     if (-not $ok -and $added.Count -gt 0) {
         Bad "the build failed with upstream's new fixes added: building this fork without them"
         $added = @()
         $null = Prepare-Source $false
-        $ok = Build
+        $ok = Build | Built
     }
     if ($ok) {
         $script:Config.built_key = $script:Key

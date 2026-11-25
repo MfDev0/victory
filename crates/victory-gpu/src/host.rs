@@ -3907,6 +3907,8 @@ impl Host {
         // before the batch is done.
         let mut later: Vec<(std::sync::Arc<crate::shadow::Shadow>, usize, usize, u64)> = Vec::new();
         let skip = read_only_plan(plans, held);
+        // The last send of these plans' flights (`relay_fetch_merge`).
+        let landed = plans.iter().map(|p| p.sent_as).max();
         if let Some((differs, dwords)) = differs {
             // SAFETY: the mapping of the results. The compares of these
             // plans have run, and their dwords are given to no other plan
@@ -3945,7 +3947,7 @@ impl Host {
                 }
             }
         }
-        self.relay_fetch_merge(&pieces, total, fetch, sends_done);
+        self.relay_fetch_merge(&pieces, total, fetch, sends_done, landed);
         if later.is_empty() {
             return;
         }
@@ -3985,7 +3987,7 @@ impl Host {
         }
         if !again.is_empty() {
             READ_ONLY_STATS[2].fetch_add(again.len() as u64, Ordering::Relaxed);
-            self.relay_fetch_merge(&again, again_total, fetch, sends_done);
+            self.relay_fetch_merge(&again, again_total, fetch, sends_done, landed);
         }
     }
 
@@ -3998,13 +4000,14 @@ impl Host {
         total: u64,
         fetch: &mut Option<RelayFetch>,
         sends_done: u64,
+        landed: Option<u64>,
     ) {
         if pieces.is_empty() {
             if inflight_fetch() {
                 // The next merge may be of a flight in the air now, with
                 // bytes from when it ran: only sends up to these plans' are
                 // older than it.
-                if let Some(last) = plans.iter().map(|p| p.sent_as).max() {
+                if let Some(last) = landed {
                     crate::shadow::relay_fetched(last);
                 }
                 return;
@@ -4118,7 +4121,6 @@ impl Host {
         // Sends up to `after` are of no use to any later merge; with the
         // fetch inside flights only those up to these plans' are
         // (`fallback_fetched_mark`).
-        let landed = plans.iter().map(|p| p.sent_as).max();
         crate::shadow::relay_fetched(fallback_fetched_mark(inflight_fetch(), after, landed));
     }
 
