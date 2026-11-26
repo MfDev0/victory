@@ -3612,6 +3612,36 @@ fn note_beside(noted: &mut std::collections::HashMap<(usize, u32), u64>, fetched
 mod relay_tests {
     use super::{fetched_beside, flagged_pieces, landable, note_beside};
 
+    /// Joined fetch copies land every byte where the piece-by-piece ones
+    /// did (after Kelvaroq 0032's test).
+    #[test]
+    fn joined_fetch_copies_land_the_same_bytes() {
+        use std::sync::Arc;
+        let first = Arc::new([1u8, 2, 3, 4, 5, 6, 7, 8]);
+        let second = Arc::new([11u8, 12, 13, 14, 15, 16, 17, 18]);
+        let pieces = [
+            (first.clone(), 0, 2, 0),
+            (first.clone(), 2, 4, 2),
+            (second.clone(), 4, 6, 4),
+            (second.clone(), 6, 7, 8),
+            (second, 0, 2, 9),
+            (first.clone(), 3, 5, 0),
+        ];
+        for (join, calls) in [(false, 6), (true, 5)] {
+            let mut bytes = [0xffu8; 11];
+            let mut count = 0;
+            for (source, lo, hi, at) in super::relay_copy_runs_with(&pieces, join) {
+                let at = at as usize;
+                bytes[at..at + hi - lo].copy_from_slice(&source[lo..hi]);
+                count += 1;
+            }
+            assert_eq!(count, calls);
+            assert_eq!(bytes, [4, 5, 3, 4, 15, 16, 0xff, 0xff, 17, 11, 12]);
+        }
+        let overflow = [(first.clone(), 0, 1, u64::MAX), (first, 1, 2, 0)];
+        assert_eq!(super::relay_copy_runs_with(&overflow, true).count(), 2);
+    }
+
     /// A piece fetched on the copy queue while a later flight was in the
     /// air is fetched again by that flight, and by no flight sent after
     /// the fetch had run; the note goes when its flights have landed.
@@ -5086,6 +5116,32 @@ struct FetchAsk<'a> {
     numbers: &'a [(usize, u32)],
     /// The number of the last flight being landed.
     landed: u64,
+}
+
+/// Whether neighbouring pieces of one copy fetched by the relay go down in
+/// one copy call (`VICTORY_RELAY_COPY_RUNS=0`: a call a piece, as before).
+/// After Kelvaroq 0032 by stellarr-studio (opt-in there). Each piece keeps
+/// its own place in the landing buffer and its own merge; only the card's
+/// copy calls are joined, where a piece ends where the next begins in both
+/// the copy and the landing buffer.
+fn relay_copy_runs_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_RELAY_COPY_RUNS").is_none_or(|v| v != "0"))
+}
+
+/// The relay's fetch copies of `pieces` (copy, first byte, end, place in
+/// the landing buffer), neighbours joined ([`relay_copy_runs_on`]).
+fn relay_copy_runs<T>(pieces: &[(std::sync::Arc<T>, usize, usize, u64)]) -> impl Iterator<Item = (&T, usize, usize, u64)> {
+    relay_copy_runs_with(pieces, relay_copy_runs_on())
+}
+
+fn relay_copy_runs_with<T>(pieces: &[(std::sync::Arc<T>, usize, usize, u64)], join: bool) -> impl Iterator<Item = (&T, usize, usize, u64)> {
+    pieces
+        .chunk_by(move |a, b| join && std::sync::Arc::ptr_eq(&a.0, &b.0) && a.2 == b.1 && a.3.checked_add((a.2 - a.1) as u64) == Some(b.3))
+        .map(|run| {
+            let (shadow, lo, _, at) = &run[0];
+            (shadow.as_ref(), *lo, run[run.len() - 1].2, *at)
+        })
 }
 
 /// Whether the relay fetches what shaders wrote to copies in the card's
@@ -6741,8 +6797,8 @@ impl Host {
                     // title's either way.
                     let after = second.order_done();
                     let copy = second.down.list()?;
-                    for (shadow, lo, hi, at) in pieces {
-                        copy.1.CopyBufferRegion(&buffer, *at, &shadow.buffer, *lo as u64, (*hi - *lo) as u64);
+                    for (shadow, lo, hi, at) in relay_copy_runs(pieces) {
+                        copy.1.CopyBufferRegion(&buffer, at, &shadow.buffer, lo as u64, (hi - lo) as u64);
                     }
                     let job = second.down.send(copy, &[(&self.fence, behind)], total)?;
                     second.down.wait(job, event)?;
@@ -6762,8 +6818,8 @@ impl Host {
                 if let Some((queue, (allocator, list))) = &copy {
                     allocator.Reset()?;
                     list.Reset(allocator, None)?;
-                    for (shadow, lo, hi, at) in pieces {
-                        list.CopyBufferRegion(&buffer, *at, &shadow.buffer, *lo as u64, (*hi - *lo) as u64);
+                    for (shadow, lo, hi, at) in relay_copy_runs(pieces) {
+                        list.CopyBufferRegion(&buffer, at, &shadow.buffer, lo as u64, (hi - lo) as u64);
                     }
                     list.Close()?;
                     let lists = [Some(list.cast::<ID3D12CommandList>()?)];
@@ -6777,8 +6833,8 @@ impl Host {
                 }
                 allocator.Reset()?;
                 list.Reset(&allocator, None)?;
-                for (shadow, lo, hi, at) in pieces {
-                    list.CopyBufferRegion(&buffer, *at, &shadow.buffer, *lo as u64, (*hi - *lo) as u64);
+                for (shadow, lo, hi, at) in relay_copy_runs(pieces) {
+                    list.CopyBufferRegion(&buffer, at, &shadow.buffer, lo as u64, (hi - lo) as u64);
                 }
                 list.Close()?;
                 let lists = [Some(list.cast::<ID3D12CommandList>()?)];

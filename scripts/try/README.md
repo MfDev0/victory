@@ -568,6 +568,16 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.14 ("one frame ahead"; plan and to-do in `scripts/try/PLAN.md`):
+   - `VICTORY_COPY_FETCH` and `VICTORY_TRIM_BARRIERS` on their own Try
+     switches (config `copyfetch`, `trim`), no longer tied to the 3.8 set
+     (`new38`) a lost card had turned off; lazy copy-back on again once.
+   - `VICTORY_ASYNC_SUBMIT=1` and `VICTORY_ASYNC_PRESENT=1` (config `ahead`;
+     Kelvaroq by stellarr-studio, patches 0040/0048).
+   - `VICTORY_CARD_HASH_WIDE=1` (config `widehash`; fork #1014, Kelvaroq
+     0041).
+   - Relay fetch copies of neighbouring pieces joined
+     (`VICTORY_RELAY_COPY_RUNS=0` goes back; Kelvaroq 0032).
    6.13 ("NVIDIA fixes"; plan and to-do in `scripts/try/PLAN.md`):
    - `VICTORY_WINDOWS_BAR_MB` (trustno1-coder/VIctory-NVIDIA, Indy2l):
      windows outside buffers in a GPU upload heap (Resizable BAR), own cap,

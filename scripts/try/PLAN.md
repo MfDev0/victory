@@ -1,4 +1,4 @@
-# VIctory Try: plan and to-do (6.10, updated for 6.13)
+# VIctory Try: plan and to-do (6.10, updated for 6.14)
 
 Goal: the whole picture rendered, **20+ fps** on the reporter's PC: RTX 4050
 Laptop (5921 MB, budget about 5153 MB), 12 threads, about 16 GB of RAM,
@@ -21,8 +21,9 @@ below are checked again.
 | Belobug (`a-publier`) | RX 9070 XT | ~22 | avm c9c932c + prelude uploads (flicker), VRAM-aware texture cap, **PC FSR via the host DLL** |
 | avatarmanz/VIctory-7900XTX | RX 7900 XTX | 16 (45 ms Series S) | renderer ports 1-7 (CBV -4.7 ms, guard -2, journal -1..-3), THIN list calls on 8 threads, copy-queue textures + show-after, shaders/pipelines made ahead (`warm`) |
 | DexNom/VIctory | RX 7900 XTX | 3-4 | best picture: ray tracing, cube gradients, the PC FSR bridge (ab34a8b2) |
-| kelvaroq | RTX 5080 | ~10 | CPU submission-bound; unified memory layer not public yet |
-| this fork | RTX 4050L | 1.6-3.3 (6.7) | preparing 84 ms, heap passes 92 ms, relay wait ~225 ms a frame |
+| kelvaroq (stellarr-studio) | RTX 5080 | ~10 (11 on a 4090 for 36 min) | patches 0001-0064 on fork f85101b (an ancestor of ours): wide card hashes + mesh launch (0041, 198 -> 120 ms), async submit + async present + copy queues by default (0040/0048), translate-once descriptors (0055), unified memory layer (0063, `VICTORY_UMA`, not in a build yet) |
+| DoubleGhosty/cool_fox | - | - | community continuation (codec_d): renderer ports 1/5/6/7 by default, coalesced card compares (Xyzstk f2dd4508), frame-rate and render-scale switches |
+| this fork | RTX 4050L / RTX 4060 | 1.6-3.3 (6.7) / 4.2-4.7 (6.12, MAX) | 6.12: relay waits 130 ms a frame for fetches queued behind the flights (copy-engine fetch off since an old lost card), GPU ~150 ms with no barrier trimmed |
 
 ## Done in 6.10
 
@@ -47,6 +48,48 @@ below are checked again.
       66afb2b4; parser only so far).
 - [x] Logs: `upscaler PC FidelityFX ...` line at start, providers offered
       and chosen, every 600 upscales how many were jittered (both paths).
+
+## Why 3-4 fps (6.12 report, RTX 4060 8 GB, 32 GB, MAX on) and 6.14
+
+Steady state 20:36-20:42: 4.2-4.7 fps, 215-240 ms a frame, ~3,500 draws.
+
+| part of a frame | ms | cause |
+|---|---|---|
+| relay thread waiting for fetches of card copies' pieces | **129-133** | `VICTORY_COPY_FETCH=0`: the fetch went on the direct queue behind every flight sent since; an old lost card had set config `new38=off`, which also turned off copy fetch and barrier trimming for good |
+| card busy (our count 66-68 %, Task Manager 3D 87-88 %) | ~150 | `VICTORY_TRIM_BARRIERS=0` (0 trimmed), 105 hash passes + 58 compares a frame, one thread a piece |
+| preparing on the title's thread (copies 24, refreshes 24, descriptor mirror 21-24) | 50-55 | the title's thread prepares every submission itself, then waits in the present |
+| title waits for the copy-back to hear a fence | (inside the above) | `VICTORY_LAZY_BACK=0` (an old access-violation crash) |
+| windows outside buffers | 0 MB | so the 6.13 BAR windows could not help this PC |
+
+MAX lifted caps; none of these is a cap. The Series S has one memory: the
+GPU's writes are simply there for the CPU (no fetch, no compare, no
+copy-back), and the game records frame N+1 while the GPU draws frame N
+(the present returns at once). 6.14 moves us toward that:
+
+- [x] Copy fetch and barrier trimming on their own switches (config
+      `copyfetch`, `trim`), on; a one-time migration (`mig613`) undoes the
+      old lock-out. Last in the lost-card chain.
+- [x] Lazy copy-back on again once (migration); an AV crash turns it off.
+- [x] `VICTORY_ASYNC_SUBMIT=1` + `VICTORY_ASYNC_PRESENT=1` (config `ahead`):
+      one frame ahead (Kelvaroq 0040/0048 defaults). Second in the lost-card
+      chain after wide hashes.
+- [x] `VICTORY_CARD_HASH_WIDE=1` (config `widehash`; fork #1014 martindevbr,
+      Kelvaroq 0041 default). First in the lost-card chain after BAR windows.
+- [x] Joined relay fetch copies (Kelvaroq 0032; `VICTORY_RELAY_COPY_RUNS=0`
+      goes back), engine default.
+
+Expected in the 6.14 report: relay `waited ... for fetches` a few ms (not
+130), `what shaders wrote ... fetched on the card's copy engine` at start,
+`barriers and full waits left out so far` > 0, `submissions are prepared and
+sent by a thread of ours`, `presents go behind the queue's line`, the lazy
+line. Frame then bounded by the card (~100 ms?) -> about 8-10 fps; the next
+step is the card's own time (our passes, indirect clamps, 354 spread
+dispatches a frame) and the descriptor mirror.
+
+Not ported (yet): Kelvaroq 0041 mesh launch stage (1,389 lines), 0055
+translate-once descriptors (1,012), 0063 UMA (1,988, not in their build);
+cool_fox f2dd4508 coalesced compares (on their tree's `CardRange`), 8a31b96e
+journal (1,503 lines).
 
 ## Done in 6.13 ("NVIDIA fixes"; deep search of the NVIDIA forks)
 
@@ -224,6 +267,12 @@ frame-rate limit; the CPU's copies are. The 6.8+ fx set (heap thread,
 parallel refresh) targets rows 2-3; the 6.11 report will show how much.
 
 ## To do, in order
+
+### 0. Read the 6.14 report (needs the user's zip)
+- [ ] The expected lines above; relay fetch wait; card busy %; fps.
+- [ ] Any crash (lazy copy-back) or lost card (which step went off).
+- [ ] If the card is now the limit: time our passes (`VICTORY_CARD_HASH_WIDE`
+      line), port Kelvaroq 0055 descriptors / 0041 mesh launch next.
 
 ### 1. Read the 6.13 report (needs the user's zip)
 - [ ] `through a resizable BAR` supported=true? `windows through the BAR`
