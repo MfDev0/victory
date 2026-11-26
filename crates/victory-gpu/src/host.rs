@@ -177,6 +177,15 @@ pub(crate) fn references(object: &impl Interface) -> u32 {
     }
 }
 
+/// When [`sweep`] last ran ([`now_ms`]).
+static SWEPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The next [`sweep`] runs at the next submission, not a second after the
+/// last (an allocation was refused: `crate::pressure::refused`).
+pub(crate) fn sweep_soon() {
+    SWEPT.store(0, Ordering::Relaxed);
+}
+
 /// Once a second, before a submission starts: lets go of what nothing
 /// names any more (copies of windows of title memory, staging buffers,
 /// host copies of textures the title fills).
@@ -188,15 +197,18 @@ fn sweep() {
     if !*ON.get_or_init(|| std::env::var_os("VICTORY_SWEEP").is_none_or(|v| v != "0")) {
         return;
     }
-    static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let now = now_ms();
-    let last = LAST.load(Ordering::Relaxed);
+    let last = SWEPT.load(Ordering::Relaxed);
     if now < last + 1000
-        || LAST
+        || SWEPT
             .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
             .is_err()
     {
         return;
+    }
+    // (Short of memory: kept upload buffers no list holds go first.)
+    if crate::pressure::level() != crate::pressure::Level::Normal {
+        trim_upload_spare();
     }
     crate::pipeline::trim_library();
     crate::shadow::let_go_idle();
@@ -1406,6 +1418,102 @@ impl<T> Spare<T> {
         self.kept.push((thing, size));
         None
     }
+
+    /// Everything kept past `most` bytes, the oldest first.
+    fn trim(&mut self, most: u64) -> Vec<(T, u64)> {
+        let mut cut = 0;
+        while self.bytes > most && cut < self.kept.len() {
+            self.bytes -= self.kept[cut].1;
+            cut += 1;
+        }
+        self.kept.drain(..cut).collect()
+    }
+}
+
+/// An upload buffer a list gave back at its reset ([`HostList::upload`]):
+/// the buffer and its persistent mapping.
+struct KeptUpload(ID3D12Resource, usize);
+
+// SAFETY: a D3D12 resource (free-threaded) and its persistent mapping,
+// written only by the list that takes it.
+unsafe impl Send for KeptUpload {}
+
+/// Upload buffers of lists' copies no list holds, by size class, kept for
+/// the next copy of that class instead of a new committed resource each
+/// time: the lists' texture and buffer copies made one per copy, and freed
+/// it at the list's reset (our take on codec_d's cool_fox upload pool).
+static UPLOAD_SPARE: Mutex<Spare<KeptUpload>> = Mutex::new(Spare::new());
+/// Since the start: upload buffers taken from those kept, and made anew.
+pub(crate) static UPLOAD_REUSE: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// Whether lists' upload buffers are kept for reuse
+/// (`VICTORY_UPLOAD_POOL=0`: one per copy, freed at the reset, as before).
+fn upload_pool() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_UPLOAD_POOL").is_none_or(|v| v != "0"))
+}
+
+/// The size class of an upload of `size` bytes: a power of two from 64 KiB
+/// to 32 MiB (`None` past it: made to measure, not kept).
+fn upload_class(size: u64) -> Option<u64> {
+    (size <= 32 << 20).then(|| size.max(64 << 10).next_power_of_two())
+}
+
+/// The most bytes of upload buffers kept at the memory level now.
+fn upload_spare_most() -> u64 {
+    match crate::pressure::level() {
+        crate::pressure::Level::Normal => 256 << 20,
+        crate::pressure::Level::Mild => 64 << 20,
+        crate::pressure::Level::Critical => 0,
+    }
+}
+
+/// Lets go of kept upload buffers past what the memory level allows.
+fn trim_upload_spare() {
+    let most = upload_spare_most();
+    let freed = UPLOAD_SPARE.lock().unwrap_or_else(|e| e.into_inner()).trim(most);
+    drop(freed);
+}
+
+/// Lets go of every kept buffer no list holds (upload buffers and scratch
+/// chunks), for an allocation the driver refused: the bytes they held.
+fn free_spares() -> u64 {
+    let uploads = UPLOAD_SPARE.lock().unwrap_or_else(|e| e.into_inner()).trim(0);
+    let chunks = SPARE.lock().unwrap_or_else(|e| e.into_inner()).trim(0);
+    let mut bytes = 0;
+    for (_, size) in &chunks {
+        ALIVE[1].fetch_sub(1, Ordering::Relaxed);
+        ALIVE[2].fetch_sub(*size, Ordering::Relaxed);
+        ALIVE[3].fetch_sub(1, Ordering::Relaxed);
+        ALIVE[4].fetch_sub(*size, Ordering::Relaxed);
+        bytes += size;
+    }
+    bytes + uploads.iter().map(|(_, size)| size).sum::<u64>()
+}
+
+/// Upload buffers a list held until its reset: kept for the next list if
+/// they are of a class (`data` their mapping, 0: not kept), freed if not or
+/// past what the memory level allows.
+fn give_uploads(uploads: Vec<(ID3D12Resource, u64, usize)>) {
+    if uploads.is_empty() {
+        return;
+    }
+    let most = upload_spare_most();
+    let mut freed = Vec::new();
+    {
+        let mut spare = UPLOAD_SPARE.lock().unwrap_or_else(|e| e.into_inner());
+        for (buffer, size, data) in uploads {
+            if data == 0 || !upload_pool() {
+                freed.push(buffer);
+                continue;
+            }
+            if let Some(KeptUpload(buffer, _)) = spare.give(KeptUpload(buffer, data), size, most) {
+                freed.push(buffer);
+            }
+        }
+    }
+    // Freed outside the lock.
+    drop(freed);
 }
 
 /// Scratch chunks no list holds.
@@ -1815,7 +1923,9 @@ enum Step {
 struct Deferred {
     /// Destination, source, bytes.
     copies: Vec<Step>,
-    uploads: Vec<ID3D12Resource>,
+    /// The buffers, their bytes, and their mapping if they are of a size
+    /// class ([`upload_class`]: kept for reuse at the reset), else 0.
+    uploads: Vec<(ID3D12Resource, u64, usize)>,
     /// The bytes of `uploads` (counted in [`ALIVE`] while they are held).
     upload_bytes: u64,
     /// Host objects the list's commands name (pipelines, root signatures,
@@ -1847,10 +1957,16 @@ impl Deferred {
     /// Holds `buffer` (`size` bytes of upload memory) until the list is
     /// reset.
     fn hold_upload(&mut self, buffer: ID3D12Resource, size: u64) {
+        self.hold_kept_upload(buffer, size, 0);
+    }
+
+    /// As [`Self::hold_upload`], a buffer of a size class mapped at `data`,
+    /// kept for reuse at the reset.
+    fn hold_kept_upload(&mut self, buffer: ID3D12Resource, size: u64, data: usize) {
         ALIVE[6].fetch_add(1, Ordering::Relaxed);
         ALIVE[7].fetch_add(size, Ordering::Relaxed);
         self.upload_bytes += size;
-        self.uploads.push(buffer);
+        self.uploads.push((buffer, size, data));
     }
 }
 
@@ -5555,7 +5671,18 @@ impl HostList {
         #[cfg(feature = "diagnostics")]
         let started = std::time::Instant::now();
         self._alive.used();
-        *self.deferred() = Deferred::default();
+        // Every submission of the list has run: its upload buffers go back
+        // for the next list's copies.
+        let uploads = {
+            let mut deferred = self.deferred();
+            let uploads = std::mem::take(&mut deferred.uploads);
+            ALIVE[6].fetch_sub(uploads.len() as u64, Ordering::Relaxed);
+            ALIVE[7].fetch_sub(deferred.upload_bytes, Ordering::Relaxed);
+            deferred.upload_bytes = 0;
+            *deferred = Deferred::default();
+            uploads
+        };
+        give_uploads(uploads);
         self.states.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.twins.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.pipelines.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -6063,8 +6190,36 @@ impl HostList {
     /// A mapped upload buffer of `size` bytes, alive until the list is
     /// reset.
     ///
-    /// shortcut: one buffer per copy; pool them once uploads are frequent.
+    /// An upload buffer of the size class of `size` ([`upload_class`]), one
+    /// a list gave back at its reset if there is one, else made; held by
+    /// the list until its reset, then kept for the next. `None` without the
+    /// pool, past the classes, or refused.
+    fn kept_upload(&self, host: &Host, size: u64) -> Option<(ID3D12Resource, *mut u8)> {
+        let class = upload_class(size).filter(|_| upload_pool())?;
+        let kept = UPLOAD_SPARE.lock().unwrap_or_else(|e| e.into_inner()).take(class);
+        let (buffer, data) = match kept {
+            Some(KeptUpload(buffer, data)) => {
+                UPLOAD_REUSE[0].fetch_add(1, Ordering::Relaxed);
+                (buffer, data as *mut u8)
+            }
+            None => {
+                let (buffer, data) = host.upload_buffer(class)?;
+                UPLOAD_REUSE[1].fetch_add(1, Ordering::Relaxed);
+                name(&buffer, || format!("list upload {class:#x}"));
+                (buffer, data)
+            }
+        };
+        self.deferred().hold_kept_upload(buffer.clone(), class, data as usize);
+        Some((buffer, data))
+    }
+
+    /// Of a size class ([`upload_class`]) it is one a list gave back at its
+    /// reset if there is one ([`UPLOAD_SPARE`]), and may be larger than
+    /// `size`.
     pub(crate) fn upload(&self, host: &Host, size: u64) -> Option<(ID3D12Resource, *mut u8)> {
+        if upload_pool() && upload_class(size).is_some() {
+            return self.kept_upload(host, size);
+        }
         let (buffer, data) = host.upload_buffer(size)?;
         name(&buffer, || format!("list upload {size:#x}"));
         self.deferred().hold_upload(buffer.clone(), size);
@@ -6078,6 +6233,12 @@ impl HostList {
         let mut s = self.scratch.lock().unwrap_or_else(|e| e.into_inner());
         let len = len.max(1).next_multiple_of(256);
         if len > SCRATCH_CHUNK {
+            // (Of a size class: one kept for reuse, as for copies.)
+            if let Some((buffer, data)) = self.kept_upload(host, len) {
+                // SAFETY: a live buffer.
+                let gpu = unsafe { buffer.GetGPUVirtualAddress() };
+                return Some((gpu, data));
+            }
             let (buffer, data) = host.upload_buffer(len)?;
             name(&buffer, || format!("list scratch {len:#x}"));
             // SAFETY: a live buffer.
@@ -6867,7 +7028,17 @@ impl Host {
                 tracing::warn!(size, "an upload buffer in the card's memory was refused: upload buffers stay in the PC's memory");
             }
         }
-        self.upload_buffer_in(size, false)
+        if let Some(made) = self.upload_buffer_in(size, false) {
+            return Some(made);
+        }
+        // Refused: what is kept for reuse goes, and it is asked once more;
+        // the memory level turns critical and what can wait backs off
+        // (`crate::pressure`).
+        crate::pressure::refused();
+        if free_spares() > 0 {
+            return self.upload_buffer_in(size, false);
+        }
+        None
     }
 
     fn upload_buffer_in(&self, size: u64, gpu: bool) -> Option<(ID3D12Resource, *mut u8)> {
@@ -7211,6 +7382,17 @@ impl Meter {
                 placed = crate::descriptor::host::PLACED_TEXTURE_SLOTS.load(Ordering::Relaxed),
                 objects = crate::descriptor::host::OBJECT_TEXTURE_SLOTS.load(Ordering::Relaxed)
             );
+            {
+                let spare = UPLOAD_SPARE.lock().unwrap_or_else(|e| e.into_inner());
+                tracing::info!(
+                    "{}; list upload buffers since the start: {} reused, {} made; {} kept ({} MB)",
+                    crate::pressure::report(),
+                    UPLOAD_REUSE[0].load(Ordering::Relaxed),
+                    UPLOAD_REUSE[1].load(Ordering::Relaxed),
+                    spare.kept.len(),
+                    spare.bytes >> 20
+                );
+            }
             #[cfg(feature = "diagnostics")]
             crate::copystat::log(std::mem::take(&mut self.copy_stats_frames) as f64);
             // (every build since 4.8: which programs the dropped draws were)
@@ -8025,6 +8207,30 @@ mod batch {   // Batch::texture_due lives here; `mod tests` is already taken at 
         // Missing or zero budget falls back to normal
         assert_eq!(vram_idle_ms(None), 5_000);
         assert_eq!(vram_idle_ms(Some([0, 100, 0, 0])), 5_000);
+    }
+
+    #[test]
+    fn upload_classes_are_powers_of_two_from_64_kib() {
+        use super::upload_class;
+        assert_eq!(upload_class(1), Some(64 << 10));
+        assert_eq!(upload_class(64 << 10), Some(64 << 10));
+        assert_eq!(upload_class((64 << 10) + 1), Some(128 << 10));
+        assert_eq!(upload_class(5 << 20), Some(8 << 20));
+        assert_eq!(upload_class(32 << 20), Some(32 << 20));
+        assert_eq!(upload_class((32 << 20) + 1), None);
+    }
+
+    #[test]
+    fn spare_trims_the_oldest_first() {
+        let mut spare = super::Spare::<u8>::new();
+        assert!(spare.give(1, 10, 100).is_none());
+        assert!(spare.give(2, 20, 100).is_none());
+        assert!(spare.give(3, 30, 100).is_none());
+        let out = spare.trim(35);
+        assert_eq!(out.iter().map(|t| t.0).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(spare.bytes, 30);
+        assert_eq!(spare.take(30), Some(3));
+        assert!(spare.trim(0).is_empty());
     }
 
     #[test]

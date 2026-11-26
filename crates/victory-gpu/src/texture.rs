@@ -446,7 +446,7 @@ pub(crate) fn let_go_idle() {
     if map.is_empty() {
         return;
     }
-    let idle_ms = crate::host::ram_idle_ms(crate::host::available_physical_ram());
+    let idle_ms = crate::host::ram_idle_ms(crate::host::available_physical_ram()).min(crate::pressure::idle_cap_ms(false));
     // A list that recorded an upload or a check holds the staging until it
     // is reset: one only the table holds is named by no list, recorded or
     // running.
@@ -1474,6 +1474,12 @@ fn staging(resource: This, texture: &ID3D12Resource) -> Option<Arc<Staging>> {
             None,
             Some(&mut total),
         );
+    }
+    // Half a second after the driver refused an upload buffer, none is
+    // asked for a new staging buffer (`crate::pressure`): the next list
+    // that samples the texture asks again.
+    if crate::pressure::backing_off() {
+        return None;
     }
     let (buffer, data) = host.upload_buffer(total)?;
     crate::host::name(&buffer, || {

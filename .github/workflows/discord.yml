@@ -27,6 +27,9 @@ jobs:
         env:
           SECRET_HOOK: ${{ secrets.DISCORD_WEBHOOK }}
           MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          # The owner's Discord user ID (numbers only) pings them; without
+          # one the post names sks_a in plain text (Discord pings only by ID).
+          MENTION_ID: ${{ vars.DISCORD_USER_ID }}
         run: |
           hook="$SECRET_HOOK"
           if [ -z "$hook" ]; then
@@ -38,8 +41,10 @@ jobs:
             echo "Same version as before ($now): nothing posted"
             exit 0
           fi
-          text=$(printf '**%s**\n%s' "$now" "$(tail -n +2 scripts/try/RELEASE.md | head -c 1800)")
-          jq -n --arg c "$text" '{username: "VIctory Try", content: $c}' > body.json
+          mention='@sks_a'
+          case "$MENTION_ID" in ''|*[!0-9]*) ;; *) mention="<@$MENTION_ID>";; esac
+          text=$(printf '%s **%s**\n%s' "$mention" "$now" "$(tail -n +2 scripts/try/RELEASE.md | head -c 1800)")
+          jq -n --arg c "$text" '{username: "VIctory Try", content: $c, allowed_mentions: {parse: ["users"]}}' > body.json
           code=$(curl -sS -o reply.txt -w '%{http_code}' -H 'Content-Type: application/json' -d @body.json "$hook")
           echo "Discord answered $code"
           cat reply.txt || true

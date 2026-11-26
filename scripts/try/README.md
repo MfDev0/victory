@@ -307,6 +307,21 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - more 64-lane programs lowered for 32-lane cards (driver-compiled loops,
      two scene kernels, lane spills), and each view heap gets its own buffer
      refresh every frame.
+   5.3, our own memory guard, after the one in codec_d's cool_fox (its
+   block pool and residency module are not in this fork):
+   - **upload buffers are reused**: texture and buffer copies took a new
+     upload buffer from the driver for every copy and freed it again after
+     the frame; now they go back to a pool by size and the next copy takes
+     one (`VICTORY_UPLOAD_POOL=0`: as before);
+   - **three memory levels** (normal, getting short, nearly out) from the
+     memory Windows has left to commit, the free memory and the card's
+     budget: idle copies are let go sooner as memory runs short, and when
+     nearly out the texture pass takes half (`VICTORY_PRESSURE=0`: off);
+   - **after a refused allocation**: what is kept for reuse is let go and the
+     allocation asked once more, and new texture staging waits half a second
+     instead of a burst of failing calls (a stutter);
+   - the game log says each report which level it is at, and how many upload
+     buffers were reused.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,

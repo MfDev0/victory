@@ -1934,13 +1934,19 @@ impl State {
         // drains; `VICTORY_TEXTURE_CATCHUP=0` keeps the plain budget.
         static CATCHUP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let catchup = *CATCHUP.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_CATCHUP").is_none_or(|v| v != "0"));
+        // Nearly out of memory (`crate::pressure`): half the bytes and no
+        // catch-up; what is drawn still gets its textures, only the
+        // backlog drains slower.
+        let (quarters, backlog_ok) = crate::pressure::texture_pass_quarters();
+        let catchup = catchup && backlog_ok;
+        let per_frame = per_frame / 4 * quarters;
         let (per_frame, span) = if catchup && due.len() >= 1024 { (per_frame * 3, span * 3) } else { (per_frame, span) };
         // A run made early (`State::early_textures`) has a budget of its
         // own: its bytes on top of what the frame has spent so far.
         // (Not `most`: that is the longest wait between looks, used below.)
         let (span, bytes_at_most) = match PASS_BUDGET.get() {
             Some((ms, bytes)) => {
-                (std::time::Duration::from_millis(ms), SPENT.load(Ordering::Relaxed).saturating_add(bytes))
+                (std::time::Duration::from_millis(ms), SPENT.load(Ordering::Relaxed).saturating_add(bytes / 4 * quarters))
             }
             None => (span, per_frame),
         };
