@@ -2634,7 +2634,7 @@ fn blocked_by(written: &[(usize, usize)], runs: &[&HostList], count: bool) -> Op
                         // Late readback (Try 6.6): a copy that only reads
                         // what a flight's shaders may write takes those
                         // results one flight late, as the fills do.
-                        if late_copies() >= 1 + u8::from(writes) {
+                        if late_copies() > u8::from(writes) {
                             if count {
                                 LATE_COPIES[usize::from(writes)].fetch_add(1, Ordering::Relaxed);
                             }
