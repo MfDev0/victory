@@ -408,6 +408,46 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - if it cannot be downloaded or built, this fork's engine runs instead;
    - the `8 GB engine builds` workflow checks every 6 hours that its newest
      main still compiles on Windows.
+   6.0 (the 2026-11-26 14:16 report on this fork's engine: the world at 1.0-1.7 s
+   a frame, not 5 s; textures are fast now, but the submitting thread spends
+   0.5-1.1 s a frame on the heap passes, 160-230 ms syncing descriptor
+   records, 100-150 MB of CPU compares, with the card 40-74 % idle and the
+   PC under 1 GB of free memory):
+   - **this fork's engine is the default again** (5.9's 8 GB engine made no
+     difference); N still switches to it (`engine` = `8gb`);
+   - **all of the CPU**: the threads that copy back, refresh and compare are
+     all of the CPU's threads but two, at most 16 (`VICTORY_WIDE_THREADS`;
+     they were a quarter, at most 6), and run above normal priority, as does
+     the copy-back thread (`VICTORY_WIDE_PRIORITY=0`: normal); big textures
+     are detiled on half the CPU's threads (`VICTORY_DETILE_THREADS`; 4
+     before);
+   - **descriptor sync on every thread**: the records the title copies into
+     its heaps as bytes are looked at page by page on those threads
+     (`VICTORY_HEAP_SYNC_WIDE=0`: one thread), and without a lock per record
+     (one atomic per slot; fxceless #1043 found the same lock churn);
+   - **the whole machine**: the process runs above normal priority, Windows
+     is told not to throttle it onto efficiency cores (EcoQoS off), and it
+     gets a soft minimum working set of a quarter of the PC's memory, at
+     most 4 GB (`VICTORY_WHOLE_MACHINE=0`: none of it);
+   - **the card first**: the graphics and copy queues ask for high priority
+     (`VICTORY_QUEUE_HIGH=0`: normal); the device is made on the adapter
+     Windows ranks fastest (`EnumAdapterByGpuPreference`; `VICTORY_ADAPTER=first`:
+     the first one), every adapter is named in the log, and victory.exe is
+     set to "High performance" in Windows' graphics settings;
+   - **the card looks for shader writes** in title buffers of 4 MB and more
+     (16 MB before on 6-12 GB cards; `VICTORY_CARD_BUFFERS_MIN_MB`);
+   - **the CPU's own graphics as a helper (I)**: on a PC whose CPU has
+     graphics of its own, the browsers, Discord, Spotify and Steam's web
+     views that are running are set to "Power saving" (that chip) if they
+     had no setting, so they leave the NVIDIA card's memory to the game after
+     their next start; I switches it off and removes those settings again;
+   - **power**: the High performance plan (and Windows 11's Best performance
+     mode) while the game runs, the old one back afterwards
+     (`VICTORY_TRY_POWER=0`: left alone);
+   - **a build for this PC**: `-C target-cpu=native` and thin LTO
+     (fxceless #1117); if that fails, the plain build
+     (`VICTORY_TRY_PLAIN_BUILD=1`: plain only). The first build after the
+     update rebuilds everything once.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,

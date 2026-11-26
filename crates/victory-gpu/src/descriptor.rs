@@ -176,8 +176,12 @@ pub(crate) fn sync_heaps() {
         return;
     }
     let started = std::time::Instant::now();
-    let (mut pages, mut looked, mut mirrored) = (0u64, 0u64, 0u64);
-    let mut page_bytes: Vec<u8> = Vec::new();
+    // Every changed page first: (host heap, start, step, slots mirrored,
+    // from, to); then the pages are looked at, on several threads when
+    // there are many (Try 6.0, `VICTORY_HEAP_SYNC_WIDE=0`: on this one, as
+    // before). Each page's records are their own: the pass was page by
+    // page already.
+    let mut work: Vec<(usize, u64, u64, u32, usize, usize)> = Vec::new();
     let heaps = SHADER_HEAPS.lock().unwrap_or_else(|e| e.into_inner());
     for &(start, end, at) in heaps.iter() {
         // SAFETY: registered heaps are live (removed when dropped).
@@ -191,42 +195,88 @@ pub(crate) fn sync_heaps() {
         // Capped host heaps have no counterparts for the title slots reserved
         // for per-draw tables; raw writes there must not be mirrored.
         let mirrored_count = heap.desc.count.min(host.count());
+        let host = std::ptr::from_ref(host) as usize;
         for (range_from, range_end) in written.take(start as usize, end as usize) {
             let mut page = range_from & !(crate::watch::PAGE - 1);
             while page < range_end {
                 let from = page.max(range_from);
                 let to = (page + crate::watch::PAGE).min(range_end);
-                // The page's records are read through the kernel, into a
-                // copy: a page the title unmaps meanwhile fails the read
-                // where 2,048 reads in place would fault.
-                page_bytes.resize(to - from, 0);
-                if crate::host::read_into(from as *const u8, &mut page_bytes) {
-                    pages += 1;
-                    let slots = changed_slots(from, to, start as usize, step, mirrored_count);
-                    for index in slots {
-                        let handle = start + index * step;
-                        // A record that straddles the range's ends is left
-                        // to the range that holds its first byte.
-                        let Some(at) = (handle as usize).checked_sub(from) else {
-                            continue;
-                        };
-                        let Some(record) = page_bytes.get(at..at + step as usize) else {
-                            continue;
-                        };
-                        looked += 1;
-                        // Only a record that is not the one last seen there
-                        // (`HostHeap::mirror_copied`).
-                        if host.mirror_copied(index as u32, handle, record) {
-                            mirrored += 1;
-                        }
-                    }
-                }
+                work.push((host, start, step, mirrored_count, from, to));
                 page += crate::watch::PAGE;
             }
         }
     }
+    let counts = std::sync::Arc::new([const { std::sync::atomic::AtomicU64::new(0) }; 3]);
+    let threads = crate::shadow::wide_threads() + 1;
+    if sync_wide() && work.len() >= 32 && threads > 1 {
+        let per = work.len().div_ceil(threads).max(8);
+        let jobs: Vec<Box<dyn FnOnce() + Send>> = work
+            .chunks(per)
+            .map(|pages| {
+                let pages = pages.to_vec();
+                let counts = counts.clone();
+                Box::new(move || sync_pages(&pages, &counts)) as Box<dyn FnOnce() + Send>
+            })
+            .collect();
+        // (The heaps' lock is held until every job is done: they stay live.)
+        crate::shadow::wide_run(jobs);
+    } else {
+        sync_pages(&work, &counts);
+    }
     drop(heaps);
+    let [pages, looked, mirrored] = [0, 1, 2].map(|i| counts[i].load(Relaxed));
     for (count, n) in SYNCED.iter().zip([pages, looked, mirrored, started.elapsed().as_micros() as u64]) {
+        count.fetch_add(n, Relaxed);
+    }
+}
+
+/// Whether [`sync_heaps`] looks at many changed pages on several threads
+/// (`VICTORY_HEAP_SYNC_WIDE=0`: no).
+#[cfg(windows)]
+fn sync_wide() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_HEAP_SYNC_WIDE").is_none_or(|v| v != "0"))
+}
+
+/// [`sync_heaps`]'s look at changed heap pages (host heap, start, step,
+/// slots mirrored, from, to), counting pages read, records looked at and
+/// records mirrored into `counts`. The heaps' lock is held by the caller.
+#[cfg(windows)]
+fn sync_pages(work: &[(usize, u64, u64, u32, usize, usize)], counts: &[std::sync::atomic::AtomicU64; 3]) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let (mut pages, mut looked, mut mirrored) = (0u64, 0u64, 0u64);
+    let mut page_bytes: Vec<u8> = Vec::new();
+    for &(host, start, step, mirrored_count, from, to) in work {
+        // SAFETY: a registered heap's host heap; the heaps' lock is held.
+        let host = unsafe { &*(host as *const host::HostHeap) };
+        // The page's records are read through the kernel, into a
+        // copy: a page the title unmaps meanwhile fails the read
+        // where 2,048 reads in place would fault.
+        page_bytes.resize(to - from, 0);
+        if !crate::host::read_into(from as *const u8, &mut page_bytes) {
+            continue;
+        }
+        pages += 1;
+        let slots = changed_slots(from, to, start as usize, step, mirrored_count);
+        for index in slots {
+            let handle = start + index * step;
+            // A record that straddles the range's ends is left
+            // to the range that holds its first byte.
+            let Some(at) = (handle as usize).checked_sub(from) else {
+                continue;
+            };
+            let Some(record) = page_bytes.get(at..at + step as usize) else {
+                continue;
+            };
+            looked += 1;
+            // Only a record that is not the one last seen there
+            // (`HostHeap::mirror_copied`).
+            if host.mirror_copied(index as u32, handle, record) {
+                mirrored += 1;
+            }
+        }
+    }
+    for (count, n) in counts.iter().zip([pages, looked, mirrored]) {
         count.fetch_add(n, Relaxed);
     }
 }

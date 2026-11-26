@@ -1139,18 +1139,21 @@ impl Staging {
 }
 
 /// Threads a big texture's subresources are detiled on at once
-/// (`VICTORY_DETILE_THREADS`, 4 by default; 1: on the refreshing thread
-/// alone, as before Try 4.2). Try 4.2, idea 5: reading, hashing and
-/// detiling were 20-40 ms a frame of the submitting thread's time while
-/// the world streamed in, most of it the detile of big array and cube
-/// textures, whose slices and levels are each their own job.
+/// (`VICTORY_DETILE_THREADS`; 1: on the refreshing thread alone, as before
+/// Try 4.2). Try 4.2, idea 5: reading, hashing and detiling were 20-40 ms
+/// a frame of the submitting thread's time while the world streamed in,
+/// most of it the detile of big array and cube textures, whose slices and
+/// levels are each their own job. Try 6.0: by default half the CPU's
+/// threads (at least 4, at most 16), not 4 whatever the CPU: a 12- or
+/// 16-thread CPU had most of its cores idle while the submitting thread
+/// detiled.
 fn detile_threads() -> usize {
     static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *N.get_or_init(|| {
         std::env::var("VICTORY_DETILE_THREADS")
             .ok()
             .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(4usize)
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| (n.get() / 2).max(4)))
             .clamp(1, 16)
     })
 }

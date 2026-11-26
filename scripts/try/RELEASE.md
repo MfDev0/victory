@@ -1,5 +1,13 @@
-VIctory Try 5.9
-- New: VIctory Try now builds and runs the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb, from the community's main fork), the build that shows clean textures at 8-10 fps on an RTX 4060 8 GB
-- It runs with that build's own tested settings, plus Series S and smaller memory budgets on 6 GB cards
-- The first start builds it once (takes a while), in its own folder; press N to switch back to our engine at any time
-- Your last report: the card now stays under its memory limit, but our engine prepares textures too slowly (11 MB/s), so they stayed grey/black. That is why we are switching engines
+VIctory Try 6.0
+- Back on our own engine (5.9's 8 GB engine made no difference; N still switches to it)
+- Lighting: the game's bounce light comes from ray-traced probes that cannot run here, so shadowed areas were black. We swap that pass's output for a soft constant light (A key), and the shadow-program fix keeps rooms lit on NVIDIA (W key)
+- CPU: copy-back, refresh and compare work now runs on all your CPU threads but two (it was a quarter of them, max 6); texture detiling uses half your threads (it was 4)
+- CPU: the game's descriptor sync (160-230 ms a frame in your last report) now runs on all threads, without one lock per record
+- CPU: the game runs at above-normal priority, Windows is told not to put it on the slow efficiency cores, and our helper threads and copy-back thread run above normal
+- CPU: the build is made for YOUR processor (AVX2/AVX-512) with thin link-time optimisation. The first build after this update takes longer
+- GPU: the game's graphics queue and copy queue ask the card for high priority
+- GPU: the device is made on the high-performance card, picked by Windows' own GPU ranking, and victory.exe is set to "High performance" in Windows graphics settings
+- GPU: the card, which was 40-74 % idle, now checks shader writes in buffers of 4 MB and up (was 16 MB) instead of the CPU comparing 100-150 MB a frame
+- iGPU: if your CPU has its own graphics, browsers, Discord, Spotify and Steam are moved onto it, so the NVIDIA card's 6 GB are left for the game (I key undoes it)
+- RAM: Windows keeps a quarter of your RAM (max 4 GB) for the game first, so its memory is not paged out while RAM is nearly full
+- Power: the High performance power plan while the game runs; your old plan comes back afterwards

@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '5.9'
+$TryVersion = '6.0'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -48,11 +48,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -410,8 +410,9 @@ function Prepare-Source([bool]$withUpstream) {
 # This fork's build; Victory-Exe: the build that runs, of the chosen engine.
 function Ours-Exe { return Join-Path $Target 'release\victory.exe' }
 function Engine8-Exe { return Join-Path $Target8 'release\victory.exe' }
-# 5.9: the 8 GB engine unless N picked this fork's ('ours').
-function Engine8 { return $script:Config.engine -ne 'ours' }
+# 6.0: this fork's engine again (5.9 made the 8 GB engine the default and it
+# made no difference); N picks soldsawn's 8 GB engine ('8gb').
+function Engine8 { return $script:Config.engine -eq '8gb' }
 function Victory-Exe { if (Engine8) { return Engine8-Exe } else { return Ours-Exe } }
 
 function Build {
@@ -428,14 +429,38 @@ function Build {
     }
     $env:CARGO_TARGET_DIR = $Target
     $log = Join-Path $LogDir 'build.log'
+    # 6.0: built for THIS PC's CPU (AVX2 / AVX-512 where it has them: the
+    # copies, compares, hashing and detiling are most of a world frame) and
+    # with thin link-time optimisation across the crates (fxceless #1117).
+    # The first build after this takes longer (everything is built again
+    # once). If it fails, the plain build is tried. VICTORY_TRY_PLAIN_BUILD=1:
+    # the plain build only.
+    $tuned = $env:VICTORY_TRY_PLAIN_BUILD -ne '1'
     Push-Location $Src
     try {
-        # Out-Host: the lines must not become this function's result (they
-        # did up to Try 4.0, so a failed build counted as built and the old
-        # victory.exe ran on).
-        & cargo build --release -p victory 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
-        $code = $LASTEXITCODE
-    } finally { Pop-Location }
+        foreach ($pass in @($(if ($tuned) { 'tuned' }), 'plain')) {
+            if (-not $pass) { continue }
+            if ($pass -eq 'tuned') {
+                Say 'build: tuned for this CPU (target-cpu=native) with thin LTO'
+                $env:RUSTFLAGS = '-C target-cpu=native'
+                $env:CARGO_PROFILE_RELEASE_LTO = 'thin'
+            } else {
+                Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
+                Remove-Item Env:CARGO_PROFILE_RELEASE_LTO -ErrorAction SilentlyContinue
+            }
+            # Out-Host: the lines must not become this function's result (they
+            # did up to Try 4.0, so a failed build counted as built and the old
+            # victory.exe ran on).
+            & cargo build --release -p victory 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
+            $code = $LASTEXITCODE
+            if ($code -eq 0) { break }
+            if ($pass -eq 'tuned') { Bad 'the tuned build failed; trying the plain build' }
+        }
+    } finally {
+        Pop-Location
+        Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
+        Remove-Item Env:CARGO_PROFILE_RELEASE_LTO -ErrorAction SilentlyContinue
+    }
     if ($code -ne 0 -or -not (Test-Path (Ours-Exe))) {
         Bad "the build failed (code $code). The full output is in $log"
         $lines = @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue)
@@ -632,6 +657,11 @@ function Set-RunEnv {
         # (3.7: on by default now, so off has to be said.)
         [Environment]::SetEnvironmentVariable('VICTORY_WIDE_BACK', $(if ($script:WideFromTry) { '1' } else { '0' }), 'Process')
         Say "speed: relay (stable)$(if ($script:WideFromTry) { ', copy-back on several threads' })   (F switches to the faster, riskier mode)"
+        # 6.0: the card looks for what shaders wrote in title buffers of
+        # 4 MB and more (16 MB and more on 6-12 GB cards before): in the
+        # 2026-11-26 report the CPU compared 100-150 MB a frame, 70-99 MB of
+        # it in buffers of 1 MB or more, while the card stood 40-74% idle.
+        if ($null -eq $script:UserFx['VICTORY_CARD_BUFFERS_MIN_MB']) { $env:VICTORY_CARD_BUFFERS_MIN_MB = '4' }
     }
     # 3.6: compute shaders that need 64-lane waves (refused by 32-lane
     # NVIDIA cards) are translated a slower way that works. Off again by
@@ -781,6 +811,100 @@ function Prepare-Shaders([string]$why) {
 }
 
 
+# ------------------------------------------------------------ PC tuning (6.0)
+# The PC's graphics chips and power plan, set for the run.
+#  - victory.exe runs on the fast card: Windows' own per-app setting
+#    (Settings > System > Display > Graphics: "High performance"), so a laptop
+#    never makes the game's device on the CPU's own graphics.
+#  - With a CPU that has graphics of its own (Intel UHD / Iris / Arc
+#    Graphics, AMD Radeon Graphics), the browsers, Discord, Spotify and
+#    Steam's web views are moved onto THAT chip ("Power saving"), so they
+#    stop keeping hundreds of MB of the NVIDIA card's 6 GB (they take it after
+#    their next start). Only programs that had no setting of their own; I
+#    switches it off and puts those back.
+#  - The "High performance" power plan (and Windows 11's "Best performance"
+#    power mode) while the game runs, the old ones back afterwards: on
+#    "Balanced" laptops park cores and drop clocks between the title's bursts.
+#    VICTORY_TRY_POWER=0: left alone.
+$GpuPrefSub = 'Software\Microsoft\DirectX\UserGpuPreferences'
+$HelperApps = @('Discord', 'chrome', 'msedge', 'firefox', 'opera', 'brave', 'Spotify', 'steamwebhelper', 'EpicWebHelper')
+function GpuPref-Key { return [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($GpuPrefSub) }
+function Own-Graphics {
+    try {
+        $all = @(Get-CimInstance Win32_VideoController -ErrorAction Stop)
+        $own = @($all | Where-Object { $_.Name -match 'Intel\(R\) (UHD|Iris|HD) Graphics|Intel\(R\) Graphics|Arc\(TM\) Graphics|Radeon\(TM\) Graphics|Radeon Graphics|Radeon \d{3}M|Vega \d+ Graphics' })
+        if ($all.Count -ge 2 -and $own.Count -ge 1) { return [string]$own[0].Name }
+    } catch {}
+    return ''
+}
+function Tune-PC {
+    $c = $script:Config
+    try {
+        $key = GpuPref-Key
+        $exe = [IO.Path]::GetFullPath((Victory-Exe))
+        if ($key -and $exe) {
+            if ([string]$key.GetValue($exe) -ne 'GpuPreference=2;') { $key.SetValue($exe, 'GpuPreference=2;') }
+            Say 'graphics: victory.exe set to the high-performance card (Windows graphics setting)'
+        }
+        $own = Own-Graphics
+        if ($own -and $c.igpu -ne 'off') {
+            $set = @(($c.igpu_set -split '\|') | Where-Object { $_ })
+            $paths = @(Get-Process -Name $HelperApps -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Path } catch {} } | Where-Object { $_ } | Sort-Object -Unique)
+            $moved = 0
+            foreach ($path in $paths) {
+                if ($null -eq $key.GetValue($path)) { $key.SetValue($path, 'GpuPreference=1;'); $set += $path; $moved++ }
+            }
+            $c.igpu_set = (($set | Sort-Object -Unique) -join '|')
+            Save-Config
+            Say "graphics: the CPU's own graphics ($own) takes the browsers / Discord / Spotify / Steam: $(@($set).Count) program(s), $moved new (they move after they restart; I switches)"
+        } elseif ($own) {
+            Say "graphics: the CPU's own graphics ($own) is left alone (I switches the helper on)"
+        }
+        if ($key) { $key.Close() }
+    } catch { Bad "could not set the graphics preferences: $_" }
+    $script:OldPlan = ''; $script:OldOverlay = ''
+    if ($env:VICTORY_TRY_POWER -ne '0') {
+        try {
+            $now = (& powercfg /getactivescheme 2>$null | Out-String)
+            if ($now -match '([0-9a-fA-F]{8}-[0-9a-fA-F-]{27})') { $script:OldPlan = $Matches[1] }
+            $high = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+            if ($script:OldPlan -and $script:OldPlan -ne $high) {
+                & powercfg /setactive $high 2>$null | Out-Null
+                if ($LASTEXITCODE -ne 0) { $script:OldPlan = '' }
+            } else { $script:OldPlan = '' }
+            $ov = (& powercfg /getactiveoverlay 2>$null | Out-String)
+            if ($LASTEXITCODE -eq 0 -and $ov -match '([0-9a-fA-F]{8}-[0-9a-fA-F-]{27})') {
+                $best = 'ded574b5-45a0-4f42-8737-46345c09c238'
+                if ($Matches[1] -ne $best) {
+                    $script:OldOverlay = $Matches[1]
+                    & powercfg /overlaysetactive $best 2>$null | Out-Null
+                    if ($LASTEXITCODE -ne 0) { $script:OldOverlay = '' }
+                }
+            }
+            Say "power: $(if ($script:OldPlan -or $script:OldOverlay) { 'High performance while the game runs (the old plan comes back after it)' } else { 'already at its fastest' })"
+        } catch {}
+    }
+}
+function Untune-PC {
+    try {
+        if ($script:OldPlan) { & powercfg /setactive $script:OldPlan 2>$null | Out-Null }
+        if ($script:OldOverlay) { & powercfg /overlaysetactive $script:OldOverlay 2>$null | Out-Null }
+    } catch {}
+    $script:OldPlan = ''; $script:OldOverlay = ''
+}
+# I off: the programs Tune-PC moved go back to Windows' own choice.
+function Undo-Helper {
+    $c = $script:Config
+    try {
+        $key = GpuPref-Key
+        foreach ($path in @(($c.igpu_set -split '\|') | Where-Object { $_ })) {
+            if ([string]$key.GetValue($path) -eq 'GpuPreference=1;') { $key.DeleteValue($path, $false) }
+        }
+        $key.Close()
+    } catch {}
+    $c.igpu_set = ''
+}
+
 function Run-Game {
     $c = $script:Config
     Step 'Running the game with VIctory'
@@ -816,6 +940,7 @@ function Run-Game {
     Say "command: victory.exe run `"$($c.game_exe)`" --execute --console $($c.console)   (VICTORY_GAME_DIR=$($c.game_dir))"
     Say 'To stop: close the game window.'
     Set-RunEnv
+    Tune-PC
     if (Engine8) { Set-Engine8Env }
     elseif ("$($c.prepared)" -ne "$($c.built_key)") { Prepare-Shaders 'new build' }
     elseif ("$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from the last run' }
@@ -850,6 +975,7 @@ function Run-Game {
             $code = $LASTEXITCODE
         } finally { Pop-Location }
     }
+    Untune-PC
     Write-Host ''
     Say "the game stopped (exit code $code)"
     Say "its output: $log"
@@ -1148,7 +1274,9 @@ if (-not (Engine8)) {
     if ($changed -or -not (Test-Path (Ours-Exe))) { if (-not (Build-All)) { exit 1 } }
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
 if (Engine8) {
-    Say '5.9: VIctory Try now runs the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb), the build that renders on RTX 4060 8 GB cards. N goes back to this fork''s engine.'
+    Say 'engine: the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb). N goes back to this fork''s engine.'
+} else {
+    Say '6.0: this fork''s engine, with 19 speed fixes (all CPU cores, the card''s queues first, the CPU''s own graphics for other programs). N switches to the 8 GB engine.'
 }
 
 # Every command of the menu: its key, what it is, whether it is on now, and
@@ -1172,6 +1300,7 @@ function Show-Commands {
         @('L', 'Textures by level', $(& $on ($c.levels -ne 'off')), 'textures take card memory only for the sizes in use (8 GB cards: no black doors)'),
         @('O', 'Shader clean-up', $(& $on ($c.opt -eq 'on')), 'off keeps walls, roofs and floors (they went missing with it on)'),
         @('W', 'Shadow fix', $(& $on ($c.shadowfix -ne 'off')), 'NVIDIA: keeps the ceiling and lit rooms (14 shadow programs translated safely)'),
+        @('I', 'CPU graphics helper', $(& $on ($c.igpu -ne 'off')), 'browsers / Discord / Spotify use the CPU''s own graphics, so the card''s memory is the game''s'),
         @('K', 'Copies on the card', $(& $on ($c.gpucopy -ne 'off')), 'faster: the game''s buffer copies run on the card (no waiting for it); off if things look wrong'),
         @('D', 'Recommended', '', 'every switch back to the recommended settings (renders the most)'),
         @('Z', 'Plain mode', $(& $on ($c.plain -eq '1')), 'VIctory''s own defaults instead of Try''s settings (for comparing)'),
@@ -1232,10 +1361,11 @@ while ($true) {
             'O' { $c.opt = $(if ($c.opt -eq 'on') { '' } else { 'on' }) }
             'W' { $c.shadowfix = $(if ($c.shadowfix -eq 'off') { '' } else { 'off' }) }
             'K' { $c.gpucopy = $(if ($c.gpucopy -eq 'off') { '' } else { 'off' }) }
+            'I' { if ($c.igpu -eq 'off') { $c.igpu = '' } else { $c.igpu = 'off'; Undo-Helper } }
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
             'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.6'; $c.console_user = '1' }
             'D' { Reset-Recommended; $c = $script:Config }
-            'N' { $c.engine = $(if ($c.engine -eq 'ours') { '' } else { 'ours' }); $null = Ensure-Engine $false }
+            'N' { $c.engine = $(if ($c.engine -eq '8gb') { '' } else { '8gb' }); $null = Ensure-Engine $false }
             default { $switched = $false }
         }
         if ($switched) {

@@ -1451,10 +1451,15 @@ fn workers() -> &'static Workers {
         more: std::sync::Condvar::new(),
     });
     STARTED.call_once(|| {
-        let n = std::thread::available_parallelism().map_or(4, |n| n.get() / 4).clamp(2, 6);
+        let n = wide_threads();
+        let raise = wide_priority();
+        tracing::info!(threads = n, above_normal = raise, "threads for wide work (VICTORY_WIDE_THREADS, VICTORY_WIDE_PRIORITY)");
         for i in 0..n {
             let _ = std::thread::Builder::new().name(format!("victory-wide-{i}")).spawn(move || {
                 let workers = WORKERS.get().expect("made above");
+                if raise {
+                    raise_this_thread();
+                }
                 loop {
                     let job = {
                         let mut jobs = workers.jobs.lock().unwrap_or_else(|e| e.into_inner());
@@ -1471,6 +1476,61 @@ fn workers() -> &'static Workers {
         }
     });
     workers
+}
+
+/// How many kept threads [`wide`] work runs on (`VICTORY_WIDE_THREADS`,
+/// 1 to 32). Try 6.0: by default all of the CPU's threads but two (the
+/// submitting thread and the title's), at least 2 and at most 16. It was a
+/// quarter of them, at most 6: on a 16-thread CPU the copy-back, the
+/// refreshes and the snapshots of a world frame (100-150 MB of compares,
+/// 280 ms of landing in the 2026-11-26 report) ran on 4 threads while
+/// 10 stood idle.
+pub(crate) fn wide_threads() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        let cores = std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get);
+        wide_threads_for(std::env::var("VICTORY_WIDE_THREADS").ok().as_deref(), cores)
+    })
+}
+
+fn wide_threads_for(setting: Option<&str>, cores: usize) -> usize {
+    match setting.and_then(|v| v.trim().parse::<usize>().ok()) {
+        Some(n) => n.clamp(1, 32),
+        None => cores.saturating_sub(2).clamp(2, 16),
+    }
+}
+
+/// Whether the kept threads run above normal priority
+/// (`VICTORY_WIDE_PRIORITY=0`: no). Their work is what the submitting
+/// thread waits for; at normal priority Windows shared their cores with
+/// the title's own busy threads, and with the shader compilers.
+fn wide_priority() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_WIDE_PRIORITY").is_none_or(|v| v != "0"))
+}
+
+/// Raises the calling thread to above normal priority.
+pub(crate) fn raise_this_thread() {
+    // SAFETY: a plain call on our own thread.
+    unsafe {
+        use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL};
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    }
+}
+
+#[cfg(test)]
+mod wide_thread_tests {
+    use super::wide_threads_for;
+
+    #[test]
+    fn wide_threads_scale_with_the_cpu() {
+        assert_eq!(wide_threads_for(None, 4), 2);
+        assert_eq!(wide_threads_for(None, 12), 10);
+        assert_eq!(wide_threads_for(None, 32), 16);
+        assert_eq!(wide_threads_for(Some("3"), 32), 3);
+        assert_eq!(wide_threads_for(Some("0"), 8), 1);
+        assert_eq!(wide_threads_for(Some("x"), 8), 6);
+    }
 }
 
 /// Runs `jobs` on the kept threads and on this one, and returns when all

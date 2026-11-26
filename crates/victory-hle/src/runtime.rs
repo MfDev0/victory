@@ -189,9 +189,16 @@ pub fn use_console_timers() {
         PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION, PROCESS_POWER_THROTTLING_STATE,
         ProcessPowerThrottling, SetProcessInformation,
     };
+    // (With the whole machine, `use_whole_machine`: also no throttled
+    // execution speed, in the same call.)
+    let speed = if whole_machine() {
+        windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_EXECUTION_SPEED
+    } else {
+        0
+    };
     let keep = PROCESS_POWER_THROTTLING_STATE {
         Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
-        ControlMask: PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
+        ControlMask: PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION | speed,
         StateMask: 0,
     };
     // SAFETY: plain process settings; `keep` outlives the call.
@@ -203,6 +210,67 @@ pub fn use_console_timers() {
             size_of_val(&keep) as u32,
         );
         timeBeginPeriod(1);
+    }
+    use_whole_machine();
+}
+
+#[cfg(windows)]
+fn whole_machine() -> bool {
+    std::env::var_os("VICTORY_WHOLE_MACHINE").is_none_or(|v| v != "0")
+}
+
+/// Try 6.0: asks Windows for the whole machine while the title runs.
+/// `VICTORY_WHOLE_MACHINE=0`: none of it.
+///
+/// - The process runs above normal priority: the title's threads and ours
+///   come before the browser, the launcher and updaters on a busy CPU.
+/// - Windows is told not to throttle its execution speed (no EcoQoS): on
+///   CPUs with performance and efficiency cores (Intel 12th generation and
+///   later) a thread Windows judges to be in the background is put on the
+///   slow cores, and our helper threads that wait a lot looked like that.
+/// - A soft minimum working set of a quarter of the PC's memory (at most
+///   4 GiB): on a PC whose memory is nearly all in use (under 1 GB free in
+///   the 2026-11-26 report) Windows takes pages away from the biggest
+///   process first, and the title's memory then came back from the page
+///   file a page at a time. Soft: Windows still takes them if it must.
+#[cfg(windows)]
+fn use_whole_machine() {
+    use windows_sys::Win32::System::Memory::{
+        QUOTA_LIMITS_HARDWS_MAX_DISABLE, QUOTA_LIMITS_HARDWS_MIN_DISABLE, SetProcessWorkingSetSizeEx,
+    };
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    use windows_sys::Win32::System::Threading::{ABOVE_NORMAL_PRIORITY_CLASS, GetCurrentProcess, SetPriorityClass};
+    if !whole_machine() {
+        return;
+    }
+    // SAFETY: plain process settings and a query that fills our structure.
+    unsafe {
+        let process = GetCurrentProcess();
+        let priority = SetPriorityClass(process, ABOVE_NORMAL_PRIORITY_CLASS) != 0;
+        let mut status: MEMORYSTATUSEX = std::mem::zeroed();
+        status.dwLength = size_of_val(&status) as u32;
+        let mut kept_mb = 0;
+        if GlobalMemoryStatusEx(&mut status) != 0 {
+            let min = (status.ullTotalPhys / 4).min(4 << 30) as usize;
+            // The maximum only has to be above the minimum: it is not enforced.
+            let max = min.saturating_mul(4);
+            if SetProcessWorkingSetSizeEx(
+                process,
+                min,
+                max,
+                QUOTA_LIMITS_HARDWS_MIN_DISABLE | QUOTA_LIMITS_HARDWS_MAX_DISABLE,
+            ) != 0
+            {
+                kept_mb = min >> 20;
+            }
+        }
+        tracing::info!(
+            above_normal = priority,
+            soft_min_working_set_mb = kept_mb,
+            pc_memory_mb = status.ullTotalPhys >> 20,
+            pc_memory_free_mb = status.ullAvailPhys >> 20,
+            "the whole machine for the title (VICTORY_WHOLE_MACHINE=0: none of it)"
+        );
     }
 }
 

@@ -611,7 +611,27 @@ fn create() -> windows::core::Result<Host> {
             D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, &mut device)?;
             tracing::info!("host device on the software adapter (WARP)");
         } else {
-            D3D12CreateDevice(None, D3D_FEATURE_LEVEL_12_0, &mut device)?;
+            // Try 6.0: on the adapter Windows ranks fastest (the NVIDIA card,
+            // not the CPU's own graphics on a laptop); the default pick if
+            // that fails.
+            crate::console::log_adapters();
+            let fast = crate::console::fast_adapter();
+            let made = fast.as_ref().is_some_and(|adapter| {
+                D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_12_0, &mut device).is_ok() && device.is_some()
+            });
+            if made {
+                if let Some(Ok(desc)) = fast.as_ref().map(|a| a.GetDesc1()) {
+                    let end = desc.Description.iter().position(|&c| c == 0).unwrap_or(desc.Description.len());
+                    tracing::info!(
+                        name = String::from_utf16_lossy(&desc.Description[..end]).as_str(),
+                        own_mb = desc.DedicatedVideoMemory as u64 >> 20,
+                        "host device on the high-performance adapter (VICTORY_ADAPTER=first: the first one)"
+                    );
+                }
+            } else {
+                device = None;
+                D3D12CreateDevice(None, D3D_FEATURE_LEVEL_12_0, &mut device)?;
+            }
         }
         let device = device.ok_or_else(windows::core::Error::empty)?;
         // `VICTORY_D3D12_BACKGROUND=0`: the runtime's background work (the
@@ -646,10 +666,21 @@ fn create() -> windows::core::Result<Host> {
         let messages = debug
             .then(|| device.cast::<ID3D12InfoQueue>().ok())
             .flatten();
-        let queue: ID3D12CommandQueue = device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
+        // Try 6.0: the queue the title's work runs on asks the card's
+        // scheduler for high priority (`VICTORY_QUEUE_HIGH=0`: normal, as
+        // before): it is ahead of the desktop's and other programs' work on
+        // the card, and of our own keep-awake queue (`awake.rs`).
+        let queue: ID3D12CommandQueue = match device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
             Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+            Priority: queue_priority(),
             ..Default::default()
-        })?;
+        }) {
+            Ok(queue) => queue,
+            Err(_) => device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
+                Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+                ..Default::default()
+            })?,
+        };
         let fence: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE)?;
         let event = CreateEventW(None, false, false, None)?;
         let rtvs: ID3D12DescriptorHeap =
@@ -691,6 +722,17 @@ fn create() -> windows::core::Result<Host> {
 
 /// DXGI may return hardware for `EnumWarpAdapter` (notably under Proton).
 /// Reject it before creating a device in diagnostics' software-only mode.
+/// The priority of our queues on the card (Try 6.0): high unless
+/// `VICTORY_QUEUE_HIGH=0`.
+pub(crate) fn queue_priority() -> i32 {
+    static HIGH: OnceLock<bool> = OnceLock::new();
+    if *HIGH.get_or_init(|| std::env::var_os("VICTORY_QUEUE_HIGH").is_none_or(|v| v != "0")) {
+        D3D12_COMMAND_QUEUE_PRIORITY_HIGH.0
+    } else {
+        D3D12_COMMAND_QUEUE_PRIORITY_NORMAL.0
+    }
+}
+
 pub(crate) fn warp_adapter() -> windows::core::Result<IDXGIAdapter> {
     // SAFETY: plain DXGI adapter queries.
     unsafe {
@@ -2975,6 +3017,13 @@ fn relay_worker() {
     let Some(host) = host() else {
         return;
     };
+    // Try 6.0: above normal priority, as the wide threads
+    // (`VICTORY_WIDE_PRIORITY=0`: normal): the title waits for what this
+    // thread lands ("copying back", 117-286 ms a world frame in the
+    // 2026-11-26 report).
+    if std::env::var_os("VICTORY_WIDE_PRIORITY").is_none_or(|v| v != "0") {
+        crate::shadow::raise_this_thread();
+    }
     // SAFETY: a plain event of our own.
     let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else {
         fail(format_args!("no event for the thread that lands submissions sent ahead (VICTORY_RELAY=1)"));
@@ -4070,8 +4119,10 @@ impl Host {
         // SAFETY: plain object creation.
         let copy = copy_fetch().then(|| unsafe {
             (|| -> windows::core::Result<(ID3D12CommandQueue, Prelude)> {
+                // (High priority too, as the main queue: `queue_priority`.)
                 let queue: ID3D12CommandQueue = self.device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
                     Type: D3D12_COMMAND_LIST_TYPE_COPY,
+                    Priority: queue_priority(),
                     ..Default::default()
                 })?;
                 let allocator: ID3D12CommandAllocator = self.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY)?;

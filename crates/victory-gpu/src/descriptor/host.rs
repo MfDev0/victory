@@ -33,7 +33,11 @@ pub(crate) struct HostHeap {
     /// A fingerprint of the record each slot held when the pass over
     /// records copied in as bytes last looked at it
     /// ([`HostHeap::mirror_copied`]; 0: never looked at). Made on first use.
-    copied: Mutex<Vec<u64>>,
+    /// Try 6.0: one atomic a slot, not a vector behind one lock taken for
+    /// every record (450,000 to 800,000 records a frame in the 2026-11-26
+    /// report, 160-230 ms; fxceless #1043 found the same churn), so the
+    /// pass also runs on several threads (`descriptor::sync_heaps`).
+    copied: std::sync::OnceLock<Box<[std::sync::atomic::AtomicU64]>>,
     /// The host resource each slot views, held while the slot does: shaders
     /// index heaps directly, so a slot the title has not rewritten since it
     /// released the resource may still be read, and a freed host resource
@@ -1055,7 +1059,7 @@ impl HostHeap {
             dynamic: extra,
             sampler,
             made: Mutex::new(vec![0; count as usize]),
-            copied: Mutex::new(Vec::new()),
+            copied: std::sync::OnceLock::new(),
             kept: Mutex::new(vec![None; (count + extra) as usize]),
             next: Mutex::new((0, vec![false; DYNAMIC as usize])),
             free: std::sync::atomic::AtomicU32::new(DYNAMIC),
@@ -1955,18 +1959,21 @@ impl HostHeap {
         // 200.)
         let print = record_print(record) | 1;
         {
-            let mut copied = self.copied.lock().unwrap_or_else(|e| e.into_inner());
-            if copied.is_empty() {
-                copied.resize(self.count as usize, 0);
-            }
-            let Some(last) = copied.get_mut(index as usize) else {
+            use std::sync::atomic::Ordering::Relaxed;
+            let copied = self
+                .copied
+                .get_or_init(|| (0..self.count).map(|_| std::sync::atomic::AtomicU64::new(0)).collect());
+            let Some(last) = copied.get(index as usize) else {
                 return false;
             };
+            let was = last.load(Relaxed);
             // A slot never looked at that holds nothing: as it was.
-            if *last == print || (*last == 0 && record[..n].iter().all(|&b| b == 0)) {
+            if was == print || (was == 0 && record[..n].iter().all(|&b| b == 0)) {
                 return false;
             }
-            *last = print;
+            // (The threads of one pass take pages of their own; two passes
+            // at once at most mirror a slot twice.)
+            last.store(print, Relaxed);
         }
         self.mirror(index, handle, false);
         true
