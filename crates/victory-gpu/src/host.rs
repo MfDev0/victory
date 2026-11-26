@@ -5710,27 +5710,6 @@ impl Host {
         })
     }
 
-    /// Whether the host GPU supports the depth bounds test; logged once.
-    pub(crate) fn depth_bounds(&self) -> bool {
-        static BOUNDS: OnceLock<bool> = OnceLock::new();
-        *BOUNDS.get_or_init(|| {
-            let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS2::default();
-            // SAFETY: writes `options` of the given size.
-            let ok = unsafe {
-                self.device
-                    .CheckFeatureSupport(
-                        D3D12_FEATURE_D3D12_OPTIONS2,
-                        (&raw mut options).cast(),
-                        size_of_val(&options) as u32,
-                    )
-                    .is_ok()
-            };
-            let supported = ok && options.DepthBoundsTestSupported.as_bool();
-            tracing::info!(supported, "host depth bounds support");
-            supported
-        })
-    }
-
     /// A new list, open for recording.
     pub(crate) fn new_list(&self) -> windows::core::Result<HostList> {
         #[cfg(feature = "diagnostics")]
@@ -8245,23 +8224,6 @@ impl Host {
                 "D3D12 debug layer messages so far by kind (severity 0 corruption, 1 error, 2 warning, 3 info, 4 message): {}",
                 counts.join(", ")
             );
-        }
-    }
-
-    /// Whether the host device is a software adapter, or cannot be told to
-    /// be a card (WARP: the checks' machine has no card, and tests of what
-    /// only a card does skip there). Told by the adapter's flag or by its
-    /// maker: Microsoft's (0x1414) is the software one under whatever name
-    /// and flags a machine without a card gives it (the flag alone did not
-    /// say so on the checks' machine); an adapter that does not answer
-    /// counts as software too.
-    #[cfg(test)]
-    pub(crate) fn software(&self) -> bool {
-        const MICROSOFT: u32 = 0x1414;
-        // SAFETY: a plain query.
-        match self.adapter.as_ref().and_then(|a| unsafe { a.GetDesc1() }.ok()) {
-            Some(d) => d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 || d.VendorId == MICROSOFT,
-            None => true,
         }
     }
 
