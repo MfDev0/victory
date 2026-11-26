@@ -1617,7 +1617,8 @@ pub(crate) fn room_lately() -> bool {
 
 /// The share of the card's budget, in percent, up to which host copies of
 /// textures picked by index are made ([`room`]): 90 unless
-/// `VICTORY_TEXTURE_ROOM_PERCENT` says another (50 to 97). At 90 about a
+/// `VICTORY_TEXTURE_ROOM_PERCENT` says another (50 to 99; 97 before Try
+/// 6.12, whose all-out mode asks for 99). At 90 about a
 /// tenth of the budget, 1,020 MB of 10,200, stays unused while thousands of
 /// textures wait (runs 170-174); the card copies of title buffers from
 /// 1 MiB up take 449 MB more of the card than before (941 against 492),
@@ -1629,7 +1630,7 @@ fn room_percent() -> u64 {
         std::env::var("VICTORY_TEXTURE_ROOM_PERCENT")
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
-            .map_or(90, |percent| percent.clamp(50, 97))
+            .map_or(90, |percent| percent.clamp(50, 99))
     })
 }
 

@@ -271,19 +271,35 @@ fn use_whole_machine() {
         QUOTA_LIMITS_HARDWS_MAX_DISABLE, QUOTA_LIMITS_HARDWS_MIN_DISABLE, SetProcessWorkingSetSizeEx,
     };
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-    use windows_sys::Win32::System::Threading::{ABOVE_NORMAL_PRIORITY_CLASS, GetCurrentProcess, SetPriorityClass};
+    use windows_sys::Win32::System::Threading::{
+        ABOVE_NORMAL_PRIORITY_CLASS, GetCurrentProcess, HIGH_PRIORITY_CLASS, SetPriorityClass,
+    };
     if !whole_machine() {
         return;
     }
+    // Try 6.12 (all-out mode): `VICTORY_PRIORITY=high` runs the process at
+    // high priority (never realtime: the mouse, the keyboard and the driver
+    // still come first), and `VICTORY_WORKING_SET_PERCENT` sets the soft
+    // minimum working set as a share of the PC's memory (1 to 95, no 4 GiB
+    // cap) instead of a quarter.
+    let high = std::env::var("VICTORY_PRIORITY").is_ok_and(|v| v.trim().eq_ignore_ascii_case("high"));
+    let percent = std::env::var("VICTORY_WORKING_SET_PERCENT")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|p| p.clamp(1, 95));
     // SAFETY: plain process settings and a query that fills our structure.
     unsafe {
         let process = GetCurrentProcess();
-        let priority = SetPriorityClass(process, ABOVE_NORMAL_PRIORITY_CLASS) != 0;
+        let class = if high { HIGH_PRIORITY_CLASS } else { ABOVE_NORMAL_PRIORITY_CLASS };
+        let priority = SetPriorityClass(process, class) != 0;
         let mut status: MEMORYSTATUSEX = std::mem::zeroed();
         status.dwLength = size_of_val(&status) as u32;
         let mut kept_mb = 0;
         if GlobalMemoryStatusEx(&mut status) != 0 {
-            let min = (status.ullTotalPhys / 4).min(4 << 30) as usize;
+            let min = match percent {
+                Some(p) => (status.ullTotalPhys / 100 * p) as usize,
+                None => (status.ullTotalPhys / 4).min(4 << 30) as usize,
+            };
             // The maximum only has to be above the minimum: it is not enforced.
             let max = min.saturating_mul(4);
             if SetProcessWorkingSetSizeEx(
@@ -297,7 +313,8 @@ fn use_whole_machine() {
             }
         }
         tracing::info!(
-            above_normal = priority,
+            above_normal = priority && !high,
+            high = priority && high,
             soft_min_working_set_mb = kept_mb,
             pc_memory_mb = status.ullTotalPhys >> 20,
             pc_memory_free_mb = status.ullAvailPhys >> 20,

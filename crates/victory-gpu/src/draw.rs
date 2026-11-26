@@ -3891,6 +3891,12 @@ impl State {
             crate::pipeline::note_why("a walk of ray-tracing structures that are not built (VICTORY_BVH_HOLD=1)".to_owned());
             return;
         }
+        // Try 6.12 (edsuuu/VI-BR-PORT): passes that only serve rays, with
+        // every ray a miss and the builder off.
+        if crate::pipeline::only_for_rays(self.pipeline as This) {
+            once!("passes that only serve rays are left out (VICTORY_SKIP_RT=1, builder off; VICTORY_RT_SKIN, VICTORY_RT_RESOLVE, VICTORY_RT_TRACE, VICTORY_ACTIVATE_RAYS =1 run them)");
+            return;
+        }
         // The ray-tracing structure builder's stages run all or none.
         if crate::pipeline::is_builder(self.pipeline as This) && !crate::pipeline::builder_runs() {
             DROPPED.fetch_add(1, Ordering::Relaxed);
@@ -4929,7 +4935,9 @@ impl State {
             crate::pipeline::note_drop(self.pipeline as This);
             return false;
         }
-        if crate::pipeline::is_builder(self.pipeline as This) && !crate::pipeline::builder_runs() {
+        if crate::pipeline::only_for_rays(self.pipeline as This)
+            || (crate::pipeline::is_builder(self.pipeline as This) && !crate::pipeline::builder_runs())
+        {
             return false;
         }
         // A program that walks ray-tracing structures nothing has built:

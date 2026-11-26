@@ -568,6 +568,20 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.12 ("all-out"; plan and to-do in `scripts/try/PLAN.md`):
+   - **MAX: all-out mode** (`VICTORY_TRY_ALL_OUT=1` too): VIctory's caps
+     lifted to what the PC has but ~1% (threads-1 for copy-back, detiling
+     and pipeline compiles; high priority; textures to 99% of the card, no
+     texture cap; the memory guard at 1% free). New settings behind it:
+     `VICTORY_PIPELINE_WORKERS`, `VICTORY_PIPELINE_HEAVY`, `VICTORY_PRIORITY`,
+     `VICTORY_WORKING_SET_PERCENT`, `VICTORY_PRESSURE_RAM_MB`,
+     `VICTORY_PRESSURE_COMMIT_MB`, `VICTORY_PRESSURE_CARD_PERCENT`;
+     `VICTORY_TEXTURE_ROOM_PERCENT` up to 99.
+   - Passes that only serve rays are neither built nor run with
+     `VICTORY_SKIP_RT=1` (edsuuu/VI-BR-PORT): bvh skinning, ray resolve,
+     probe ray picking, traces against unbuilt structures.
+   - `scripts/try/rt-off-hashes.txt` as `VICTORY_DENY_PIPELINES` with B, and
+     `VICTORY_NAN_SCRUB=1` (trustno1-coder/VIctory-NVIDIA).
    6.11 ("no disk stutter"; plan and to-do in `scripts/try/PLAN.md`):
    - The pipeline library's read-ahead leaves 1 GB free (4 GB before;
      `VICTORY_LIBRARY_PREFETCH_ROOM_MB`), and reads the front of the file

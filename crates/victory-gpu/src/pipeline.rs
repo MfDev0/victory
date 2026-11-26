@@ -285,6 +285,126 @@ fn of_builder(shaders: &[Arc<Shader>]) -> bool {
         .is_some_and(|programs| programs.iter().any(victory_shader::spill::is_spilled))
 }
 
+/// Whether a compute container is one of the title's passes that only
+/// serve rays (Try 6.12, ported from edsuuu/VI-BR-PORT ab4571df, 1556de82,
+/// f1e5e454 and 24f8d2ed, GPL-3.0-or-later; their last two after
+/// codec-d/cool_fox `make.rs`):
+///
+/// - `bvh_skinning`: all 30 entry points named `CSComputeSkinning*` pose
+///   every animated mesh once more, only for the ray-tracing structures,
+///   and `bvh_skinning_smh`'s `CSGenerateHairVB` makes the hair's geometry
+///   for them. They were the largest share of the card's time in a cutscene
+///   there (Series S, RTX 4060 Ti 8 GB: 6.8 -> 10.2 fps). The picture's own
+///   skinning is `CS_PedStandardSkinning*`, `CS_PosOnlyLodSkinning*` and the
+///   cloth's `computeclothSkinning`: they run.
+/// - `CS_RaytracingResolve*` shades what a ray hit (some 1,000 programs).
+/// - `CS_ScreenProbes_ActivateRays*` picks the screen probes that cast rays.
+/// - The tracing against the structures: the screen probes'
+///   `CS_ScreenProbes_TraceRays*_BVH*` and the reflections'
+///   `CS_RaytraceVBuffer*`. Their `Fallback` and `Voxels` forms march
+///   through the title's voxels, not the structures, and light the
+///   picture: they run.
+///
+/// The container holds its entry point's name, not the effect's.
+#[cfg(windows)]
+fn for_rays(bytes: &[u8]) -> RayOnly {
+    let has = |name: &[u8]| bytes.windows(name.len()).any(|w| w == name);
+    if has(b"CSComputeSkinning") || has(b"CSGenerateHairVB") {
+        RayOnly::Skin
+    } else if has(b"CS_RaytracingResolve") {
+        RayOnly::Resolve
+    } else if has(b"CS_ScreenProbes_ActivateRays") {
+        RayOnly::Activate
+    } else if (has(b"CS_ScreenProbes_TraceRays") && has(b"_BVH"))
+        || (has(b"CS_RaytraceVBuffer") && !has(b"Voxels"))
+    {
+        RayOnly::Trace
+    } else {
+        RayOnly::No
+    }
+}
+
+/// What a compute pipeline does only for rays ([`for_rays`]).
+#[cfg(windows)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RayOnly {
+    No,
+    Skin,
+    Resolve,
+    Activate,
+    Trace,
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn ray_programs_are_known_by_name() {
+    assert_eq!(for_rays(b"..\0CSComputeSkinningRigidVelocity_1c34db0a_Wrapped\0.."), RayOnly::Skin);
+    assert_eq!(for_rays(b"..\0CS_PedStandardSkinning_3_00aa11bb_Wrapped\0.."), RayOnly::No);
+    assert_eq!(for_rays(b"computeclothSkinning"), RayOnly::No);
+    assert_eq!(for_rays(b"..\0CS_RaytracingResolve_Opaque_12345678_Wrapped\0.."), RayOnly::Resolve);
+    assert_eq!(for_rays(b"..\0CS_ScreenProbes_ActivateRays_0_Wrapped\0.."), RayOnly::Activate);
+    assert_eq!(for_rays(b"..\0CSGenerateHairVB_c88a8f19_Wrapped\0.."), RayOnly::Skin);
+    assert_eq!(for_rays(b"..\0CS_ScreenProbes_TraceRays_RayBinning_BVH_Mixed\0.."), RayOnly::Trace);
+    assert_eq!(for_rays(b"..\0CS_ScreenProbes_TraceRays_Voxels\0.."), RayOnly::No);
+    assert_eq!(for_rays(b"..\0CS_ScreenProbes_TraceRays_Fallback\0.."), RayOnly::No);
+    assert_eq!(for_rays(b"..\0CS_RaytraceVBuffer_ShaderBinning_WithFar\0.."), RayOnly::Trace);
+    assert_eq!(for_rays(b"..\0CS_RaytraceVBuffer_Voxels_RayBinning\0.."), RayOnly::No);
+    // The ambient stand-in's program is not one of them.
+    assert_eq!(for_rays(b"..\0CS_ScreenProbes_TemporalResolve_0\0.."), RayOnly::No);
+}
+
+/// Whether a dispatch of `this` is left out because it only serves rays
+/// and nothing they could hit is there: every ray misses
+/// (`VICTORY_SKIP_RT=1`) and the structure builder is off. Each kind runs
+/// anyway with its switch: `VICTORY_RT_SKIN=1`, `VICTORY_RT_RESOLVE=1`,
+/// `VICTORY_RT_TRACE=1`, `VICTORY_ACTIVATE_RAYS=1`.
+#[cfg(windows)]
+pub(crate) fn only_for_rays(this: This) -> bool {
+    !this.is_null() && rays_only_off(pipeline(this).rt_only)
+}
+
+/// Whether passes of `kind` are left out ([`only_for_rays`]).
+#[cfg(windows)]
+fn rays_only_off(kind: RayOnly) -> bool {
+    fn off(switch: &str) -> bool {
+        std::env::var_os("VICTORY_SKIP_RT").is_some_and(|v| v == "1")
+            && std::env::var_os("VICTORY_BVH_BUILDER").is_none_or(|v| v != "1")
+            && std::env::var_os(switch).is_none_or(|v| v != "1")
+    }
+    static SKIN: OnceLock<bool> = OnceLock::new();
+    static RESOLVE: OnceLock<bool> = OnceLock::new();
+    static ACTIVATE: OnceLock<bool> = OnceLock::new();
+    static TRACE: OnceLock<bool> = OnceLock::new();
+    match kind {
+        RayOnly::No => false,
+        RayOnly::Skin => *SKIN.get_or_init(|| off("VICTORY_RT_SKIN")),
+        RayOnly::Resolve => *RESOLVE.get_or_init(|| off("VICTORY_RT_RESOLVE")),
+        RayOnly::Activate => *ACTIVATE.get_or_init(|| off("VICTORY_ACTIVATE_RAYS")),
+        RayOnly::Trace => *TRACE.get_or_init(|| off("VICTORY_RT_TRACE")),
+    }
+}
+
+/// The ray-only kind of a pipeline of `shaders` ([`for_rays`] of its
+/// compute container).
+#[cfg(windows)]
+fn rt_only_of(shaders: &[Arc<Shader>]) -> RayOnly {
+    shaders
+        .iter()
+        .filter(|s| s.stage == "compute")
+        .map(|s| for_rays(&s.container))
+        .find(|k| *k != RayOnly::No)
+        .unwrap_or(RayOnly::No)
+}
+
+/// Whether a pipeline of `shaders` is not built at all: its dispatches
+/// are left out anyway ([`only_for_rays`]), and its driver compile (some
+/// 1,000 `CS_RaytracingResolve` programs among them) was time the
+/// pipeline workers spent before and while the game ran.
+#[cfg(windows)]
+pub(crate) fn never_built(shaders: &[Arc<Shader>]) -> bool {
+    rays_only_off(rt_only_of(shaders))
+}
+
 /// `VICTORY_BVH_QUARANTINE=1`: what the structure builder's stages store
 /// stays in the host's copies and is not copied back into title memory. A
 /// check for a first run of the whole builder: a stage that stores where
@@ -476,6 +596,9 @@ struct Pipeline {
     /// One of the ray-tracing structure builder's ([`Builder`]).
     #[cfg(windows)]
     builder: bool,
+    /// One of the title's passes that only serve rays ([`for_rays`]).
+    #[cfg(windows)]
+    rt_only: RayOnly,
 }
 const _: () = assert!(offset_of!(Pipeline, packet) == 0x10);
 
@@ -679,6 +802,8 @@ fn hand_out(
         host,
         #[cfg(windows)]
         builder,
+        #[cfg(windows)]
+        rt_only: rt_only_of(&shaders),
         shaders,
         bound: std::sync::atomic::AtomicBool::new(false),
     });

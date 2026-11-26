@@ -44,7 +44,78 @@ const BACK_OFF_MS: u64 = 500;
 /// The level from the figures (pure, for the tests): bytes Windows has
 /// left to commit, free physical bytes, the card's budget and use, and how
 /// long ago an allocation was refused.
+#[cfg(test)]
 pub(crate) fn classify(
+    commit_left: Option<u64>,
+    ram_left: Option<u64>,
+    card: Option<(u64, u64)>,
+    refused_ago_ms: Option<u64>,
+) -> Level {
+    classify_with(&Limits::DEFAULT, commit_left, ram_left, card, refused_ago_ms)
+}
+
+/// Where the levels start: (mild, critical) bytes left to commit, bytes of
+/// free physical memory, and percent of the card's budget in use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Limits {
+    commit: (u64, u64),
+    ram: (u64, u64),
+    card_percent: (u64, u64),
+}
+
+impl Limits {
+    const DEFAULT: Limits =
+        Limits { commit: (4 * GIB, 1536 * MIB), ram: (3 * GIB, GIB), card_percent: (85, 97) };
+
+    /// [`Limits::DEFAULT`] with the pairs the variables give, each
+    /// `mild,critical` (Try 6.12's all-out mode sets them to about 1% of
+    /// the PC's memory and 98/99% of the card): `VICTORY_PRESSURE_COMMIT_MB`,
+    /// `VICTORY_PRESSURE_RAM_MB`, `VICTORY_PRESSURE_CARD_PERCENT`.
+    fn from_vars(get: impl Fn(&str) -> Option<String>) -> Limits {
+        let pair = |name: &str, unit: u64, or: (u64, u64)| -> (u64, u64) {
+            let Some(text) = get(name) else { return or };
+            let mut parts = text.split(',').map(|p| p.trim().parse::<u64>().ok());
+            match (parts.next().flatten(), parts.next().flatten()) {
+                (Some(mild), Some(critical)) => (mild * unit, critical * unit),
+                (Some(both), None) => (both * unit, both * unit),
+                _ => or,
+            }
+        };
+        let d = Limits::DEFAULT;
+        // Mild comes first: at least as many bytes left as critical, and at
+        // most the card's share critical starts at.
+        let commit = pair("VICTORY_PRESSURE_COMMIT_MB", MIB, d.commit);
+        let ram = pair("VICTORY_PRESSURE_RAM_MB", MIB, d.ram);
+        let card = pair("VICTORY_PRESSURE_CARD_PERCENT", 1, d.card_percent);
+        let card = (card.0.clamp(50, 100), card.1.clamp(50, 100));
+        Limits {
+            commit: (commit.0.max(commit.1), commit.1),
+            ram: (ram.0.max(ram.1), ram.1),
+            card_percent: (card.0.min(card.1), card.1),
+        }
+    }
+}
+
+/// The limits of this run ([`Limits::from_vars`] the environment), said once.
+fn limits() -> &'static Limits {
+    static L: std::sync::OnceLock<Limits> = std::sync::OnceLock::new();
+    L.get_or_init(|| {
+        let l = Limits::from_vars(|name| std::env::var(name).ok());
+        if l != Limits::DEFAULT {
+            tracing::info!(
+                commit_mb = ?(l.commit.0 / MIB, l.commit.1 / MIB),
+                ram_mb = ?(l.ram.0 / MIB, l.ram.1 / MIB),
+                card_percent = ?l.card_percent,
+                "memory pressure starts later (mild, critical): VICTORY_PRESSURE_*"
+            );
+        }
+        l
+    })
+}
+
+/// [`classify`] against `limits`.
+pub(crate) fn classify_with(
+    limits: &Limits,
     commit_left: Option<u64>,
     ram_left: Option<u64>,
     card: Option<(u64, u64)>,
@@ -54,14 +125,14 @@ pub(crate) fn classify(
         .filter(|&(budget, _)| budget > 0)
         .map(|(budget, used)| (u128::from(used) * 100 / u128::from(budget)) as u64);
     if refused_ago_ms.is_some_and(|ago| ago < REFUSED_CRITICAL_MS)
-        || commit_left.is_some_and(|c| c < 1536 * MIB)
-        || ram_left.is_some_and(|r| r < GIB)
-        || card_pct.is_some_and(|p| p >= 97)
+        || commit_left.is_some_and(|c| c < limits.commit.1)
+        || ram_left.is_some_and(|r| r < limits.ram.1)
+        || card_pct.is_some_and(|p| p >= limits.card_percent.1)
     {
         Level::Critical
-    } else if commit_left.is_some_and(|c| c < 4 * GIB)
-        || ram_left.is_some_and(|r| r < 3 * GIB)
-        || card_pct.is_some_and(|p| p >= 85)
+    } else if commit_left.is_some_and(|c| c < limits.commit.0)
+        || ram_left.is_some_and(|r| r < limits.ram.0)
+        || card_pct.is_some_and(|p| p >= limits.card_percent.0)
     {
         Level::Mild
     } else {
@@ -123,7 +194,7 @@ fn look(now: u64) {
     let card = crate::host::host()
         .and_then(|h| h.video_memory())
         .map(|[budget, used, ..]| (budget, used));
-    let level = classify(commit, ram, card, refused_ago(now));
+    let level = classify_with(limits(), commit, ram, card, refused_ago(now));
     LEVEL.store(level as u64, Relaxed);
     COUNTS[2 + level as usize].fetch_add(1, Relaxed);
     FIGURES[0].store(commit.unwrap_or(0) / MIB, Relaxed);
@@ -228,5 +299,34 @@ mod tests {
         assert_eq!(classify(plenty.0, plenty.1, plenty.2, Some(5_000)), Level::Normal);
         // A card with no budget said is no pressure.
         assert_eq!(classify(plenty.0, plenty.1, Some((0, 5)), None), Level::Normal);
+    }
+
+    #[test]
+    fn limits_come_from_the_variables() {
+        assert_eq!(Limits::from_vars(|_| None), Limits::DEFAULT);
+        let all_out = Limits::from_vars(|name| match name {
+            "VICTORY_PRESSURE_COMMIT_MB" => Some("400,200".to_owned()),
+            "VICTORY_PRESSURE_RAM_MB" => Some("300, 160".to_owned()),
+            "VICTORY_PRESSURE_CARD_PERCENT" => Some("98,99".to_owned()),
+            _ => None,
+        });
+        assert_eq!(all_out.commit, (400 * MIB, 200 * MIB));
+        assert_eq!(all_out.ram, (300 * MIB, 160 * MIB));
+        assert_eq!(all_out.card_percent, (98, 99));
+        // Mild never after critical.
+        let odd = Limits::from_vars(|name| match name {
+            "VICTORY_PRESSURE_RAM_MB" => Some("100,200".to_owned()),
+            "VICTORY_PRESSURE_CARD_PERCENT" => Some("99,90".to_owned()),
+            _ => None,
+        });
+        assert_eq!((odd.ram, odd.card_percent), ((200 * MIB, 200 * MIB), (90, 90)));
+        let short = (Some(GIB), Some(500 * MIB), Some((100, 95)), None);
+        assert_eq!(classify(short.0, short.1, short.2, short.3), Level::Critical);
+        assert_eq!(classify_with(&all_out, short.0, short.1, short.2, short.3), Level::Normal);
+        assert_eq!(classify_with(&all_out, short.0, Some(100 * MIB), short.2, None), Level::Critical);
+        assert_eq!(classify_with(&all_out, short.0, Some(200 * MIB), short.2, None), Level::Mild);
+        assert_eq!(classify_with(&all_out, short.0, short.1, Some((100, 98)), None), Level::Mild);
+        // Not a number: the default pair.
+        assert_eq!(Limits::from_vars(|_| Some("x".to_owned())), Limits::DEFAULT);
     }
 }

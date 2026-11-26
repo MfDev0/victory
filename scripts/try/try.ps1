@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.11'
+$TryVersion = '6.12'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -70,11 +70,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -897,6 +897,65 @@ function Ensure-Fsr {
     if ($script:Config.fsr_dl -ne 'ok') { $script:Config.fsr_dl = 'ok'; Save-Config }
     return $dir
 }
+# 6.12: all-out mode (MAX, or VICTORY_TRY_ALL_OUT=1): the caps VICTORY puts
+# on itself are lifted to what this PC has, less about 1% (and one CPU
+# thread) so Windows, the mouse and the keyboard still answer. Read from the
+# PC each run: the logical processors, the memory and the card's memory.
+# What it cannot do: give the game more memory than the PC has. VICTORY's
+# memory-pressure guard then starts later (about 1% of the memory free
+# instead of 1 GB), so it keeps uploading where it used to hold back; if the
+# PC is short, Windows pages, and a card that is full can be lost.
+function AllOut { return ($script:Config.allout -eq '1' -or $env:VICTORY_TRY_ALL_OUT -eq '1') -and $script:Config.plain -ne '1' }
+function Set-AllOut {
+    $c = $script:Config
+    $threads = [Environment]::ProcessorCount
+    $use = [Math]::Max(1, $threads - 1)
+    $ram = Ram-Info
+    $ramMb = [int64]$ram[0]; $virtMb = [int64]$ram[1]
+    $vram = $(if ($c.vram) { [int]$c.vram } else { Card-Vram })
+    $ramCrit = [Math]::Max(128, [int]($ramMb / 100))
+    $commitCrit = [Math]::Max(256, [int]($virtMb / 100))
+    $cardMb = [Math]::Max(1024, [int]($vram / 5))
+    $set = [ordered]@{
+        # The process at high priority (never realtime) and a soft hold on
+        # 90% of the memory: Windows takes the game's pages last.
+        'VICTORY_PRIORITY' = 'high'
+        'VICTORY_WORKING_SET_PERCENT' = '90'
+        # Memory pressure: mild at 2%, critical at 1% of the memory (and of
+        # what Windows can commit); the card at 98 and 99% of its budget.
+        'VICTORY_PRESSURE_RAM_MB' = "$(2 * $ramCrit),$ramCrit"
+        'VICTORY_PRESSURE_COMMIT_MB' = "$(2 * $commitCrit),$commitCrit"
+        'VICTORY_PRESSURE_CARD_PERCENT' = '98,99'
+        # Textures up to 99% of the card's budget (90), up to 512 MB of
+        # uploads a frame (192), 256 MB of kept staging (128).
+        'VICTORY_TEXTURE_ROOM_PERCENT' = '99'
+        'VICTORY_TEXTURE_STAGE_MB' = '512'
+        'VICTORY_STAGING_POOL_MB' = '256'
+        # 256 MB of compressed reads in flight (128; cool_fox / CGBJ).
+        'VICTORY_DSTORAGE_STAGING_MB' = '256'
+        # More of the game's buffers compared on the card (512 MB on cards
+        # up to 14 GB): a fifth of the card, 1 GB at least.
+        'VICTORY_CARD_BUFFERS_MB' = "$cardMb"
+        # Pages compared on the CPU instead of waiting for the card (64 MB).
+        'VICTORY_MERGE_UNWATCHED_MB' = '256'
+        # Every thread but one: copy-back (8 at most before), texture
+        # detiling (half before), pipeline compiles (two thirds before).
+        'VICTORY_WIDE_THREADS' = "$use"
+        'VICTORY_DETILE_THREADS' = "$([Math]::Min(16, $use))"
+        'VICTORY_PIPELINE_WORKERS' = "$use"
+    }
+    foreach ($k in $set.Keys) { if ($null -eq $script:UserAll[$k]) { [Environment]::SetEnvironmentVariable($k, [string]$set[$k], 'Process') } }
+    # No cap on textures (the low preset's 1536 MB).
+    if ($null -eq $script:UserAll['VICTORY_TEXTURE_BUDGET_MB']) { [Environment]::SetEnvironmentVariable('VICTORY_TEXTURE_BUDGET_MB', $null, 'Process') }
+    Say "ALL-OUT: this PC has $threads threads, $ramMb MB of memory ($virtMb MB with the page file), a $vram MB card; the game gets $use threads at high priority, textures up to 99% of the card, no texture cap, memory guard at $ramCrit MB free   (MAX switches)"
+    Bad '         all-out runs at the edge of this PC: if it stutters hard, pages to disk or loses the card, press MAX to go back.'
+}
+function Undo-AllOut {
+    foreach ($k in @('VICTORY_PRIORITY', 'VICTORY_WORKING_SET_PERCENT', 'VICTORY_PRESSURE_RAM_MB', 'VICTORY_PRESSURE_COMMIT_MB', 'VICTORY_PRESSURE_CARD_PERCENT', 'VICTORY_TEXTURE_ROOM_PERCENT', 'VICTORY_TEXTURE_STAGE_MB', 'VICTORY_STAGING_POOL_MB', 'VICTORY_DSTORAGE_STAGING_MB', 'VICTORY_CARD_BUFFERS_MB', 'VICTORY_MERGE_UNWATCHED_MB', 'VICTORY_WIDE_THREADS', 'VICTORY_DETILE_THREADS', 'VICTORY_PIPELINE_WORKERS')) {
+        if ($null -eq $script:UserAll[$k]) { [Environment]::SetEnvironmentVariable($k, $null, 'Process') }
+    }
+}
+
 function Set-RunEnv {
     $c = $script:Config
     # 6.1: the game log's first line names this version (victory.exe prints it).
@@ -1131,6 +1190,27 @@ function Set-RunEnv {
     Say "walls: shader clean-up $(if ($env:VICTORY_SHADER_OPT -eq '0') { 'off (walls and roofs kept)' } else { 'ON' })   (O switches)   shadow fix $(if ($env:VICTORY_WAVE_DEEP_SKIPS_NOT -eq 'none') { 'off' } else { 'ON' })   (W switches)"
     Say "picture: ambient light $(if ($env:VICTORY_AMBIENT -ne 'off') { $env:VICTORY_AMBIENT } else { 'off' })   (A: normal 0.45 / low 0.3 / high 0.6 / off)   textures level by level $(if ($env:VICTORY_LEVELS_ON_DEMAND -eq '1') { 'ON' } else { 'off' })   (L switches)"
     Say "fps boost: $(if ($c.boost -ne 'off') { 'ON (75% render scale + sharpen, no ray tracing)' } else { 'off' })   frames in between: $(if ($c.between -eq '1') { 'ON' } else { 'off' })   shared small buffers: $(if ($c.hybrid -eq '1') { 'ON' } else { 'off' })"
+    # 6.12: the ray-tracing passes that turned every missed ray into light
+    # (white, hazy rooms and reflections with the view angle) are not built
+    # or run while ray tracing is skipped (B): trustno1-coder/VIctory-NVIDIA's
+    # list (1,000 CS_RaytracingResolve and 34 traced-shadow shaders). Fewer
+    # pipelines to compile, too. And a colour a shader writes that is NaN or
+    # infinite becomes 0 (VICTORY_NAN_SCRUB, from the same fork): one bad
+    # value no longer spreads into black blocks on faces and blocky shine
+    # where light reflects through the blur and the upscaler.
+    $rtList = Join-Path $Src 'scripts\try\rt-off-hashes.txt'
+    if ($null -eq $script:UserAll['VICTORY_DENY_PIPELINES']) {
+        $deny = $null
+        if ($c.boost -ne 'off' -and $c.plain -ne '1' -and (Test-Path -LiteralPath $rtList)) {
+            $deny = (@(Get-Content -LiteralPath $rtList | Where-Object { $_ -match '^[0-9a-fA-F]{16}$' }) -join ',')
+        }
+        [Environment]::SetEnvironmentVariable('VICTORY_DENY_PIPELINES', $(if ($deny) { $deny } else { $null }), 'Process')
+    }
+    if ($null -eq $script:UserAll['VICTORY_NAN_SCRUB']) { [Environment]::SetEnvironmentVariable('VICTORY_NAN_SCRUB', $(if ($c.plain -ne '1') { '1' } else { $null }), 'Process') }
+    $denied = $(if ($env:VICTORY_DENY_PIPELINES) { @($env:VICTORY_DENY_PIPELINES -split ',').Count } else { 0 })
+    Say "picture: ray-tracing light passes left out: $(if ($denied) { "$denied (B switches)" } else { 'none' }), NaN colours cleared $(if ($env:VICTORY_NAN_SCRUB -eq '1') { 'ON' } else { 'off' })"
+    # 6.12: all-out mode last, so it lifts the caps set above.
+    if (AllOut) { Set-AllOut } else { Undo-AllOut; Say 'all-out mode: off   (MAX gives the game everything this PC has but about 1%)' }
     # Its own cache: the old base's pipeline library and shaders do not mix.
     if (-not $env:VICTORY_CACHE_DIR -or $env:VICTORY_CACHE_DIR -eq (Join-Path $TryHome 'cache-8gb')) { $env:VICTORY_CACHE_DIR = Join-Path $TryHome 'cache-gta6' }
     # Shaders that do not translate are saved here (zip and send this folder).
@@ -1670,7 +1750,11 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
     $lost = & $count 'device removed|DEVICE_REMOVED|DEVICE_HUNG'
     if ((OwnEngine) -and $lost -gt 0) {
         Bad 'the graphics card was lost (device removed) in this run.'
-        if ($c.fast -eq '1') {
+        if (AllOut) {
+            # 6.12: all-out mode is the first thing to go back (it fills the card to 99%).
+            $c.allout = ''
+            Say 'next run: all-out mode is off (the card was filled to its edge; MAX switches it again).'
+        } elseif ($c.fast -eq '1') {
             $c.fast = ''
             Say 'next run: back to the stable relay speed mode (F switches again).'
         } elseif ($script:FxFromTry) {
@@ -1796,7 +1880,7 @@ $script:Config = Load-Config
 # shadow fix, copies on the card, clean-up off, fps boost), whatever earlier
 # versions or a lost card switched off. D does the same at any time.
 function Reset-Recommended {
-    foreach ($k in @('fast', 'loop', 'wide', 'wavewide', 'new38', 'lazy', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'temporal', 'fxspeed', 'low')) { $script:Config[$k] = '' }
+    foreach ($k in @('fast', 'loop', 'wide', 'wavewide', 'new38', 'lazy', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'temporal', 'fxspeed', 'low', 'allout')) { $script:Config[$k] = '' }
     $script:Config.defaults = '5.0'
     Save-Config
 }
@@ -1822,6 +1906,7 @@ if (OwnEngine) {
     if ($changed -or -not (Test-Path (Ours-Exe))) { if (-not (Build-All)) { exit 1 } }
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
 if (OwnEngine) {
+    Say '6.12: MAX: all-out mode (no caps: every CPU thread but one at high priority, textures up to 99% of the card, the memory guard at 1% free, read from this PC); the ray-tracing light passes that made rooms and reflections white and hazy are left out (fewer pipelines to compile too), and NaN colours no longer spread into black or blocky patches (both from trustno1-coder/VIctory-NVIDIA).'
     Say '6.11: shader stutter: the pipeline library is read into memory ahead on 16 GB PCs too (it was skipped: every pipeline in play waited on the disk), every shader of the game translated once per build with the game closed; joined submissions, copy-back split finer over the cores (lepotane), anisotropic filtering keeps point mips (AvatarManz).'
     Say '6.10: this fork''s engine again (the base stays; the others'' fixes come into it): AMD''s PC FidelityFX upscaler makes the picture (FSR 3.1 on NVIDIA; T switches), sharper own upscaler without blocks on lit surfaces, shaders AMD''s compiler made are read, the game''s debug shaders stored without packing too.'
 }
@@ -1892,6 +1977,7 @@ function Show-Commands {
         @('X', 'Low preset', $(& $on $script:LowFromTry), '6 GB cards: game told 1280x720, textures up to 1536 MB (faster, blurrier; on by itself under 7 GB)'),
         @('J', 'Saved game', '', 'continue or new game (from the very beginning), bring a save back, ask before launch on/off'),
         @('D', 'Recommended', '', 'every switch back to the recommended settings (renders the most)'),
+        @('MAX', 'All-out mode', $(& $on (AllOut)), 'no caps: every CPU thread but one, high priority, textures up to 99% of the card, memory guard at 1% free (risky)'),
         @('Z', 'Plain mode', $(& $on ($c.plain -eq '1')), 'VIctory''s own defaults instead of Try''s settings (for comparing)'),
         @('P', 'Prepare again', '', 'compile all pipelines again with the game closed (done by itself after updates)'),
         @('S', 'Reports folder', '', "where report zips are saved: $(Reports-Dir)"),
@@ -1905,7 +1991,7 @@ function Show-Commands {
         Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3])
     }
     Write-Host '  ====================================================================================' -ForegroundColor Cyan
-    Write-Host '  Switches (N, C, R, F, B, M, H, A, L, O, W, K, T, Y, X, Z, D) flip at once and are saved; Enter then runs the game with them.'
+    Write-Host '  Switches (N, C, R, F, B, M, H, A, L, O, W, K, T, Y, X, Z, D, MAX) flip at once and are saved; Enter then runs the game with them.'
 }
 
 function Show-Version {
@@ -1971,6 +2057,7 @@ while ($true) {
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
             'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.6'; $c.console_user = '1' }
             'D' { Reset-Recommended; $c = $script:Config }
+            'MAX' { $c.allout = $(if ($c.allout -eq '1') { '' } else { '1' }) }
             'N' { $c.engine = $(switch ($c.engine) { 'avm' { '8gb' } '8gb' { 'own' } default { 'avm' } }); $null = Ensure-Engine $false }
             default { $switched = $false }
         }

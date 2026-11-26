@@ -1,4 +1,4 @@
-# VIctory Try: plan and to-do (6.10, updated for 6.11)
+# VIctory Try: plan and to-do (6.10, updated for 6.12)
 
 Goal: the whole picture rendered, **20+ fps** on the reporter's PC: RTX 4050
 Laptop (5921 MB, budget about 5153 MB), 12 threads, about 16 GB of RAM,
@@ -47,6 +47,69 @@ below are checked again.
       66afb2b4; parser only so far).
 - [x] Logs: `upscaler PC FidelityFX ...` line at start, providers offered
       and chosen, every 600 upscales how many were jittered (both paths).
+
+## Done in 6.12 ("all-out")
+
+The user: "still bad"; asked for a mode with no caps that reads the PC and
+gives the game all but ~1%, and a deep search of git.gtahub.st/explore/repos.
+
+- [x] **All-out mode** (MAX, `VICTORY_TRY_ALL_OUT=1`; try.ps1 `Set-AllOut`),
+      from `Win32_OperatingSystem` memory, `ProcessorCount`, the card's
+      memory: threads-1 for `VICTORY_WIDE_THREADS`, `VICTORY_DETILE_THREADS`
+      and the new `VICTORY_PIPELINE_WORKERS`; `VICTORY_PRIORITY=high` and
+      `VICTORY_WORKING_SET_PERCENT=90` (new, `victory-hle/src/runtime.rs`);
+      `VICTORY_TEXTURE_ROOM_PERCENT=99` (clamp raised 97 -> 99), no
+      `TEXTURE_BUDGET_MB`, `TEXTURE_STAGE_MB=512`, `STAGING_POOL_MB=256`,
+      `DSTORAGE_STAGING_MB=256` (cool_fox via CGBJ), `CARD_BUFFERS_MB` a fifth
+      of the card (1 GB at least), `MERGE_UNWATCHED_MB=256`; the pressure
+      guard's limits from the new `VICTORY_PRESSURE_RAM_MB`,
+      `VICTORY_PRESSURE_COMMIT_MB`, `VICTORY_PRESSURE_CARD_PERCENT` (each
+      `mild,critical`; `pressure.rs` `Limits`) at 2%/1% of memory and
+      98/99% of the card. First thing turned off after a lost card.
+      Left as they are on purpose: `SHADER_LOOP_LIMIT` (1024 lost the card),
+      `CARD_ROOM_FOR_TARGETS_MB` (room the render targets need),
+      `LATE_WAIT_LISTS` (the 6.7 report never waited on it),
+      `PIPELINE_HEAVY` (more than 3 heavy compiles ran the driver out of
+      memory). Honest limit: in the 6.7 report the PC had 368-740 MB free
+      and 1.2-1.6 GB left to commit, the card 4.8 of its 5.15 GB budget;
+      there is no spare memory to give, only the guard to move. Log:
+      `memory pressure starts later`, `the whole machine for the title ...
+      high=true`, `pipeline workers workers=11`.
+- [x] **Ray-only passes** (edsuuu/VI-BR-PORT ab4571df, 1556de82, f1e5e454,
+      24f8d2ed): `pipeline.rs` `for_rays` by entry-point name
+      (`CSComputeSkinning*`, `CSGenerateHairVB`, `CS_RaytracingResolve*`,
+      `CS_ScreenProbes_ActivateRays*`, `..._TraceRays*_BVH*`,
+      `CS_RaytraceVBuffer*` but not Voxels/Fallback); with
+      `VICTORY_SKIP_RT=1` and the builder off their dispatches are left out
+      (`draw.rs`) and, ours on top, they are never built (`make.rs`,
+      `recipe.rs` prepare). There: 6.8 -> 10.2 fps (skinning), +8 % (traces).
+      Switches `VICTORY_RT_SKIN/RESOLVE/TRACE`, `VICTORY_ACTIVATE_RAYS`.
+      Log: `passes that only serve rays are left out`, `... not built`.
+- [x] **rt-off list** (trustno1-coder/VIctory-NVIDIA 77e13a97):
+      `scripts/try/rt-off-hashes.txt` (1,000 resolve + 34 traced shadows)
+      as `VICTORY_DENY_PIPELINES` with B (our release build has no
+      `VICTORY_SKIP_PIPELINES`; deny works in release). Denied pipelines are
+      skipped by prepare too; the log says the first 8, then powers of two.
+- [x] **NaN scrub** (same commit): `emit/lower.rs` `scrub_nan` on pixel
+      colour exports, `VICTORY_NAN_SCRUB=1` on in Try (not in plain mode).
+- [x] Searched (2026-11-26): gtahub explore, `q=victory` by stars. Fetched
+      `nv` (trustno1-coder/VIctory-NVIDIA), `bat` (Itsbatt/victory-unified),
+      `br` (edsuuu/VI-BR-PORT), `tay` (TaynanGT/Vice-Tay). cesarzxk's CGBJ,
+      N137S and codec-d/cool_fox are not on GitHub (gtahub only).
+
+Next candidates (not in 6.12):
+- nv a9632bc8 `VICTORY_DYNAMIC_SLOTS` on a capped heap: the 6.7 report
+  refused no tables (no "no free dynamic descriptor slots"), so not needed
+  yet; needed if lists in the air go past 384.
+- nv `VICTORY_PIPELINE_WAIT_ONCE` with `PIPELINE_WAIT_MS=10000` (no dropped
+  draws for pipelines being made, one wait each).
+- nv `VICTORY_AMBIENT_AIR`/`AMBIENT_MOST` (their ambient is the estimate
+  kind; ours is the constant: br 557d2f03 makes the air bound work with
+  the constant too).
+- br a06da66f (tiled cascade shadows exact on wave32), 5c17c8c8 (fork PR
+  #1241, card-written texture views), 389b9747/ab9ae781 (card copies of
+  buffers from 64 KB on 8-12 GB cards).
+- bat 2a95f8b5 (RTX 3070 paired bitcode, descriptor/shadow hardening).
 
 ## Done in 6.11
 

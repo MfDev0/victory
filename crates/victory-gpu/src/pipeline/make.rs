@@ -31,7 +31,7 @@ use super::host::{GraphicsState, HostPipeline, TargetFormats};
 /// 32 and 81 ms after the 3-second build of `CS_RaytracingResolve` of the
 /// two-layer vehicle wheel material, 57a3fad03cac36af and d5b9c94a30d7cf28;
 /// gfx41). Unlike `VICTORY_SKIP_PIPELINES`, in release builds too.
-fn denied(shaders: &[Arc<Shader>]) -> Option<&str> {
+pub(super) fn denied(shaders: &[Arc<Shader>]) -> Option<&str> {
     static LIST: OnceLock<Vec<String>> = OnceLock::new();
     let list = LIST.get_or_init(|| {
         std::env::var("VICTORY_DENY_PIPELINES")
@@ -137,7 +137,23 @@ impl Pending {
         let started = Instant::now();
         self.made.get_or_init(|| {
             if let Some(hash) = denied(&self.shaders) {
-                tracing::warn!(hash, shaders = ?self.shaders, "pipeline not built: its shader is in VICTORY_DENY_PIPELINES");
+                // (Try 6.12 denies a list of 1,034 by default: the first
+                // few said, the rest counted.)
+                static SAID: AtomicU64 = AtomicU64::new(0);
+                let n = SAID.fetch_add(1, Ordering::Relaxed) + 1;
+                if n <= 8 || n.is_power_of_two() {
+                    tracing::warn!(hash, shaders = ?self.shaders, so_far = n, "pipeline not built: its shader is in VICTORY_DENY_PIPELINES");
+                }
+                return None;
+            }
+            // Try 6.12 (edsuuu/VI-BR-PORT): passes that only serve rays,
+            // whose dispatches are left out, are not compiled either.
+            if super::never_built(&self.shaders) {
+                static SAID: AtomicU64 = AtomicU64::new(0);
+                let n = SAID.fetch_add(1, Ordering::Relaxed) + 1;
+                if n == 1 || n.is_power_of_two() {
+                    tracing::info!(so_far = n, "pipelines of passes that only serve rays not built (VICTORY_SKIP_RT=1; VICTORY_RT_SKIN, VICTORY_RT_RESOLVE, VICTORY_RT_TRACE, VICTORY_ACTIVATE_RAYS =1 build them)");
+                }
                 return None;
             }
             HostPipeline::new(&self.shaders, self.graphics.as_deref())
@@ -670,8 +686,17 @@ fn workers() -> bool {
     static RUNNING: OnceLock<bool> = OnceLock::new();
     *RUNNING.get_or_init(|| {
         let mut running = false;
-        let workers = std::thread::available_parallelism().map_or(2, |n| (n.get() * 2 / 3).clamp(2, 10));
-        let heavy = (workers / 2).clamp(1, 3);
+        // Try 6.12 (all-out mode, as lepotane/VIctory-leonida's launcher):
+        // `VICTORY_PIPELINE_WORKERS` sets how many (1 to 32) and
+        // `VICTORY_PIPELINE_HEAVY` how many of them take heavy pipelines at
+        // once (1 to 8; more than 3 ran the driver out of memory before).
+        let env = |name: &str| std::env::var(name).ok().and_then(|v| v.trim().parse::<usize>().ok());
+        let workers = env("VICTORY_PIPELINE_WORKERS").map_or_else(
+            || std::thread::available_parallelism().map_or(2, |n| (n.get() * 2 / 3).clamp(2, 10)),
+            |n| n.clamp(1, 32),
+        );
+        let heavy =
+            env("VICTORY_PIPELINE_HEAVY").map_or((workers / 2).clamp(1, 3), |n| n.clamp(1, 8).min(workers));
         QUEUE.lock().unwrap_or_else(|e| e.into_inner()).heavy_limit = heavy;
         tracing::info!(workers, heavy, "pipeline workers");
         for i in 0..workers {
