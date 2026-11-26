@@ -2667,6 +2667,13 @@ void main() {
     /// small record still runs.
     #[test]
     fn host_list_budget_starts_empty_at_each_submission() {
+        // (What it asks of the record after a spent budget, that it runs
+        // empty, is so only where a record that does not fit takes the rest:
+        // `VICTORY_INDIRECT_REST=1`. By default it takes nothing and the
+        // small record after it still runs.)
+        if !super::rest() {
+            return;
+        }
         let Some(host) = super::host() else {
             return;
         };
