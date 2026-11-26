@@ -65,7 +65,13 @@ fn translate_files(paths: &[PathBuf], threads: usize) {
                             let ok = std::panic::catch_unwind(|| victory_hle::modules::d3d12x::prepare_shader(&bytes))
                                 .unwrap_or(false);
                             let counter = if ok { &done } else { &failed };
-                            counter.fetch_add(1, Ordering::Relaxed);
+                            let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                            // Try 6.11: a line every 2,000 shaders, so the
+                            // first pass over the game's files (minutes)
+                            // shows that it goes on.
+                            if ok && n.is_multiple_of(2000) {
+                                println!("translating  {n} shaders of the game's files so far");
+                            }
                         }
                     });
                 }

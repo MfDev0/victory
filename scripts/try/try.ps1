@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.10'
+$TryVersion = '6.11'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -70,11 +70,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -618,7 +618,7 @@ function Ensure-Engine([bool]$update) {
     if ($new) { $null = Build-Engine8 }
     if (Test-Path (Engine8-Exe)) { return $true }
     Bad 'no 8 GB engine to run: running this fork''s engine instead (N switches engines)'
-    $script:Config.engine = 'ours'
+    $script:Config.engine = 'own'
     Save-Config
     if (-not (Test-Path (Ours-Exe))) { return (Build-All) }
     return $true
@@ -1106,7 +1106,10 @@ function Set-RunEnv {
     # buffer windows live on the card (VICTORY_CARD_WINDOWS_MB: no black
     # textures). Y switches the set; off by itself if a run loses the card.
     $script:FxFromTry = ($c.fxspeed -ne 'off') -and ($c.plain -ne '1')
-    foreach ($kv in @(@('VICTORY_HEAP_WORKER', '1'), @('VICTORY_PARALLEL_REFRESH', '1'), @('VICTORY_SETTLE_ROOM', '1'), @('VICTORY_LOOKUP_CACHE', '1'), @('VICTORY_TEXTURE_BACK', '1'), @('VICTORY_CARD_WINDOWS_MB', '512'))) {
+    # 6.11: and parts that follow one another in the queues go to the card as
+    # one submission, prepared once (VICTORY_JOIN_PARTS: viktoschi's tip; on
+    # in lepotane/VIctory-leonida's launcher, 19.4 fps on an RTX 4060 Ti).
+    foreach ($kv in @(@('VICTORY_HEAP_WORKER', '1'), @('VICTORY_PARALLEL_REFRESH', '1'), @('VICTORY_SETTLE_ROOM', '1'), @('VICTORY_LOOKUP_CACHE', '1'), @('VICTORY_TEXTURE_BACK', '1'), @('VICTORY_CARD_WINDOWS_MB', '512'), @('VICTORY_JOIN_PARTS', '1'))) {
         if ($null -eq $script:UserAll[$kv[0]]) { [Environment]::SetEnvironmentVariable($kv[0], $(if ($script:FxFromTry) { $kv[1] } else { $null }), 'Process') }
     }
     # 6.8: the low preset (X) for 6 GB cards (on by itself under 7000 MB):
@@ -1122,7 +1125,7 @@ function Set-RunEnv {
     } elseif ($null -eq $script:UserAll['VICTORY_TEXTURE_BUDGET_MB']) {
         [Environment]::SetEnvironmentVariable('VICTORY_TEXTURE_BUDGET_MB', $null, 'Process')
     }
-    Say "speed: fxceless's set (heap thread, side-by-side texture checks, settle room, lookup cache) $(if ($script:FxFromTry) { 'ON' } else { 'off' })   (Y switches)"
+    Say "speed: fxceless's set (heap thread, side-by-side texture checks, settle room, lookup cache, joined submissions) $(if ($script:FxFromTry) { 'ON' } else { 'off' })   (Y switches)"
     Say "low preset: $(if ($script:LowFromTry) { "ON (game screen $($env:VICTORY_DISPLAY_MODE), textures up to $($env:VICTORY_TEXTURE_BUDGET_MB) MB)" } else { 'off' })   (X switches)"
     Say "speed: copies on the card $(if ($env:VICTORY_GPU_COPIES -ne '0') { 'ON' } else { 'off' }), checks joined $(if ($env:VICTORY_CARD_REHASH_RUNS -eq '1') { 'ON' } else { 'off' })   (K switches)"
     Say "walls: shader clean-up $(if ($env:VICTORY_SHADER_OPT -eq '0') { 'off (walls and roofs kept)' } else { 'ON' })   (O switches)   shadow fix $(if ($env:VICTORY_WAVE_DEEP_SKIPS_NOT -eq 'none') { 'off' } else { 'ON' })   (W switches)"
@@ -1150,20 +1153,31 @@ function Recipes-Size {
 # minute: one run that reaches a place is enough, no more restarting to get
 # further. Runs after each new build and after each run that asked for new
 # pipelines; quick when there is nothing new.
+# 6.11: once per build also every shader in the game's files is translated
+# into the shader cache (as AvatarManz's "victory shaders" does): a pipeline
+# the game meets for the first time in play then only needs the driver's
+# compile, not our translation as well (the hitches while "shaders compile").
 function Prepare-Shaders([string]$why) {
     $c = $script:Config
     Step "Preparing pipelines with the game closed ($why)"
     Say 'Compiles everything the game asked for, so the next launch shows it at once. Can take a few minutes the first time.'
     $log = Join-Path $LogDir 'prepare.log'
+    $all = ("$($c.shaders_all)" -ne "$($c.built_key)") -and $c.game_dir -and (Test-Path -LiteralPath $c.game_dir) -and ($env:VICTORY_TRY_ALL_SHADERS -ne '0')
+    if ($all) { Say 'Once per build: every shader in the game''s files is translated too (10-30 minutes the first time; stopping it is fine, the game translates the rest itself).' }
     Push-Location $TryHome
     try {
-        & (Ours-Exe) prepare 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Where-Object { $_ -match '^(prepar|translated)' }
+        if ($all) {
+            & (Ours-Exe) prepare $c.game_dir 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Where-Object { $_ -match '^(prepar|translat)' }
+        } else {
+            & (Ours-Exe) prepare 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Where-Object { $_ -match '^(prepar|translat)' }
+        }
         $code = $LASTEXITCODE
     } finally { Pop-Location }
     if ($code -eq 0) { Say 'pipelines prepared' }
     else { Bad "preparing stopped (code $code; output in $log): the game makes the rest itself" }
     # Not again for this build and these recipes either way: a failure would repeat each launch.
     $c.prepared = $c.built_key
+    if ($all) { $c.shaders_all = $c.built_key }
     $c.recipes = Recipes-Size
     Save-Config
 }
@@ -1426,6 +1440,7 @@ function Run-Game {
     if (EngineAvm) { Set-EngineAvmEnv; Prepare-Avm 'new build or new pipelines' }
     elseif (Engine8) { Set-Engine8Env }
     elseif ("$($c.prepared)" -ne "$($c.built_key)") { Prepare-Shaders 'new build' }
+    elseif ((OwnEngine) -and "$($c.shaders_all)" -ne "$($c.built_key)" -and $env:VICTORY_TRY_ALL_SHADERS -ne '0') { Prepare-Shaders 'every shader of the game, once per build' }
     elseif ("$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from the last run' }
     # The shared pipeline list (keys of pipelines other players met, no
     # game files): the game starts making them while it loads.
@@ -1807,6 +1822,7 @@ if (OwnEngine) {
     if ($changed -or -not (Test-Path (Ours-Exe))) { if (-not (Build-All)) { exit 1 } }
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
 if (OwnEngine) {
+    Say '6.11: shader stutter: the pipeline library is read into memory ahead on 16 GB PCs too (it was skipped: every pipeline in play waited on the disk), every shader of the game translated once per build with the game closed; joined submissions, copy-back split finer over the cores (lepotane), anisotropic filtering keeps point mips (AvatarManz).'
     Say '6.10: this fork''s engine again (the base stays; the others'' fixes come into it): AMD''s PC FidelityFX upscaler makes the picture (FSR 3.1 on NVIDIA; T switches), sharper own upscaler without blocks on lit surfaces, shaders AMD''s compiler made are read, the game''s debug shaders stored without packing too.'
 }
 if (EngineAvm) {
@@ -1970,7 +1986,7 @@ while ($true) {
     }
     if ($k -eq 'Q') { exit 0 }
     if ($k -eq 'G') { while (-not (Ask-Game $true)) {} }
-    if ($k -eq 'P') { $script:Config.prepared = ''; $script:Config.recipes = ''; $script:Config.avm_shaders = ''; $script:Config.avm_warm = '' }
+    if ($k -eq 'P') { $script:Config.prepared = ''; $script:Config.recipes = ''; $script:Config.shaders_all = ''; $script:Config.avm_shaders = ''; $script:Config.avm_warm = '' }
     if ($k -eq 'U') {
         $script:FsrRetry = $true
         $changed = Update-Source

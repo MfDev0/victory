@@ -42,8 +42,11 @@ impl Fields {
             2 => 3,
             _ => u32::from(compares),
         };
+        // Anisotropic with point mips stays so where the card can do it
+        // (avm 011735ff, upstream e45bacd/23fc8a5/7dfa86f): it was made
+        // linear between levels, which the console does not do.
         let filter = if aniso {
-            0x55
+            host_filter(0x54 | u32::from(self.mip == 2))
         } else {
             linear(self.min) << 4 | linear(self.mag) << 2 | u32::from(self.mip == 2)
         };
@@ -86,6 +89,7 @@ impl Fields {
 ///   (`VICTORY_LOD_BIAS` sets the bias, in hundredths: -50 is -0.5).
 pub(crate) fn enhance(desc: &mut D3D12_SAMPLER_DESC) {
     let (aniso, bias) = enhancement();
+    desc.Filter = D3D12_FILTER(host_filter(desc.Filter.0 as u32) as i32);
     let filter = desc.Filter.0 as u32;
     // Reduction (bits 7-8) plain; mip linear (bit 0) and min linear (bit
     // 4), or anisotropic already (bit 6).
@@ -95,12 +99,50 @@ pub(crate) fn enhance(desc: &mut D3D12_SAMPLER_DESC) {
         return;
     }
     if aniso > 1 {
-        desc.Filter = D3D12_FILTER_ANISOTROPIC;
+        // An anisotropic filter keeps its own mip filter (point mips where
+        // the card has them: [`host_filter`]); trilinear ones become
+        // anisotropic.
+        if filter & 0x40 == 0 {
+            desc.Filter = D3D12_FILTER_ANISOTROPIC;
+        }
         desc.MaxAnisotropy = desc.MaxAnisotropy.max(aniso);
     }
     if bias != 0.0 {
         desc.MipLODBias = (desc.MipLODBias + bias).clamp(-16.0, 15.99);
     }
+}
+
+/// Whether the card filters anisotropically with point mips
+/// (`D3D12_OPTIONS19`, optional): asked once the device is there.
+pub(crate) fn aniso_point_mip() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if let Some(&on) = ON.get() {
+        return on;
+    }
+    let Some(host) = crate::host::host() else { return false };
+    *ON.get_or_init(|| {
+        let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS19::default();
+        // SAFETY: the feature query writes the structure of the given size.
+        // Older runtimes may not recognize OPTIONS19; that means no support.
+        let on = unsafe {
+            host.device.CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS19,
+                (&raw mut options).cast(),
+                size_of_val(&options) as u32,
+            )
+        }
+        .is_ok()
+            && options.AnisoFilterWithPointMipSupported.as_bool();
+        tracing::info!(on, "anisotropic filtering with point mips on the card (D3D12_OPTIONS19)");
+        on
+    })
+}
+
+/// A host filter the card takes: anisotropic with point mips becomes
+/// anisotropic with linear mips where the card lacks it (reduction bits
+/// kept).
+pub(crate) fn host_filter(filter: u32) -> u32 {
+    if filter & !0x180 == 0x54 && !aniso_point_mip() { filter | 1 } else { filter }
 }
 
 /// The same for a static sampler of a root signature.
@@ -114,7 +156,7 @@ pub(crate) fn enhance_static(filter: &mut u32, max_anisotropy: &mut u32, bias: &
         ..Default::default()
     };
     enhance(&mut desc);
-    *filter = desc.Filter.0 as u32;
+    *filter = host_filter(desc.Filter.0 as u32);
     *max_anisotropy = desc.MaxAnisotropy;
     *bias = desc.MipLODBias;
 }

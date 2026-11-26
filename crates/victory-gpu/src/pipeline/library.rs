@@ -236,12 +236,20 @@ impl Blob {
 }
 
 /// Try 6.4: the mapped library file read into memory at the start, on a
-/// thread of its own, while the PC has its memory to spare (the file and 4
-/// GB more free; `VICTORY_LIBRARY_PREFETCH=0`: not). The pipelines the
-/// title asks for at the loading screen then load from memory: in the 6.2
-/// report pipelines loaded from the library took 2.6-4.5 s each there,
-/// read page by page from the disk. (A hint to the system: the pages are
-/// the file's, which it may drop again when memory runs short.)
+/// thread of its own, while the PC has its memory to spare
+/// (`VICTORY_LIBRARY_PREFETCH=0`: not). The pipelines the title asks for at
+/// the loading screen then load from memory: in the 6.2 report pipelines
+/// loaded from the library took 2.6-4.5 s each there, read page by page
+/// from the disk. (A hint to the system: the pages are the file's, which it
+/// may drop again when memory runs short.)
+///
+/// Try 6.11: the room left free after it is 1 GB (4 GB before;
+/// `VICTORY_LIBRARY_PREFETCH_ROOM_MB` sets it), and with less free than the
+/// whole file needs the front of it is read ahead, as much as fits (the
+/// library is written in the order runs asked for pipelines, the loading
+/// screen's first). On a 16 GB laptop with 4.2 GB free the 773 MB library
+/// was not read ahead at all in the 6.7 report, so every pipeline loaded
+/// from it in play waited on the disk: stutter while "shaders compile".
 fn prefetch(at: usize, len: usize) {
     if len == 0 || std::env::var_os("VICTORY_LIBRARY_PREFETCH").is_some_and(|v| v == "0") {
         return;
@@ -252,13 +260,31 @@ fn prefetch(at: usize, len: usize) {
     m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
     // SAFETY: a sized structure.
     let free = if unsafe { GlobalMemoryStatusEx(&mut m) } != 0 { m.ullAvailPhys } else { 0 };
-    if free < len as u64 + (4 << 30) {
+    let room = std::env::var("VICTORY_LIBRARY_PREFETCH_ROOM_MB")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(1024)
+        << 20;
+    let fits = usize::try_from(free.saturating_sub(room)).unwrap_or(usize::MAX);
+    // Less than 64 MB is not worth a thread.
+    if fits < 64 << 20 {
         tracing::info!(
             free_mb = free >> 20,
             library_mb = len >> 20,
-            "host pipeline library not read ahead: the PC has too little memory free"
+            room_mb = room >> 20,
+            "host pipeline library not read ahead: the PC has too little memory free (VICTORY_LIBRARY_PREFETCH_ROOM_MB)"
         );
         return;
+    }
+    let whole = len;
+    let len = len.min(fits);
+    if len < whole {
+        tracing::info!(
+            free_mb = free >> 20,
+            library_mb = whole >> 20,
+            read_mb = len >> 20,
+            "host pipeline library read ahead in part: the front of it, as much as leaves the PC its room free"
+        );
     }
     let spawned = std::thread::Builder::new().name("library read-ahead".into()).spawn(move || {
         use windows_sys::Win32::System::Memory::{PrefetchVirtualMemory, WIN32_MEMORY_RANGE_ENTRY};

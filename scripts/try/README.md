@@ -568,6 +568,20 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.11 ("no disk stutter"; plan and to-do in `scripts/try/PLAN.md`):
+   - The pipeline library's read-ahead leaves 1 GB free (4 GB before;
+     `VICTORY_LIBRARY_PREFETCH_ROOM_MB`), and reads the front of the file
+     when the whole does not fit: on a 16 GB PC it was skipped, and every
+     pipeline loaded in play waited on the disk.
+   - `victory prepare <game folder>` once per build (Try; config
+     `shaders_all`, P resets it, `VICTORY_TRY_ALL_SHADERS=0` skips it):
+     every shader of the game translated ahead, a progress line every 2,000.
+   - `VICTORY_JOIN_PARTS=1` in the Y set (fxceless's speed set).
+   - `WIDE_JOB` 256 KiB (lepotane/VIctory-leonida c6c9da9f).
+   - Anisotropic point-mip samplers kept where `D3D12_OPTIONS19` says the
+     card has them (avatarmanz 011735ff, upstream e45bacd/23fc8a5/7dfa86f),
+     also through our sharper-surfaces override.
+   - xtask policy: Rust sources up to 1 MiB.
    6.10 ("own engine + AMD upscaler"; plan and to-do in `scripts/try/PLAN.md`):
    - **This fork's engine is the default again and stays the base**; avm
      and 8GB are on N for comparing only. Fixes of the other forks are

@@ -1785,8 +1785,11 @@ pub(crate) fn wide_run(jobs: Vec<Box<dyn FnOnce() + Send>>) {
     wide(jobs);
 }
 
-/// About this many bytes to a piece of work for [`wide`].
-const WIDE_JOB: usize = 1 << 20;
+/// About this many bytes to a piece of work for [`wide`]: 256 KiB (1 MiB
+/// before), so that a submission's typical 1.5-2 MB of snapshots and
+/// copy-back fans out over all the workers instead of two (lepotane/
+/// VIctory-leonida c6c9da9f; Try 6.11).
+const WIDE_JOB: usize = 256 << 10;
 
 /// With [`wide_back`]: the snapshots noted while a submission is prepared
 /// (from, to, bytes), taken by [`take_snapshots`].

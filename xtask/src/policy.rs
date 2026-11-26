@@ -11,6 +11,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 const MAX_FILE_SIZE: usize = 512 * 1024;
+/// The limit for a Rust source file (see [`check`]).
+const MAX_RUST_SOURCE: usize = 1024 * 1024;
 const MAX_ENCODED_RUN: usize = 512;
 
 const ALLOWED_EXTENSIONS: &[&str] = &[
@@ -208,11 +210,12 @@ pub fn check(path: &str, content: &[u8]) -> Vec<String> {
     if !allowed {
         problems.push("file type not on the allowlist".to_owned());
     }
-    if content.len() > MAX_FILE_SIZE {
-        problems.push(format!(
-            "{} bytes exceeds the {MAX_FILE_SIZE}-byte limit",
-            content.len()
-        ));
+    // Rust sources may be twice as long: the renderer's `host.rs` and the
+    // translator's `lower.rs` passed 512 KiB with the forks' ports, and they
+    // are text (the hex/base64 check below still applies).
+    let limit = if ext.as_deref() == Some("rs") { MAX_RUST_SOURCE } else { MAX_FILE_SIZE };
+    if content.len() > limit {
+        problems.push(format!("{} bytes exceeds the {limit}-byte limit", content.len()));
     }
     for (magic, what) in FORBIDDEN_MAGIC {
         if content.starts_with(magic) {
@@ -282,7 +285,7 @@ mod tests {
             "extension not allowed"
         );
         assert!(
-            !check("a.rs", &vec![b'a'; 600 * 1024]).is_empty(),
+            !check("a.rs", &b"fn a() {}\n".repeat(110 * 1024)).is_empty(),
             "too big"
         );
     }
