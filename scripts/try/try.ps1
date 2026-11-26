@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.1'
+$TryVersion = '6.2'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -1290,7 +1290,7 @@ if (-not (Engine8)) {
 if (Engine8) {
     Say 'engine: the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb). N goes back to this fork''s engine.'
 } else {
-    Say '6.1: this fork''s engine, with the 6.0 speed fixes and loading-screen pre-loading (all CPU cores, the card''s queues first, the CPU''s own graphics for other programs). N switches to the 8 GB engine.'
+    Say '6.2: this fork''s engine: the whole picture first, detail after; loading screens pre-load; the 6.0 speed fixes (all CPU cores, the card''s queues first, the CPU''s own graphics for other programs). N switches to the 8 GB engine.'
 }
 
 # Every command of the menu: its key, what it is, whether it is on now, and

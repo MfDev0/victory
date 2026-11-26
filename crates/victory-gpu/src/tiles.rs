@@ -159,11 +159,49 @@ pub(crate) fn small_tiles() -> u32 {
 /// 5.6 and 5.7 dropped one level on such cards always: blurred even with
 /// memory to spare.
 pub(crate) fn top_dropped() -> u32 {
-    match quality_base() {
+    let quality = match quality_base() {
         None | Some(Quality::Full) => 0,
         Some(Quality::Fixed(n)) => n,
         Some(Quality::Adaptive) => adaptive_drop(),
+    };
+    // (While the rush is on, textures made blurred wait for it to end
+    // before `sharpen` makes them whole: the rush's own levels are left
+    // out at the detile, `texture.rs`.)
+    quality.max(rush_levels())
+}
+
+/// Try 6.2, the picture first and the detail after (as streaming engines
+/// do): while the queue of textures picked by index has a backlog (1,500
+/// or more due; it ends under 300), a texture made level by level is
+/// detiled and uploaded without its largest levels of 512 KiB or more (at
+/// most `VICTORY_TEXTURE_RUSH` of them, 2 unless set, 0: off; never past
+/// the fourth level from the smallest). Two levels left out are about a
+/// sixteenth of the bytes and the CPU time, so the whole scene is there,
+/// soft, in a fraction of the time; when the backlog has drained, the
+/// textures made that way get their full detail back
+/// (`crate::descriptor::host::sharpen`) while the game plays. In the world
+/// 17,000 slots were due and textures came in one by one over a minute.
+pub(crate) fn rush_levels() -> u32 {
+    static N: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let n = *N.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_RUSH").ok().and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(2).min(3)
+    });
+    if n == 0 {
+        return 0;
     }
+    let due = crate::draw::HEAP_TEXTURES_QUEUE[1].load(Ordering::Relaxed);
+    let was = ON.load(Ordering::Relaxed);
+    let now = if was { due >= 300 } else { due >= 1500 };
+    if now != was && ON.compare_exchange(was, now, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+        tracing::info!(
+            due,
+            on = now,
+            levels = n,
+            "texture rush (VICTORY_TEXTURE_RUSH): the scene first without the largest levels, the detail after"
+        );
+    }
+    if now { n } else { 0 }
 }
 
 /// Whether textures are made level by level whatever they hold, for

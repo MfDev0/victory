@@ -467,6 +467,16 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      73 %), and 1,024 blurred textures a pass made sharp again (256 before);
    - **DirectStorage workers above normal priority** (the title's streamer
      waits for them; `VICTORY_WIDE_PRIORITY=0`: normal).
+   6.2 (6.0 and 6.1: the picture right, but it takes long to come in):
+   - **the picture first, the detail after**: while 1,500 or more textures
+     picked by index are due (until under 300), a texture made level by
+     level is detiled and uploaded without its largest levels of 512 KiB or
+     more (`VICTORY_TEXTURE_RUSH`, 2 unless set, 0: off; never past the
+     fourth level from the smallest): about a sixteenth of the bytes and
+     CPU time, so the whole scene is there, soft, in a fraction of the
+     time. When the backlog has drained, those textures are uploaded whole
+     again (`sharpen`, 1,024 a pass) and textures that draws read through
+     tables are detiled whole at their next use.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,

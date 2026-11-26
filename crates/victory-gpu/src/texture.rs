@@ -69,6 +69,10 @@ pub(crate) struct Staging {
     /// recorded again about a second later if the card has room by then
     /// ([`upload`]).
     waiting: std::sync::atomic::AtomicU64,
+    /// For such a texture: the largest levels the last detile left out for
+    /// the texture rush (`crate::tiles::rush_levels`; a bit a level, 0:
+    /// none). Detiled again with every level once the rush is over.
+    rushed: std::sync::atomic::AtomicU32,
 }
 
 /// What a texture's staging buffer holds: the hash of the memory detiled
@@ -607,6 +611,13 @@ pub(crate) fn upload(list: &HostList, resource: This, texture: &ID3D12Resource) 
         staging.forget();
         staging.dirty.store(true, Relaxed);
     }
+    // The texture rush is over: a texture detiled without its largest
+    // levels is detiled again whole and uploaded by this list.
+    if staging.on_demand && staging.rushed.load(Relaxed) != 0 && crate::tiles::rush_levels() == 0 {
+        staging.rushed.store(0, Relaxed);
+        staging.forget();
+        staging.dirty.store(true, Relaxed);
+    }
     // Levels on demand: the last upload left a held level without tiles
     // (the card had no room, or no heap could be had), and nothing else
     // would record an upload again until the title writes the texture: the
@@ -715,6 +726,11 @@ pub(crate) fn upload(list: &HostList, resource: This, texture: &ID3D12Resource) 
     list.defer_after_textures(move || {
         let waiting = on_demand.uploaded(staging.detiled.load(Relaxed), staging.memory as u64);
         staging.waiting.store(if waiting { crate::host::moment().max(1) } else { 0 }, Relaxed);
+        // Uploaded without its largest levels for the rush: made whole
+        // again when it is over, as a texture made blurred is.
+        if staging.rushed.load(Relaxed) != 0 {
+            crate::descriptor::host::blurred(staging.memory as u64);
+        }
         // A texture picked by index has no staging buffer after this
         // upload: its slots are made due again by the texture pass.
         if waiting {
@@ -1096,7 +1112,14 @@ impl Staging {
             let judged = self.judgement();
             self.judged[0].store(judged[0], Relaxed);
             self.judged[1].store(judged[1], Relaxed);
-            let held = self.held_levels(judged);
+            // The texture rush leaves the largest levels out: not held, so
+            // they get no memory and views start below them.
+            let rush = self.rush_mask();
+            if rush != 0 {
+                RUSHED.fetch_add(1, Relaxed);
+            }
+            self.rushed.store(rush, Relaxed);
+            let held = self.held_levels(judged) & !rush;
             self.detiled.store(held, Relaxed);
             held
         } else {
@@ -1135,6 +1158,36 @@ impl Staging {
                 return;
             }
         }
+    }
+}
+
+/// Textures detiled without their largest levels for the texture rush
+/// (`crate::tiles::rush_levels`), since the start.
+pub(crate) static RUSHED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+impl Staging {
+    /// The largest levels the texture rush leaves out of this texture now
+    /// (`crate::tiles::rush_levels`): from level 0, those of 512 KiB or
+    /// more on the host, never past the fourth level from the smallest.
+    fn rush_mask(&self) -> u32 {
+        let n = crate::tiles::rush_levels();
+        if n == 0 || self.mips < 5 {
+            return 0;
+        }
+        let mut mask = 0;
+        for level in 0..n.min(self.mips - 4) {
+            let i = level as usize;
+            let (Some(f), Some(&rows)) = (self.footprints.get(i), self.rows.get(i)) else {
+                break;
+            };
+            let f = f.Footprint;
+            let bytes = u64::from(f.RowPitch) * u64::from(rows) * u64::from(f.Depth);
+            if bytes < 512 << 10 {
+                break;
+            }
+            mask |= 1 << level;
+        }
+        mask
     }
 }
 
@@ -1521,6 +1574,7 @@ fn staging(resource: This, texture: &ID3D12Resource) -> Option<Arc<Staging>> {
         detiled: std::sync::atomic::AtomicU32::new(0),
         judged: [const { std::sync::atomic::AtomicU64::new(0) }; 2],
         waiting: std::sync::atomic::AtomicU64::new(0),
+        rushed: std::sync::atomic::AtomicU32::new(0),
     });
     map.insert(resource as usize, s.clone());
     Some(s)
