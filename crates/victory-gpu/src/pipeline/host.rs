@@ -152,6 +152,87 @@ fn host_blend(blend: &D3D12_BLEND_DESC, targets: &D3D12_RT_FORMAT_ARRAY) -> D3D1
     host
 }
 
+/// The formats of what a draw draws into, as the host has them: the eight
+/// render targets (0 where there is none), then depth (0 for none)
+/// (fxceless).
+pub(crate) type TargetFormats = [u32; 9];
+
+/// Whether a draw into views of the formats `bound` cannot go to the host
+/// with a pipeline that declares `declared`: a render target slot for which
+/// the pipeline declares a format AND a view of another format is bound. On
+/// the console the format is the view's, and the title draws so (a
+/// pipeline declaring R10G10B10A2_UNORM into an R11G11B10_FLOAT target); on
+/// the host that draw is an invalid call. A slot nothing is bound to does
+/// not count; nor a view in a slot the pipeline declares nothing for; nor
+/// the depth view (its own format can be a typeless one).
+pub(crate) fn formats_differ(declared: &TargetFormats, bound: &TargetFormats) -> bool {
+    declared[..8].iter().zip(&bound[..8]).any(|(&d, &b)| d != 0 && b != 0 && b != d)
+}
+
+/// The formats a pipeline for a draw into `bound` declares
+/// ([`formats_differ`]): the title's own, but for the render target slots
+/// it declares a format for and a view of another format is bound to,
+/// which take the view's. The count of targets and the depth format stay
+/// the title's.
+pub(crate) fn formats_for(declared: &TargetFormats, bound: &TargetFormats) -> TargetFormats {
+    let mut formats = *declared;
+    for i in 0..8 {
+        if declared[i] != 0 && bound[i] != 0 {
+            formats[i] = bound[i];
+        }
+    }
+    formats
+}
+
+impl GraphicsState {
+    /// A state that declares one render target, of format `format` (tests).
+    #[cfg(test)]
+    pub(crate) fn declaring(format: i32) -> Self {
+        let mut g = Self::default();
+        g.targets.NumRenderTargets = 1;
+        g.targets.RTFormats[0] = DXGI_FORMAT(format);
+        g
+    }
+
+    /// The formats the state declares ([`TargetFormats`]): nothing past its
+    /// count of render targets.
+    pub(crate) fn formats(&self) -> TargetFormats {
+        let mut formats = [0; 9];
+        let n = (self.targets.NumRenderTargets as usize).min(8);
+        for (to, from) in formats.iter_mut().zip(&self.targets.RTFormats[..n]) {
+            *to = from.0 as u32;
+        }
+        formats[8] = self.depth_format.0 as u32;
+        formats
+    }
+
+    /// The same state for a draw into views of the formats `bound` (what
+    /// [`formats_for`] gives): those render target formats, everything else
+    /// the title's. Blending is decided again for them when the pipeline is
+    /// made ([`host_blend`]). Its [`GraphicsState::describe`] differs (the
+    /// formats are part of it), so its host pipeline has a name of its own
+    /// in the library.
+    pub(crate) fn with_formats(&self, bound: &TargetFormats) -> GraphicsState {
+        let mut g = self.derive();
+        let n = (g.targets.NumRenderTargets as usize).min(8);
+        for (to, &from) in g.targets.RTFormats[..n].iter_mut().zip(bound) {
+            *to = DXGI_FORMAT(from as i32);
+        }
+        g
+    }
+
+    /// Whether the title's blend state blends into a render target that
+    /// holds integers, which the host pipeline turns off ([`host_blend`]).
+    pub(crate) fn integer_targets_do_not_blend(&self) -> bool {
+        let count = (self.targets.NumRenderTargets as usize).min(8);
+        let per_target = self.blend.IndependentBlendEnable.as_bool();
+        (0..count).any(|i| {
+            integer_format(self.targets.RTFormats[i])
+                && self.blend.RenderTarget[if per_target { i } else { 0 }].BlendEnable.as_bool()
+        })
+    }
+}
+
 /// The layout [`GraphicsState::encode`] writes; a change to it changes this.
 const RECIPE_STATE_VERSION: u32 = 1;
 
@@ -1578,6 +1659,32 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use super::*;
+
+    /// A draw needs another host pipeline only for a bound view whose
+    /// format its pipeline does not name for that slot (fxceless).
+    #[test]
+    fn bound_formats_are_compared_slot_by_slot() {
+        let mut g = GraphicsState::default();
+        g.targets.NumRenderTargets = 2;
+        g.targets.RTFormats[0] = DXGI_FORMAT_R10G10B10A2_UNORM;
+        g.targets.RTFormats[1] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        // Past the count: not declared.
+        g.targets.RTFormats[2] = DXGI_FORMAT_R8_UINT;
+        g.depth_format = DXGI_FORMAT_D32_FLOAT;
+        let declared = g.formats();
+        assert_eq!(declared, [24, 28, 0, 0, 0, 0, 0, 0, 40]);
+        assert!(!formats_differ(&declared, &declared));
+        assert!(!formats_differ(&declared, &[24, 0, 0, 0, 0, 0, 0, 0, 40]));
+        assert!(!formats_differ(&declared, &[0; 9]));
+        assert!(formats_differ(&declared, &[26, 28, 0, 0, 0, 0, 0, 0, 40]));
+        assert!(!formats_differ(&declared, &[24, 28, 28, 0, 0, 0, 0, 0, 40]));
+        assert!(!formats_differ(&declared, &[24, 28, 0, 0, 0, 0, 0, 0, 45]));
+        assert_eq!(formats_for(&declared, &[26, 28, 28, 0, 0, 0, 0, 0, 45]), [26, 28, 0, 0, 0, 0, 0, 0, 40]);
+        assert_eq!(formats_for(&declared, &declared), declared);
+        let v = g.with_formats(&formats_for(&declared, &[26, 0, 0, 0, 0, 0, 0, 0, 0]));
+        assert_eq!(v.formats(), [26, 28, 0, 0, 0, 0, 0, 0, 40]);
+        assert_ne!(v.describe(), g.describe());
+    }
 
     fn targets(formats: &[DXGI_FORMAT]) -> D3D12_RT_FORMAT_ARRAY {
         let mut t = D3D12_RT_FORMAT_ARRAY {
