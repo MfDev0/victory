@@ -238,6 +238,30 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      each upload the card re-checks the pieces it received, about 1,900
      tiny one-after-the-other passes a frame; now one pass per run of
      pieces. The same pieces are checked either way.
+   4.9, this fork's engine again, with AvatarManz's fixes copied in
+   (avatarmanz/VIctory-7900XTX, its fixes only, not its engine):
+   - **no more waiting for the card every frame** for memory the game
+     changed under the card's writes: each frame of the 2026-11-25 report
+     stood 400 ms for the card while only 3 pages were checked. The changed
+     bytes are now put in beside the card's writes (`VICTORY_MERGE_RUNS`,
+     `VICTORY_MERGE_UNWATCHED_MB`), so the CPU and the card work together;
+   - **the card is kept awake** between the game's submissions
+     (`VICTORY_CARD_AWAKE=1`): it stood idle 180 ms a frame and lowered its
+     clocks;
+   - **textures show on a full card**: the 8 GB card was full for the
+     whole run and 17,000 textures waited for room, drawn black or grey.
+     Now a new texture gets memory for its small levels only (blurred, with
+     its colours) until there is room (`VICTORY_SQUEEZE_TILES`, 0: off);
+   - **textures stop popping to black**: a slot that gets a sharper or moved
+     copy of its texture keeps showing the old one until the new one is up
+     (`VICTORY_KEEP_SHOWN=1`);
+   - **shader fixes**: exact values from packed buffer formats (wrong
+     materials), cube-map reflections at the right sharpness, unordered
+     views of vertex programs declared;
+   - render targets not set again when they did not change
+     (`VICTORY_BIND_CACHE`), ranges of changed memory joined before the
+     texture lookup;
+   - the report lists which programs the dropped draws belong to.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
