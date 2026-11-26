@@ -704,7 +704,8 @@ pub(crate) fn upload(list: &HostList, resource: This, texture: &ID3D12Resource) 
         return;
     };
     list.defer_texture(staging.clone());
-    list.defer_host(move || {
+    // After the check: it judges which levels are held (`detiled`).
+    list.defer_after_textures(move || {
         let waiting = on_demand.uploaded(staging.detiled.load(Relaxed), staging.memory as u64);
         staging.waiting.store(if waiting { crate::host::moment().max(1) } else { 0 }, Relaxed);
         // A texture picked by index has no staging buffer after this

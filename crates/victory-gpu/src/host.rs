@@ -1909,6 +1909,16 @@ enum Step {
     Run(Box<dyn Fn() + Send>),
     /// Work that writes host memory only.
     Host(Box<dyn Fn() + Send>),
+    /// Work that writes host memory only and reads what the texture checks
+    /// before it found (levels on demand: the levels a staging buffer holds
+    /// are judged when it is detiled). The checks run in batches, on several
+    /// threads, at the next `Copy` or `Run` or at the end; a `Host` step ran
+    /// before them, so the step that gives levels their memory always saw
+    /// none held and no texture made level by level ever got memory: 1,448
+    /// such textures, 2.9 GB, drawn black for the whole run (2026-11-26
+    /// report, "0 MB of the card given to 0 levels"). These run right after
+    /// the batch before them.
+    AfterTextures(Box<dyn Fn() + Send>),
     /// Shaders write a range (address, bytes) of a buffer's host copy.
     GpuWrite(std::sync::Arc<crate::shadow::Shadow>, usize, usize),
     /// Brings a texture's staging buffer up to date: once per submission,
@@ -2530,7 +2540,7 @@ fn blocked_by(written: &[(usize, usize)], runs: &[&HostList], count: bool) -> Op
                     }
                 }
                 Step::Run(_) => return Some(WHY_RUN),
-                Step::Refresh(..) | Step::GpuWrite(..) | Step::Host(_) => {}
+                Step::Refresh(..) | Step::GpuWrite(..) | Step::Host(_) | Step::AfterTextures(_) => {}
             }
         }
     }
@@ -6365,6 +6375,12 @@ impl HostList {
         self.deferred().copies.push(Step::Host(Box::new(work)));
     }
 
+    /// As [`HostList::defer_host`], for work that reads what the texture
+    /// checks recorded before it found: run once those checks are done.
+    pub(crate) fn defer_after_textures(&self, work: impl Fn() + Send + 'static) {
+        self.deferred().copies.push(Step::AfterTextures(Box::new(work)));
+    }
+
     /// Brings a texture's staging buffer up to date when the list is
     /// submitted, keeping it alive until the list is reset.
     pub(crate) fn defer_texture(&self, staging: std::sync::Arc<crate::texture::Staging>) {
@@ -6380,9 +6396,15 @@ impl HostList {
         // Texture checks in a row, done together on several threads before
         // the next step that writes title memory, and at the end.
         let mut textures: Vec<std::sync::Arc<crate::texture::Staging>> = Vec::new();
-        for step in &self.deferred().copies {
+        let deferred = self.deferred();
+        // Steps that wait for the texture checks before them.
+        let mut after: Vec<&(dyn Fn() + Send)> = Vec::new();
+        for step in &deferred.copies {
             if matches!(step, Step::Copy(..) | Step::Run(_)) {
                 refresh_textures(&mut textures);
+                for work in after.drain(..) {
+                    work();
+                }
             }
             let started = std::time::Instant::now();
             let copied = match step {
@@ -6456,11 +6478,22 @@ impl HostList {
                     }
                     continue;
                 }
+                Step::AfterTextures(work) => {
+                    if textures.is_empty() {
+                        work();
+                    } else {
+                        after.push(work.as_ref());
+                    }
+                    continue;
+                }
             };
             PREPARING[0].fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
             PREPARING[1].fetch_add(copied as u64, Ordering::Relaxed);
         }
         refresh_textures(&mut textures);
+        for work in after.drain(..) {
+            work();
+        }
     }
 }
 

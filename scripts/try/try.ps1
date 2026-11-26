@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '5.5'
+$TryVersion = '5.6'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -768,7 +768,28 @@ function Log-Vram([string]$log) {
     if (-not $log -or -not (Test-Path -LiteralPath $log)) { return 0 }
     $m = Select-String -LiteralPath $log -Pattern 'vram_budget_mb(?:\x1b\[[0-9;]*m|=)*([0-9]+)' -List -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($m -and $m.Matches.Count -gt 0) { return [int]$m.Matches[0].Groups[1].Value }
+    # 5.6: the game log is UTF-16 without a mark, which Select-String
+    # misreads: read the bytes and decode them ourselves.
+    try {
+        $bytes = [IO.File]::ReadAllBytes($log)
+        $n = [Math]::Min($bytes.Length, 4MB)
+        $text = if ($n -gt 1 -and $bytes[1] -eq 0) { [Text.Encoding]::Unicode.GetString($bytes, 0, $n - ($n % 2)) } else { [Text.Encoding]::UTF8.GetString($bytes, 0, $n) }
+        $mm = [regex]::Match($text, 'vram_budget_mb(?:\x1b\[[0-9;]*m|=)*([0-9]+)')
+        if ($mm.Success) { return [int]$mm.Groups[1].Value }
+    } catch {}
     return 0
+}
+# 5.6: the card's own memory in MB from the driver's registry entry (the
+# largest card), or 0. Known before any game log exists.
+function Card-Vram {
+    $best = [int64]0
+    try {
+        Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*' -ErrorAction SilentlyContinue | ForEach-Object {
+            $q = $_.'HardwareInformation.qwMemorySize'
+            if ($q -and [int64]$q -gt $best) { $best = [int64]$q }
+        }
+    } catch {}
+    return [int]($best / 1MB)
 }
 # 5.5: cards with less than 8 GB of budget (6 and 8 GB cards) run as Series S
 # once by themselves. Series X's render targets took 2.3 to 3 GB of them, and
@@ -778,16 +799,20 @@ function Log-Vram([string]$log) {
 # after that the choice stays yours.
 function Auto-Console {
     $c = $script:Config
-    if ($c.console_auto -eq '5.5') { return }
+    if ($c.console_auto -eq '5.6') { return }
     if (-not $c.vram) {
         $last = Get-ChildItem -LiteralPath $LogDir -Filter 'game-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
         if ($last) { $v = Log-Vram $last.FullName; if ($v -gt 0) { $c.vram = [string]$v } }
     }
-    if (-not $c.vram) { return }
-    $c.console_auto = '5.5'
-    if ([int]$c.vram -lt 8000 -and $c.console -eq 'series-x') {
+    # 5.6: no budget from a log (5.5 never found it): the card's own memory.
+    $card = Card-Vram
+    $small = ($c.vram -and [int]$c.vram -lt 8000) -or ($card -gt 0 -and $card -le 9000)
+    if (-not $c.vram -and $card -le 0) { return }
+    $c.console_auto = '5.6'
+    if ($small -and $c.console -eq 'series-x') {
         $c.console = 'series-s'
-        Say "your card's memory budget is $($c.vram) MB: switched to Series S (less card memory, so textures load instead of staying black). C goes back to Series X."
+        $what = $(if ($c.vram) { "memory budget is $($c.vram) MB" } else { "memory is $card MB" })
+        Say "your card's $what`: switched to Series S (less card memory, so textures load instead of staying black). C goes back to Series X."
     }
     Save-Config
 }
@@ -1056,7 +1081,7 @@ while ($true) {
             'W' { $c.shadowfix = $(if ($c.shadowfix -eq 'off') { '' } else { 'off' }) }
             'K' { $c.gpucopy = $(if ($c.gpucopy -eq 'off') { '' } else { 'off' }) }
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
-            'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.5' }
+            'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.6' }
             'D' { Reset-Recommended; $c = $script:Config }
             default { $switched = $false }
         }

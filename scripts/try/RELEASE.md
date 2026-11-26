@@ -1,7 +1,7 @@
-VIctory Try 5.5
-- Fix for black roads, buildings and characters: the card ran out of room and 17,000-27,000 textures waited (both reports)
-- Cards under 8 GB switch to Series S once by themselves (much less card memory); press C to go back
-- Less card memory kept aside for render targets (1.5 GB on Series S, max 35% of the card instead of 3 GB)
-- Textures with no room now load blurry instead of staying black
-- Texture loading is no longer slowed down when PC memory is low
-- The summary shows how many textures were still waiting at the end
+VIctory Try 5.6
+- Found the main cause of black textures: 1,448 big textures (2.9 GB) never got their memory because the memory step ran before the texture was read. Fixed
+- Texture quality for 6 and 8 GB cards: the largest level of big textures is skipped (like "medium" in PC games), so about 3x more textures fit
+- Every big texture now only takes memory for the levels it actually shows
+- Faster texture memory setup (one call per texture instead of one per level)
+- Textures still load (blurry) when the card is slightly over its budget, instead of black
+- Auto Series S now reads your card's memory from Windows, so it works on the first run

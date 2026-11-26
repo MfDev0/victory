@@ -1332,16 +1332,23 @@ fn hosted(this: This, make: bool) -> Option<Made> {
             && r.desc.depth_or_array_size == 1
             && r.desc.mip_levels > 1
             && r.desc.sample_count <= 1;
-        if shape_fits && r.host.placed.load(Relaxed) && crate::tiles::wanted() {
+        // (Texture objects too, on a card where texture quality drops the
+        // largest levels: `crate::tiles::top_dropped`.)
+        if shape_fits && (r.host.placed.load(Relaxed) || crate::tiles::top_dropped() > 0) && crate::tiles::wanted() {
             let bytes = footprint(&r.desc).map_or(0, |f| f.size);
             let start = r.data() as u64;
             // What the upload can read: a console layout, no XOR mode
             // (`crate::texture` `staging`).
             let readable = texture_layout(&r.desc).is_some_and(|t| !t.planes[0].layout.desc.swizzle.xor());
+            // On a card where texture quality drops the largest levels
+            // (`crate::tiles::top_dropped`), every such texture of a
+            // megabyte or more is made level by level, whole or not: made
+            // whole it took all its levels' memory at once.
             let partly = readable
                 && (SQUEEZING.get()
                     || bytes >= crate::tiles::floor()
-                        && (!crate::texture::committed(r.data().cast_const(), bytes as usize)
+                        && (crate::tiles::top_dropped() > 0
+                            || !crate::texture::committed(r.data().cast_const(), bytes as usize)
                             || crate::descriptor::host::next_start(start, start.saturating_add(bytes)).is_some()
                             || crate::descriptor::host::first_viewed(start).is_some_and(|first| first > 0)));
             let reserved = if partly { host_texture_as(&r.desc, r.host.state, clear, true) } else { None };
@@ -1472,7 +1479,11 @@ pub(crate) fn squeeze_room() -> bool {
         // texture stayed black for the rest of the run on 6 and 8 GB cards
         // (2026-11-25 and 11-26 reports: 17,000 to 27,000 waiting, none
         // squeezed); its small levels are a few hundred KiB.
-        Some([budget, used, ..]) => used < budget,
+        // And past it by an eighth: a few hundred KiB a texture that the
+        // system may move into the PC's memory draw slowly; left without
+        // any they draw black (2026-11-26 report: the card stood at 5,626
+        // to 5,837 MB of a 5,153 MB budget, nothing was squeezed).
+        Some([budget, used, ..]) => used < budget + budget / 8,
         None => false,
     }
 }

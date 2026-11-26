@@ -335,6 +335,24 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      up to the card's budget, not only up to 97 % of it;
    - the memory guard no longer halves the texture pass when nearly out;
    - the summary says how many textures still waited at the end.
+   5.6, the cause of the black textures found (the 2026-11-26 report:
+   1,448 textures made "level by level", 2.9 GB, and **0 MB ever given to
+   them**):
+   - the step that gives such a texture its memory ran *before* the check
+     that reads the texture (the checks run in batches on several threads):
+     it always saw no level ready, so these textures stayed black for the
+     whole run. It now runs right after the checks;
+   - **texture quality on 6 and 8 GB cards**: the largest level of each big
+     texture (three quarters of its memory) is left out, as PC games'
+     "texture quality: medium" does (`VICTORY_TEXTURE_TOP_DROP=0` to 3; one
+     more while the card is full). Every big texture is made level by level
+     on such cards, so it only takes memory for the levels it shows;
+   - the memory for a texture's levels is given in one call instead of one
+     per level;
+   - small levels are given up to an eighth past the card's budget (blurred
+     instead of black);
+   - the Series S switch reads the card's memory from Windows itself when no
+     log tells it (5.5 never found it in the log), and runs once more.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,

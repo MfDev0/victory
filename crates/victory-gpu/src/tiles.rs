@@ -132,6 +132,45 @@ pub(crate) fn small_tiles() -> u32 {
     *N.get_or_init(|| std::env::var("VICTORY_SQUEEZE_TILES").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(4))
 }
 
+/// Texture quality on cards with little memory: how many of the largest
+/// levels of a texture made level by level get no memory
+/// (`VICTORY_TEXTURE_TOP_DROP`, 0 to 3). By default one on a card whose
+/// budget is under 7,000 MB (6 and 8 GB cards: the 2026-11-26 report
+/// uploaded 7,072 MB of textures onto a budget of 5,153 MB and the rest
+/// stayed black), none on larger ones; one more while the card has no room
+/// for whole textures. The largest level is three quarters of a texture's
+/// bytes: PC games' "texture quality: medium" and other emulators'
+/// texture-size caps drop it the same way. Only levels of 16 tiles (1 MiB)
+/// or more are dropped, and never down past the fourth level from the
+/// smallest, so small textures keep all their detail.
+pub(crate) fn top_dropped() -> u32 {
+    // The base count once known (`u32::MAX`: not yet; asked again until
+    // the card says its budget).
+    static BASE: AtomicU32 = AtomicU32::new(u32::MAX);
+    let mut base = BASE.load(Ordering::Relaxed);
+    if base == u32::MAX {
+        let set = std::env::var("VICTORY_TEXTURE_TOP_DROP").ok().and_then(|v| v.trim().parse::<u32>().ok());
+        let known = match set {
+            Some(n) => Some(n.min(3)),
+            None => host().and_then(|h| h.video_memory()).map(|[budget, ..]| u32::from(budget < 7000 << 20)),
+        };
+        let Some(n) = known else {
+            return 0;
+        };
+        if BASE.swap(n, Ordering::Relaxed) == u32::MAX {
+            tracing::info!(
+                dropped = n,
+                "texture quality: the largest levels of a texture left without memory on this card (VICTORY_TEXTURE_TOP_DROP)"
+            );
+        }
+        base = n;
+    }
+    if base == 0 {
+        return 0;
+    }
+    (base + u32::from(!crate::resource::room_lately())).min(3)
+}
+
 /// The bytes of the tiles given to textures now: the card's memory they
 /// hold (`resource.rs` `room` counts it with the other host copies).
 pub(crate) fn given_total() -> u64 {
@@ -247,6 +286,18 @@ fn give_back(index: usize, runs: &[(u32, u32)]) {
         STATS[3].fetch_sub(u64::from(HEAP_TILES) * TILE, Ordering::Relaxed);
         STATS[8].fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// Tiles taken for one level (or the packed ones) of a texture, not yet
+/// mapped: the heap and its place in the pool, the runs, the subresource,
+/// its tiles, and the level if it has tiles of its own.
+struct Taken {
+    heap: ID3D12Heap,
+    index: usize,
+    runs: Vec<(u32, u32)>,
+    subresource: u32,
+    tiles: u32,
+    level: Option<usize>,
 }
 
 /// What is given so far to one texture.
@@ -407,7 +458,14 @@ impl Tiled {
         held: u32,
         may: u32,
     ) -> (bool, bool) {
-        let held = held & self.every_level();
+        let mut held = held & self.every_level();
+        // Texture quality ([`top_dropped`]): the largest levels count as
+        // not held, so they get no memory, wait for none, and views start
+        // below them. (Not if nothing else would be held.)
+        let dropped = self.dropped_levels();
+        if held & !dropped != 0 {
+            held &= !dropped;
+        }
         let mut given = self.given.lock().unwrap_or_else(|e| e.into_inner());
         self.held.store(held, Ordering::Relaxed);
         let card = self.card.load(Ordering::Relaxed);
@@ -417,6 +475,23 @@ impl Tiled {
         let changed = self.give_locked(&mut given, queue, device, texture, named, (named & may) | card);
         let missing = self.without_locked(&given, named) != 0;
         (changed, missing)
+    }
+
+    /// The largest levels left without memory ([`top_dropped`]), a bit a
+    /// level.
+    fn dropped_levels(&self) -> u32 {
+        let n = top_dropped();
+        if n == 0 || self.levels < 5 {
+            return 0;
+        }
+        let mut mask = 0;
+        for level in 0..n.min(self.levels - 4) {
+            match self.standard.get(level as usize) {
+                Some(&tiles) if tiles >= 16 => mask |= 1 << level,
+                _ => break,
+            }
+        }
+        mask
     }
 
     /// The levels of [`small_tiles`] tiles or fewer, and the ones the card
@@ -576,38 +651,62 @@ impl Tiled {
         if self.packed > 0 && !given.packed && (first_packed..self.levels).any(now) {
             wanted.push((first_packed, self.packed, None));
         }
+        // Tiles for each, then one mapping call per heap for all the
+        // levels that got theirs there: one region per level, the ranges
+        // of all of them in order (the card gives a call's ranges to its
+        // regions' tiles in turn). It was a call per level, and a call
+        // costs as much as hundreds of microseconds.
+        let mut taken: Vec<Taken> = Vec::new();
         for (subresource, tiles, level) in wanted {
-            let Some((heap, index, runs)) = take(device, tiles) else {
-                continue;
-            };
-            let at = D3D12_TILED_RESOURCE_COORDINATE {
-                X: 0,
-                Y: 0,
-                Z: 0,
-                Subresource: subresource,
-            };
-            let size = D3D12_TILE_REGION_SIZE {
-                NumTiles: tiles,
-                ..Default::default()
-            };
-            // One region, the subresource's tiles in order, on as many
-            // ranges of the heap as the runs taken.
-            let flags = vec![D3D12_TILE_RANGE_FLAG_NONE; runs.len()];
-            let starts: Vec<u32> = runs.iter().map(|run| run.0).collect();
-            let counts: Vec<u32> = runs.iter().map(|run| run.1).collect();
+            if let Some((heap, index, runs)) = take(device, tiles) {
+                taken.push(Taken {
+                    heap,
+                    index,
+                    runs,
+                    subresource,
+                    tiles,
+                    level,
+                });
+            }
+        }
+        let mut from = 0;
+        while from < taken.len() {
+            let index = taken[from].index;
+            let to = taken[from..].iter().position(|t| t.index != index).map_or(taken.len(), |n| from + n);
+            let group = &taken[from..to];
+            let coords: Vec<D3D12_TILED_RESOURCE_COORDINATE> = group
+                .iter()
+                .map(|t| D3D12_TILED_RESOURCE_COORDINATE {
+                    X: 0,
+                    Y: 0,
+                    Z: 0,
+                    Subresource: t.subresource,
+                })
+                .collect();
+            let sizes: Vec<D3D12_TILE_REGION_SIZE> = group
+                .iter()
+                .map(|t| D3D12_TILE_REGION_SIZE {
+                    NumTiles: t.tiles,
+                    ..Default::default()
+                })
+                .collect();
+            let starts: Vec<u32> = group.iter().flat_map(|t| t.runs.iter().map(|run| run.0)).collect();
+            let counts: Vec<u32> = group.iter().flat_map(|t| t.runs.iter().map(|run| run.1)).collect();
+            let flags = vec![D3D12_TILE_RANGE_FLAG_NONE; starts.len()];
             let began = std::time::Instant::now();
-            // SAFETY: a live reserved texture and a live heap of ours; one
-            // region of `tiles` tiles from the subresource's first tile;
-            // `runs.len()` ranges whose counts add up to `tiles`, in three
-            // arrays of that length that live through the call.
+            // SAFETY: a live reserved texture and a live heap of ours;
+            // `coords.len()` regions, each the whole of a subresource's
+            // tiles from its first one; `starts.len()` ranges whose counts
+            // add up to the regions' tiles, in arrays that live through
+            // the call.
             unsafe {
                 queue.UpdateTileMappings(
                     texture,
-                    1,
-                    Some(&raw const at),
-                    Some(&raw const size),
-                    &heap,
-                    runs.len() as u32,
+                    coords.len() as u32,
+                    Some(coords.as_ptr()),
+                    Some(sizes.as_ptr()),
+                    &group[0].heap,
+                    starts.len() as u32,
                     Some(flags.as_ptr()),
                     Some(starts.as_ptr()),
                     Some(counts.as_ptr()),
@@ -616,15 +715,18 @@ impl Tiled {
             }
             STATS[6].fetch_add(1, Ordering::Relaxed);
             STATS[7].fetch_add(began.elapsed().as_micros() as u64, Ordering::Relaxed);
-            match level {
-                Some(level) => given.levels[level] = true,
-                None => given.packed = true,
+            for t in group {
+                match t.level {
+                    Some(level) => given.levels[level] = true,
+                    None => given.packed = true,
+                }
+                for &(start, count) in &t.runs {
+                    given.runs.push((t.index, start, count));
+                }
+                STATS[2].fetch_add(u64::from(t.tiles) * TILE, Ordering::Relaxed);
+                STATS[5].fetch_add(1, Ordering::Relaxed);
             }
-            for &(start, count) in &runs {
-                given.runs.push((index, start, count));
-            }
-            STATS[2].fetch_add(u64::from(tiles) * TILE, Ordering::Relaxed);
-            STATS[5].fetch_add(1, Ordering::Relaxed);
+            from = to;
         }
         let with_tiles = |level: u32| {
             if level < first_packed {
