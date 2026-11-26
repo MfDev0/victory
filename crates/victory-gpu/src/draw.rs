@@ -517,6 +517,14 @@ fn frame_share() -> u64 {
     })
 }
 
+/// Try 6.6: the most the world's texture pass takes in any frame, in
+/// milliseconds (`VICTORY_TEXTURE_PASS_MS`, 120), whatever its share
+/// ([`frame_share`]) gives: smooth frames before fast streaming.
+fn pass_most_ms() -> u64 {
+    static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *N.get_or_init(|| std::env::var("VICTORY_TEXTURE_PASS_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(120))
+}
+
 /// When the texture pass last saw a new frame (`crate::host::now_ms`), and
 /// how long the frame before took by it.
 static FRAME_AT: AtomicU64 = AtomicU64::new(0);
@@ -1005,7 +1013,29 @@ impl State {
             Some(View::Shader(r, _)) => Some(r as This),
             _ => None,
         };
-        crate::ambient::raise(list, light as This, depth)
+        // Try 6.6: what else the resolve reads, for the lit scene whose
+        // brightness the light follows (`crate::ambient::follow`).
+        let roots = self.roots_ref(true);
+        let scenes: Vec<This> = stage
+            .translated()
+            .used
+            .iter()
+            .filter(|u| {
+                u.kind == ResourceType::Srv
+                    && u.root == RootType::Table
+                    && (u.slot, u.table_offset_dwords) != crate::ambient::DEPTH
+            })
+            .filter_map(|u| {
+                let Some(Root::Table(table)) = roots.get(usize::from(u.slot)) else {
+                    return None;
+                };
+                match crate::descriptor::view(table + u64::from(u.table_offset_dwords) * 4) {
+                    Some(View::Shader(r, _)) if r != 0 => Some(r as This),
+                    _ => None,
+                }
+            })
+            .collect();
+        crate::ambient::raise(list, light as This, depth, &scenes)
     }
 
     /// The user-data value of a root argument, as translated shaders read
@@ -2062,7 +2092,12 @@ impl State {
             let last = ever.saturating_sub(DRAWS_AT.swap(ever, Ordering::Relaxed));
             let at = crate::host::now_ms();
             let before = FRAME_AT.swap(at, Ordering::Relaxed);
-            LAST_FRAME_MS.store(if before == 0 { 0 } else { at.saturating_sub(before) }, Ordering::Relaxed);
+            // Try 6.6: eased over frames, so one slow frame does not give
+            // the next pass a bigger budget and make it slow too (in the
+            // 6.5 report a 1.6 s frame let the pass take 240 ms).
+            let took = if before == 0 { 0 } else { at.saturating_sub(before).min(10_000) };
+            let eased = LAST_FRAME_MS.load(Ordering::Relaxed);
+            LAST_FRAME_MS.store(if eased == 0 { took } else { (eased * 3 + took) / 4 }, Ordering::Relaxed);
             LAST_DRAWS.store(last, Ordering::Relaxed);
             if last < loading_draws() {
                 LOW_DRAW_FRAMES.fetch_add(1, Ordering::Relaxed);
@@ -2191,7 +2226,7 @@ impl State {
         // The world's pass in its share of the frame (`frame_share`).
         let frame_ms = LAST_FRAME_MS.load(Ordering::Relaxed);
         let span = if !holding && !loading && frame_share() > 0 && frame_ms > 0 {
-            span.min(std::time::Duration::from_millis((frame_ms * frame_share() / 100).max(60)))
+            span.min(std::time::Duration::from_millis((frame_ms * frame_share() / 100).clamp(60, pass_most_ms().max(60))))
         } else {
             span
         };

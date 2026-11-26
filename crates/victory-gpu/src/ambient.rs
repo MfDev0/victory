@@ -143,13 +143,70 @@ fn live_level() -> Option<f32> {
 }
 
 const SOURCE: &str = r#"
-#define RS "RootConstants(num32BitConstants=8, b0), DescriptorTable(UAV(u0), SRV(t0))"
+#define RS "RootConstants(num32BitConstants=12, b0), DescriptorTable(UAV(u0), SRV(t0), SRV(t1), UAV(u1))"
 cbuffer Floor : register(b0) {
     float level; float3 tint;
     float strength; float radius; float near; float tan_y;
+    float follow; float least; float steep; float spare;
 };
 RWTexture2D<uint> light : register(u0);
 Texture2D<float> depth : register(t0);
+// Try 6.6: the lit scene the resolve reads, and what the card keeps of its
+// brightness from frame to frame (adapted log2 brightness, the high mark,
+// frames, the factor on the light).
+Texture2D<float4> scene : register(t1);
+RWByteAddressBuffer state : register(u1);
+groupshared float sums[64];
+groupshared float counts[64];
+// The eye's adaptation, on the card alone (no read back, no wait): the
+// scene's mean log brightness from 256 points, eased in over frames, and
+// against the brightest it has been lately. The darker the scene than that
+// (night, indoors), the less of the constant light: the title raises its
+// exposure there, which made people glow.
+[RootSignature(RS)]
+[numthreads(64, 1, 1)]
+void measure(uint3 id : SV_GroupThreadID) {
+    uint w, h;
+    scene.GetDimensions(w, h);
+    float sum = 0.0, n = 0.0;
+    for (uint k = 0; k < 4; k++) {
+        uint i = id.x * 4 + k;
+        float2 uv = (float2(i % 16, i / 16) + 0.5) / 16.0;
+        float3 c = scene.Load(int3(int2(uv * float2(w, h)), 0)).rgb;
+        float l = dot(c, float3(0.2126, 0.7152, 0.0722));
+        if (!isnan(l) && !isinf(l)) {
+            sum += log2(clamp(l, 1e-6, 65504.0));
+            n += 1.0;
+        }
+    }
+    sums[id.x] = sum;
+    counts[id.x] = n;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint s = 32; s > 0; s >>= 1) {
+        if (id.x < s) {
+            sums[id.x] += sums[id.x + s];
+            counts[id.x] += counts[id.x + s];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    if (id.x == 0) {
+        float now = counts[0] > 0.0 ? sums[0] / counts[0] : 0.0;
+        float adapted = asfloat(state.Load(0));
+        float high = asfloat(state.Load(4));
+        uint frames = state.Load(8);
+        if (frames == 0 || isnan(adapted) || isnan(high) || isinf(adapted) || isinf(high)) {
+            adapted = now;
+            high = now;
+        }
+        adapted = lerp(adapted, now, 0.1);
+        high = max(high - 0.004, adapted);
+        float factor = max(least, exp2(-max(high - adapted, 0.0) * steep));
+        state.Store(0, asuint(adapted));
+        state.Store(4, asuint(high));
+        state.Store(8, frames + 1);
+        state.Store(12, asuint(factor));
+    }
+}
 // The point seen at a texel, in metres from the eye (x right, y up, z away).
 float3 seen(int2 p, float2 size) {
     float d = depth.Load(int3(clamp(p, int2(0, 0), int2(size) - 1), 0));
@@ -205,7 +262,9 @@ void main(uint3 at : SV_DispatchThreadID) {
     // written and it holds whatever their memory did (bright magenta on
     // translucent surfaces, blocks of colours indoors: run v6, 2026-11-25).
     float open = strength > 0.0 ? open_to_light(int2(at.xy), float2(w, h)) : 1.0;
-    light[at.xy] = pack(tint * level * open);
+    float f = follow > 0.5 ? asfloat(state.Load(12)) : 1.0;
+    if (!(f > 0.0) || f > 1.0) f = 1.0;
+    light[at.xy] = pack(tint * level * f * open);
 }
 "#;
 
@@ -215,6 +274,9 @@ const SLOTS: u32 = 1024;
 struct Pass {
     root: ID3D12RootSignature,
     pso: ID3D12PipelineState,
+    /// Try 6.6: the brightness measure ([`follow`]) and its state.
+    measure: ID3D12PipelineState,
+    state: ID3D12Resource,
     views: ID3D12DescriptorHeap,
     step: u32,
     next: AtomicU32,
@@ -224,7 +286,39 @@ unsafe impl Send for Pass {}
 // SAFETY: as above.
 unsafe impl Sync for Pass {}
 
-fn make(device: &ID3D12Device) -> windows::core::Result<Pass> {
+/// Try 6.6, the fill light follows the scene (`VICTORY_AMBIENT_FOLLOW=0`:
+/// the same everywhere, as before): the least share of it in the darkest
+/// scenes (`VICTORY_AMBIENT_FOLLOW_MIN`, 0.35) and how fast it falls per
+/// stop the scene is darker than its brightest lately
+/// (`VICTORY_AMBIENT_FOLLOW_STEEP`, 0.35). Every modern renderer scales
+/// its indirect light with the scene's; this one is measured on the card
+/// from the lit scene the resolve reads, with no read back.
+fn follow() -> Option<(f32, f32)> {
+    static SET: OnceLock<Option<(f32, f32)>> = OnceLock::new();
+    *SET.get_or_init(|| {
+        if std::env::var_os("VICTORY_AMBIENT_FOLLOW").is_some_and(|v| v == "0") {
+            return None;
+        }
+        let get = |name: &str, default: f32| {
+            std::env::var(name).ok().and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| v.is_finite()).unwrap_or(default)
+        };
+        Some((get("VICTORY_AMBIENT_FOLLOW_MIN", 0.35).clamp(0.0, 1.0), get("VICTORY_AMBIENT_FOLLOW_STEEP", 0.35).clamp(0.0, 4.0)))
+    })
+}
+
+/// The view format the brightness measure reads a resource of `format`
+/// with, if it is a lit scene's (a floating-point colour image).
+fn scene_format(format: DXGI_FORMAT) -> Option<DXGI_FORMAT> {
+    match format {
+        DXGI_FORMAT_R11G11B10_FLOAT => Some(DXGI_FORMAT_R11G11B10_FLOAT),
+        DXGI_FORMAT_R16G16B16A16_FLOAT | DXGI_FORMAT_R16G16B16A16_TYPELESS => Some(DXGI_FORMAT_R16G16B16A16_FLOAT),
+        DXGI_FORMAT_R32G32B32A32_FLOAT | DXGI_FORMAT_R32G32B32A32_TYPELESS => Some(DXGI_FORMAT_R32G32B32A32_FLOAT),
+        DXGI_FORMAT_R9G9B9E5_SHAREDEXP => Some(DXGI_FORMAT_R9G9B9E5_SHAREDEXP),
+        _ => None,
+    }
+}
+
+fn compile(entry: windows::core::PCSTR) -> windows::core::Result<Vec<u8>> {
     let mut code: Option<ID3DBlob> = None;
     let mut errors: Option<ID3DBlob> = None;
     // SAFETY: the source and names live through the call; out pointers ours.
@@ -235,7 +329,7 @@ fn make(device: &ID3D12Device) -> windows::core::Result<Pass> {
             s!("ambient"),
             None,
             None,
-            s!("main"),
+            entry,
             s!("cs_5_1"),
             0,
             0,
@@ -254,10 +348,42 @@ fn make(device: &ID3D12Device) -> windows::core::Result<Pass> {
         }
         return Err(e);
     }
-    let code = text(&code.ok_or_else(windows::core::Error::empty)?);
+    Ok(text(&code.ok_or_else(windows::core::Error::empty)?))
+}
+
+fn make(device: &ID3D12Device) -> windows::core::Result<Pass> {
+    let code = compile(s!("main"))?;
+    let measure_code = compile(s!("measure"))?;
     // SAFETY: the root signature is inside the shader; plain creations.
     unsafe {
         let root: ID3D12RootSignature = device.CreateRootSignature(0, &code)?;
+        let measure = device.CreateComputePipelineState(&D3D12_COMPUTE_PIPELINE_STATE_DESC {
+            pRootSignature: std::mem::transmute_copy(&root),
+            CS: D3D12_SHADER_BYTECODE {
+                pShaderBytecode: measure_code.as_ptr().cast(),
+                BytecodeLength: measure_code.len(),
+            },
+            ..Default::default()
+        })?;
+        let heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_DEFAULT,
+            ..Default::default()
+        };
+        let buffer = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: 256,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        };
+        let mut state: Option<ID3D12Resource> = None;
+        device.CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COMMON, None, &mut state)?;
+        let state = state.ok_or_else(windows::core::Error::empty)?;
         let pso = device.CreateComputePipelineState(&D3D12_COMPUTE_PIPELINE_STATE_DESC {
             pRootSignature: std::mem::transmute_copy(&root),
             CS: D3D12_SHADER_BYTECODE {
@@ -269,13 +395,15 @@ fn make(device: &ID3D12Device) -> windows::core::Result<Pass> {
         let kind = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         let views = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {
             Type: kind,
-            NumDescriptors: SLOTS * 2,
+            NumDescriptors: SLOTS * 4,
             Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
             NodeMask: 0,
         })?;
         Ok(Pass {
             root,
             pso,
+            measure,
+            state,
             views,
             step: device.GetDescriptorHandleIncrementSize(kind),
             next: AtomicU32::new(0),
@@ -295,7 +423,7 @@ fn uav_barrier(list: &ID3D12GraphicsCommandList) {
 /// Raises what `light` holds to the floor, in `list`, after the program that
 /// wrote it as an image. Whether it recorded anything (the list's bindings
 /// are then ours).
-pub(crate) fn raise(list: &HostList, light: This, depth: Option<This>) -> bool {
+pub(crate) fn raise(list: &HostList, light: This, depth: Option<This>, scenes: &[This]) -> bool {
     let (Some(level), Some(host)) = (level(), host()) else {
         return false;
     };
@@ -323,7 +451,34 @@ pub(crate) fn raise(list: &HostList, light: This, depth: Option<This>) -> bool {
     ONCE.call_once(|| {
         tracing::info!(level, width = d.Width, height = d.Height, "ambient light");
     });
-    let slot = pass.next.fetch_add(1, Ordering::Relaxed) % SLOTS * 2;
+    let slot = pass.next.fetch_add(1, Ordering::Relaxed) % SLOTS * 4;
+    // The lit scene among what the resolve reads: the first colour image
+    // in floating point other than the light itself ([`follow`]).
+    let scene = follow().and_then(|_| {
+        scenes.iter().filter_map(|&t| crate::resource::host_resource(t)).find_map(|t| {
+            // SAFETY: a live resource.
+            let s = unsafe { t.GetDesc() };
+            let format = scene_format(s.Format)?;
+            (s.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && s.Width >= 64 && s.Height >= 64 && t != light)
+                .then_some((t, format, s.Width, s.Height, s.Format.0))
+        })
+    });
+    static SCENE_ONCE: std::sync::Once = std::sync::Once::new();
+    SCENE_ONCE.call_once(|| match scene {
+        Some((_, _, width, height, format)) => tracing::info!(
+            width,
+            height,
+            format,
+            "ambient light follows the scene's brightness, measured on the card (VICTORY_AMBIENT_FOLLOW=0: the same everywhere)"
+        ),
+        None => tracing::info!(
+            candidates = scenes.len(),
+            "ambient light: no lit scene among what the resolve reads, the same everywhere"
+        ),
+    });
+    if let Some((t, ..)) = scene {
+        list.keep(t);
+    }
     list.keep(light);
     // The depth the resolve just read, in the state it read it in; of the
     // light's size, or the shading is left out.
@@ -363,6 +518,32 @@ pub(crate) fn raise(list: &HostList, light: This, depth: Option<This>) -> bool {
         };
         let beside = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: at.ptr + pass.step as usize };
         host.device.CreateShaderResourceView(depth, Some(&seen), beside);
+        let lit = D3D12_SHADER_RESOURCE_VIEW_DESC {
+            Format: scene.map_or(DXGI_FORMAT_R16G16B16A16_FLOAT, |s| s.1),
+            ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
+            Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                Texture2D: D3D12_TEX2D_SRV { MipLevels: 1, ..Default::default() },
+            },
+        };
+        let third = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: at.ptr + 2 * pass.step as usize };
+        host.device.CreateShaderResourceView(scene.map(|s| s.0), Some(&lit), third);
+        let kept = D3D12_UNORDERED_ACCESS_VIEW_DESC {
+            Format: DXGI_FORMAT_R32_TYPELESS,
+            ViewDimension: D3D12_UAV_DIMENSION_BUFFER,
+            Anonymous: D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
+                Buffer: D3D12_BUFFER_UAV {
+                    FirstElement: 0,
+                    NumElements: 64,
+                    StructureByteStride: 0,
+                    CounterOffsetInBytes: 0,
+                    Flags: D3D12_BUFFER_UAV_FLAG_RAW,
+                },
+            },
+        };
+        let fourth = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: at.ptr + 3 * pass.step as usize };
+        host.device
+            .CreateUnorderedAccessView(&pass.state, None::<&ID3D12Resource>, Some(&kept), fourth);
         l.SetDescriptorHeaps(&[Some(pass.views.clone())]);
         l.SetComputeRootSignature(&pass.root);
         l.SetPipelineState(&pass.pso);
@@ -370,14 +551,22 @@ pub(crate) fn raise(list: &HostList, light: This, depth: Option<This>) -> bool {
         let level = live_level().unwrap_or(level);
         let [strength, radius, near, tan_y] = shade();
         let strength = if depth.is_some() { strength } else { 0.0 };
-        let constants = [level, r, g, b, strength, radius, near, tan_y];
-        l.SetComputeRoot32BitConstants(0, 8, constants.as_ptr().cast(), 0);
+        let (least, steep) = follow().unwrap_or((1.0, 0.0));
+        let following = if scene.is_some() { 1.0 } else { 0.0 };
+        let constants = [level, r, g, b, strength, radius, near, tan_y, following, least, steep, 0.0];
+        l.SetComputeRoot32BitConstants(0, 12, constants.as_ptr().cast(), 0);
         l.SetComputeRootDescriptorTable(
             1,
             D3D12_GPU_DESCRIPTOR_HANDLE {
                 ptr: gpu.ptr + u64::from(slot * pass.step),
             },
         );
+        if scene.is_some() {
+            l.SetPipelineState(&pass.measure);
+            l.Dispatch(1, 1, 1);
+            uav_barrier(l);
+            l.SetPipelineState(&pass.pso);
+        }
         l.Dispatch((d.Width as u32).div_ceil(8), d.Height.div_ceil(8), 1);
     }
     uav_barrier(l);

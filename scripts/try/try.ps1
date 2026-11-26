@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.5'
+$TryVersion = '6.6'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -688,6 +688,13 @@ function Set-RunEnv {
     # staging straight into the card's memory while the card has room.
     $script:RebarFromTry = $c.rebar -ne 'off'
     [Environment]::SetEnvironmentVariable('VICTORY_GPU_UPLOAD', $(if ($script:RebarFromTry) { $null } else { '0' }), 'Process')
+    # 6.6: with the relay, what the card's compares flag comes down to the PC
+    # inside the same flight, not with a list of its own queued behind newer
+    # flights (the 6.5 report: 124-156 ms a frame of that thread waiting for
+    # such fetches). Off with the other new additions after a lost card.
+    if ($null -eq $script:UserAll['VICTORY_CARD_FETCH_INFLIGHT']) {
+        [Environment]::SetEnvironmentVariable('VICTORY_CARD_FETCH_INFLIGHT', $(if ($script:NewFromTry -and $c.fast -ne '1') { '1' } else { $null }), 'Process')
+    }
     # 4.1: the screen the console says it is plugged into. 1080p by default
     # (a Series X on a 1080p TV): at 4K the game renders 2560x1440 inside and
     # upscales to 3840x2160 every frame, on an 8 GB card that is also
@@ -704,7 +711,7 @@ function Set-RunEnv {
     # runs the game; only the paths, cache folders, screen size and the two
     # skipped programs stay. The lost-card steps then have nothing to undo.
     if ($c.plain -eq '1') {
-        foreach ($k in @('VICTORY_SHADER_LOOP_LIMIT', 'VICTORY_LATE_WAIT', 'VICTORY_WIDE_BACK', 'VICTORY_CARD_BUFFERS_MIN_MB', 'VICTORY_CARD_BUFFERS_MB', 'VICTORY_RELAY', 'VICTORY_WAVE_WIDE', 'VICTORY_LAZY_BACK', 'VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH', 'VICTORY_TRIM_BARRIERS')) {
+        foreach ($k in @('VICTORY_SHADER_LOOP_LIMIT', 'VICTORY_LATE_WAIT', 'VICTORY_WIDE_BACK', 'VICTORY_CARD_BUFFERS_MIN_MB', 'VICTORY_CARD_BUFFERS_MB', 'VICTORY_RELAY', 'VICTORY_WAVE_WIDE', 'VICTORY_LAZY_BACK', 'VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH', 'VICTORY_TRIM_BARRIERS', 'VICTORY_CARD_FETCH_INFLIGHT')) {
             [Environment]::SetEnvironmentVariable($k, $null, 'Process')
         }
         $script:LoopFromTry = $false; $script:WideFromTry = $false; $script:WaveWideFromTry = $false
@@ -1301,7 +1308,7 @@ if (-not (Engine8)) {
 if (Engine8) {
     Say 'engine: the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb). N goes back to this fork''s engine.'
 } else {
-    Say '6.5: this fork''s engine: streaming gets a fixed share of each frame (as big games do), a texture-pass profiler, steadier texture quality; 6.4: the world waits behind its curtain until its textures are in, small textures first, reused upload buffers, shader cache read ahead, softer light on people; the 6.0 speed fixes (all CPU cores, the card''s queues first, the CPU''s own graphics for other programs). N switches to the 8 GB engine.'
+    Say '6.6: this fork''s engine: texture threads no longer queue on one lock, results read one frame late instead of waiting for the card, card copies come back inside their own flights, fill light follows the scene''s brightness; 6.5: streaming gets a fixed share of each frame (as big games do), a texture-pass profiler, steadier texture quality; 6.4: the world waits behind its curtain until its textures are in, small textures first, reused upload buffers, shader cache read ahead, softer light on people; the 6.0 speed fixes (all CPU cores, the card''s queues first, the CPU''s own graphics for other programs). N switches to the 8 GB engine.'
 }
 
 # Every command of the menu: its key, what it is, whether it is on now, and

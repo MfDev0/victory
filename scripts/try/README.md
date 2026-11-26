@@ -513,6 +513,19 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - adaptive texture quality with a band: short from the sharp line,
      sharp again 5 points under it.
    - a line every 100 passes: where the texture pass's time goes.
+   6.6:
+   - write-watch askings run with the journal let go; only askings of the
+     same pages wait for each other (`VICTORY_WATCH_UNLOCKED=0`: as before).
+   - the title's CPU buffer copies that read what a flight's shaders may
+     write take the results one flight late (`VICTORY_LATE_COPIES`, 1; 2
+     also copies that write there; 0 settles as before).
+   - `VICTORY_CARD_FETCH_INFLIGHT=1` from Try with the relay (off with the
+     3.8 additions after a lost card).
+   - the ambient light follows the brightness of the lit scene the probe
+     resolve reads, measured on the card (`VICTORY_AMBIENT_FOLLOW=0`: off;
+     `_MIN` 0.35, `_STEEP` 0.35).
+   - the world's texture pass: at most `VICTORY_TEXTURE_PASS_MS` (120) and
+     a share of the eased frame time.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,

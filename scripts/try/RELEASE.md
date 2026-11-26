@@ -1,6 +1,7 @@
-VIctory Try 6.5 (tricks from big games)
-- Streaming budget per frame: big games give texture streaming a fixed slice of every frame. Now the world's texture loading takes at most 35% of a frame. In your 6.2 log one pass took 750 ms of a 900 ms frame while catching up. Loading screens and the 6.4 curtain still load at full speed
-- Steadier texture quality: quality now switches with a gap (blur from 85% card use, sharp again under 80%), like games switch detail levels, instead of flipping back and forth every tenth of a second and loading the same textures again
-- Built-in profiler: the log now shows where the texture loading time goes (checks, memory queries, making textures, recording uploads). That tells us exactly what to move to other CPU cores next
-- Everything from 6.4: the world curtain, the priority order, reused upload buffers, shader cache read ahead, people less bright (A: normal / low / high / off)
-- Settings: VICTORY_TEXTURE_FRAME_SHARE (35, 0 off)
+VIctory Try 6.6 (tricks from big games, picked using the 6.5 profiler)
+- Job system (Naughty Dog style): texture threads no longer wait in line for each other. In 6.5, checking which textures the game changed took 72-88 ms a frame, and 280-330 ms in the slow frames, because every thread waited on one lock while another thread asked Windows. Now each thread asks on its own, and only checks of the same memory wait for each other
+- Late readback (as engines read occlusion and exposure results a frame late): the CPU no longer stops and waits for the card when the game copies a buffer the card is still writing. It takes the result one flight late, like upload fills already did. In 6.5 this wait was 105-132 ms of a ~330 ms frame
+- Card results come back inside their own flight instead of in a separate fetch queued behind newer work (the copy-back thread waited 124-156 ms a frame for these)
+- Fill light follows the scene (eye adaptation measured on the card with no readback): darker scenes such as night and indoors get less of the stand-in light, so people stop glowing. Bright daylight stays as before
+- Smoother frames: texture loading in the world never takes more than 120 ms of a frame, and its budget no longer grows after a slow frame
+- Settings: VICTORY_WATCH_UNLOCKED=0, VICTORY_LATE_COPIES (1; 2 also lets copies that write go; 0 waits), VICTORY_CARD_FETCH_INFLIGHT=0, VICTORY_AMBIENT_FOLLOW=0 (FOLLOW_MIN 0.35, FOLLOW_STEEP 0.35), VICTORY_TEXTURE_PASS_MS (120)

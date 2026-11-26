@@ -2628,9 +2628,21 @@ fn blocked_by(written: &[(usize, usize)], runs: &[&HostList], count: bool) -> Op
         for step in &list.deferred().copies {
             match step {
                 &Step::Copy(dst, src, len) => {
-                    if touches(written, src, src + len) || touches(written, dst, dst + len) {
+                    let reads = touches(written, src, src + len);
+                    let writes = touches(written, dst, dst + len);
+                    if reads || writes {
+                        // Late readback (Try 6.6): a copy that only reads
+                        // what a flight's shaders may write takes those
+                        // results one flight late, as the fills do.
+                        if late_copies() >= 1 + u8::from(writes) {
+                            if count {
+                                LATE_COPIES[usize::from(writes)].fetch_add(1, Ordering::Relaxed);
+                            }
+                            continue;
+                        }
                         if count {
                             LATE_STATS[15].fetch_add(1, Ordering::Relaxed);
+                            LATE_COPIES[2 + usize::from(writes)].fetch_add(1, Ordering::Relaxed);
                         }
                         return Some(WHY_READ);
                     }
@@ -2797,6 +2809,26 @@ fn late_results() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("VICTORY_LATE_RESULTS").is_none_or(|v| v != "0"))
 }
+
+/// Whether the title's buffer copies on the CPU that read title memory a
+/// flight's shaders may write go on with what title memory holds, not
+/// waiting for the flight to land (`VICTORY_LATE_COPIES`: 1 unless set;
+/// 2 also copies that write there, 0 waits, as before Try 6.6).
+///
+/// Try 6.6, the late readback of big engines (occlusion queries, exposure
+/// and GPU culling results are read a frame or more late on PC, so the CPU
+/// never waits for the card): in the 6.5 report the submitting thread
+/// stood 105-132 ms a frame waiting for the card, all of it for one settle
+/// "title memory read by a buffer copy" a frame.
+fn late_copies() -> u8 {
+    static N: OnceLock<u8> = OnceLock::new();
+    *N.get_or_init(|| std::env::var("VICTORY_LATE_COPIES").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(1).min(2))
+}
+
+/// Since the frame line, the title's CPU copies over flights' writes: let
+/// go one flight late reading them, let go writing them, settled for
+/// reading only, settled for writing ([`late_copies`]).
+static LATE_COPIES: [std::sync::atomic::AtomicU64; 4] = [const { std::sync::atomic::AtomicU64::new(0) }; 4];
 
 /// Fills that went on with the results one flight late ([`late_results`]),
 /// since the frame line last took them.
@@ -3301,6 +3333,15 @@ fn late_line(frames: f64) {
         tracing::info!(
             "fills of upload memory that took results one flight late, not waiting (VICTORY_LATE_RESULTS=0: wait): {:.1} a frame",
             LATE_RESULTS.swap(0, Ordering::Relaxed) as f64 / frames
+        );
+        let c: Vec<f64> = LATE_COPIES.iter().map(|c| c.swap(0, Ordering::Relaxed) as f64 / frames).collect();
+        tracing::info!(
+            "title buffer copies on the CPU over flights' writes, per frame (VICTORY_LATE_COPIES={}): {:.1} reading them took the results one flight late, {:.1} writing there let go; settled for {:.1} reading, {:.1} writing (VICTORY_LATE_COPIES=2 lets those go too)",
+            late_copies(),
+            c[0],
+            c[1],
+            c[2],
+            c[3]
         );
         if inflight_fetch() {
             let i: Vec<f64> = INFLIGHT_STATS.iter().map(|i| i.swap(0, Ordering::Relaxed) as f64 / frames).collect();
