@@ -568,6 +568,14 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.15 ("new things fast"; plan and to-do in `scripts/try/PLAN.md`):
+   - `VICTORY_LIBRARY_STORE_LATER` (on; cool_fox 4a028f31),
+     `VICTORY_LIBRARY_SAVE_THREAD` (on), `VICTORY_LIBRARY_SAVE_S` 300 in the
+     world whatever the memory.
+   - `VICTORY_STAND_IN_FIRST` (on; after Kelvaroq 0050); Try: stand-ins on
+     their own switch (config `standin`), `VICTORY_PIPELINE_WAIT_MS=250`.
+   - Panicking pipeline builds refused (cool_fox 744c09ba); aliased
+     textures held while copied (cool_fox 94f35b7f).
    6.14 ("one frame ahead"; plan and to-do in `scripts/try/PLAN.md`):
    - `VICTORY_COPY_FETCH` and `VICTORY_TRIM_BARRIERS` on their own Try
      switches (config `copyfetch`, `trim`), no longer tied to the 3.8 set

@@ -1199,6 +1199,14 @@ fn textures() -> std::sync::MutexGuard<'static, std::collections::BTreeSet<usize
 pub(crate) struct Held(This);
 
 #[cfg(windows)]
+impl Held {
+    /// The texture the handle keeps alive.
+    pub(crate) fn get(&self) -> This {
+        self.0
+    }
+}
+
+#[cfg(windows)]
 impl Drop for Held {
     fn drop(&mut self) {
         crate::object::release_boxed::<Resource>(self.0);
@@ -1243,7 +1251,7 @@ static TARGETS_AT: std::sync::Mutex<std::collections::BTreeMap<u64, usize>> =
 /// `VICTORY_ALIAS_COPY=0`: none is found, as before; `=1`: only textures
 /// of one level and one layer, as at first.
 #[cfg(windows)]
-pub(crate) fn alias_of(this: This) -> Option<This> {
+pub(crate) fn alias_of(this: This) -> Option<Held> {
     use std::sync::atomic::Ordering::Relaxed;
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if this.is_null()
@@ -1280,7 +1288,12 @@ pub(crate) fn alias_of(this: This) -> Option<This> {
         && o.desc.flags & DEPTH == 0
         && target_format(o.desc.format) == o.desc.format
         && element(o.desc.format).is_some_and(|e| e.1 == 1 && Some(e) == element(r.desc.format));
-    same.then_some(other)
+    // Try 6.15, after cool_fox 94f35b7f (cccw, #1336): held alive under the
+    // table's lock. The bare pointer outlived the lock, and the title's
+    // recording threads may release the texture before the draw copies
+    // from it: a use after free, or a copy from the next texture made at
+    // that address (garbage on screen). One being released is not given.
+    (same && crate::object::add_ref_alive(other)).then(|| Held(other))
 }
 
 /// Whether host copies are made on first use. On by default;
@@ -3535,7 +3548,7 @@ mod tests {
             S_OK
         );
         resource(view).host.placed.store(true, Relaxed);
-        assert_eq!(alias_of(view), Some(source));
+        assert_eq!(alias_of(view).map(|held| held.get()), Some(source));
         let written = host_resource(source).unwrap();
         let sampled = host_resource(view).unwrap();
         let (upload, data) = host.upload_buffer(1024).unwrap();

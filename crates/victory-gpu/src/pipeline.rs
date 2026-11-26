@@ -678,6 +678,13 @@ pub(crate) fn loose_stand_ins() -> u64 {
     make::LOOSE_STAND_INS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Draws that took a same-shape stand-in before any wait (Try 6.15,
+/// `VICTORY_STAND_IN_FIRST`); counted apart from [`stand_ins`].
+#[cfg(windows)]
+pub(crate) fn stand_ins_first() -> u64 {
+    make::STAND_INS_FIRST.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Draws and dispatches dropped since the last [`take_drops`], by reason.
 /// Kept in every build (4.8): the frame lines said how many draws a frame
 /// were dropped "without a host pipeline", 166 to 2,546 in the user's runs,

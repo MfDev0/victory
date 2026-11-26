@@ -160,7 +160,20 @@ impl Pending {
                 }
                 return None;
             }
-            HostPipeline::new(&self.shaders, self.graphics.as_deref())
+            // Try 6.15, after cool_fox 744c09ba (Filip Michalski, #1353): a
+            // build that panics (a translation bug) is a refused pipeline.
+            // Before, the panic ended the worker thread and left the entry
+            // unmade for good: its draws were dropped as "being made" for
+            // the rest of the run, and one worker fewer made the others.
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                HostPipeline::new(&self.shaders, self.graphics.as_deref())
+            })) {
+                Ok(made) => made,
+                Err(_) => {
+                    tracing::warn!(shaders = ?self.shaders, "host pipeline build panicked: refused");
+                    None
+                }
+            }
         });
         let took = started.elapsed();
         if took > Duration::from_secs(2) {
@@ -252,6 +265,19 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
             Ok(_) => frame,
             Err(f) => f,
         };
+        // Try 6.15, a new thing on screen at once: a stand-in of the same
+        // shaders and shape (`stand_in`, its first tier) is taken before any
+        // wait. The object is drawn in this very frame, and the frame does
+        // not stand still for the driver's compile; the real pipeline
+        // replaces it as soon as it is made. After Kelvaroq 0050
+        // (stellarr-studio: "a hit binds immediately, a miss keeps the
+        // budget"). `VICTORY_STAND_IN_FIRST=0`: wait first, as before.
+        if stand_in_first()
+            && let Some(made) = stand_in_tier(p, false)
+        {
+            STAND_INS_FIRST.fetch_add(1, Ordering::Relaxed);
+            return Some(made);
+        }
         if first == frame || !wait_once() {
             wait(p, frame);
         }
@@ -373,6 +399,29 @@ fn stand_in_on() -> bool {
 /// (`VICTORY_STAND_IN_LOOSE=0`: not taken). The object is drawn rather than
 /// missing; for those frames it may write depth where it would not.
 fn stand_in(p: &Pending) -> Option<&HostPipeline> {
+    stand_in_tier(p, true)
+}
+
+/// Draws that took a same-shape stand-in before any wait
+/// ([`stand_in_first`]), since the start.
+pub(crate) static STAND_INS_FIRST: AtomicU64 = AtomicU64::new(0);
+
+/// Whether a same-shape stand-in is taken before the frame waits for a
+/// pipeline being made (`VICTORY_STAND_IN_FIRST=0`: after the wait, as
+/// before). Only with stand-ins on.
+fn stand_in_first() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = stand_in_on() && std::env::var_os("VICTORY_STAND_IN_FIRST").is_none_or(|v| v != "0");
+        if on {
+            tracing::info!("a draw whose pipeline is being made takes a stand-in of the same shaders and shape at once, before any wait (VICTORY_STAND_IN_FIRST=0: after the wait)");
+        }
+        on
+    })
+}
+
+/// [`stand_in`]; the second tier (other depth writes) only with `loose`.
+fn stand_in_tier(p: &Pending, loose: bool) -> Option<&HostPipeline> {
     let shape = p.shape.as_ref().filter(|_| stand_in_on())?;
     let siblings = SIBLINGS.lock().unwrap_or_else(|e| e.into_inner());
     let siblings = siblings.as_ref()?;
@@ -384,7 +433,7 @@ fn stand_in(p: &Pending) -> Option<&HostPipeline> {
         STAND_INS.fetch_add(1, Ordering::Relaxed);
         return Some(made);
     }
-    let loose = p.loose.as_ref().filter(|_| loose_on())?;
+    let loose = p.loose.as_ref().filter(|_| loose && loose_on())?;
     let made = made_of(loose)?;
     STAND_INS.fetch_add(1, Ordering::Relaxed);
     LOOSE_STAND_INS.fetch_add(1, Ordering::Relaxed);
@@ -772,7 +821,7 @@ fn workers() -> bool {
                         if WAITING.fetch_sub(1, Ordering::Relaxed) == 1 {
                             drained();
                         } else {
-                            super::library::save(false);
+                            super::library::save_soon();
                         }
                     }
                 });
@@ -801,7 +850,7 @@ fn drained() {
             "host pipelines all made"
         );
     }
-    super::library::save(false);
+    super::library::save_soon();
 }
 
 #[cfg(test)]

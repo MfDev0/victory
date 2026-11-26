@@ -1,4 +1,4 @@
-# VIctory Try: plan and to-do (6.10, updated for 6.14)
+# VIctory Try: plan and to-do (6.10, updated for 6.15)
 
 Goal: the whole picture rendered, **20+ fps** on the reporter's PC: RTX 4050
 Laptop (5921 MB, budget about 5153 MB), 12 threads, about 16 GB of RAM,
@@ -48,6 +48,30 @@ below are checked again.
       66afb2b4; parser only so far).
 - [x] Logs: `upscaler PC FidelityFX ...` line at start, providers offered
       and chosen, every 600 upscales how many were jittered (both paths).
+
+## Done in 6.15 ("new things fast")
+
+Found in the 6.12 report: the library saves (1.1 GB each, ten in eighteen
+minutes, every 20-40 s with memory Normal) line up with the worst frames:
+20:27:55 397 ms + 19 draws/frame dropped "being made", 20:28:41 523 ms + 24.3
+dropped, then the 5196 ms frame at 20:28:50. `StorePipeline` waited for the
+save's write lock, so every pipeline finished during a save waited too. And
+`VICTORY_STAND_IN=0` (new38 off) dropped every draw of a pipeline being made.
+
+- [x] Library: store later (cool_fox 4a028f31, Esteban Viera; on here,
+      `VICTORY_LIBRARY_STORE_LATER=0` goes back); one save at a time; saves on
+      a thread of their own (`save_soon`, `VICTORY_LIBRARY_SAVE_THREAD=0`);
+      in the world every `VICTORY_LIBRARY_SAVE_S` (300) whatever the memory.
+      Save line: `handed_out_during_saves`.
+- [x] Stand-ins on their own Try switch (config `standin`), and
+      `VICTORY_STAND_IN_FIRST` (engine, on): a same-shape stand-in before any
+      wait (Kelvaroq 0050). Try: `VICTORY_PIPELINE_WAIT_MS=250`. Log: the
+      stand-in counts line now has "at once, before any wait".
+- [x] A panicking pipeline build is refused (cool_fox 744c09ba).
+- [x] `alias_of` holds the aliased texture (cool_fox 94f35b7f).
+- Looked at, not taken: cool_fox 6ad1eff1 (sparse mips on address-backed
+  textures: our tiles path differs, `tiles::by_quality`), f4164f86 (skips all
+  hair strand passes), c9f654e0 (already here), f2dd4508/8eb4f320 (their tree).
 
 ## Why 3-4 fps (6.12 report, RTX 4060 8 GB, 32 GB, MAX on) and 6.14
 

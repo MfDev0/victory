@@ -32,7 +32,7 @@ impl Recording<'_> {
     pub fn prepare_input(&self, resource: *const Object) -> Option<()> {
         let texture = crate::resource::host_resource(resource)?.clone();
         let aliased = crate::resource::alias_of(resource)
-            .is_some_and(|source| crate::texture::alias(self.0, resource, source));
+            .is_some_and(|source| crate::texture::alias(self.0, resource, source.get()));
         if !aliased && crate::texture::title_written(&texture) {
             crate::texture::upload(self.0, resource, &texture);
         }

@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.14'
+$TryVersion = '6.15'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -70,11 +70,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -1041,8 +1041,23 @@ function Set-RunEnv {
         Save-Config
     }
     if (-not $script:NewFromTry) {
-        foreach ($k in @('VICTORY_STAND_IN', 'VICTORY_PC_CARD_MB')) { [Environment]::SetEnvironmentVariable($k, '0', 'Process') }
+        foreach ($k in @('VICTORY_PC_CARD_MB')) { [Environment]::SetEnvironmentVariable($k, '0', 'Process') }
     }
+    # 6.15: new things on screen at once. Stand-in pipelines on their own
+    # switch (config standin), no longer tied to the 3.8 set an old lost card
+    # had turned off (the 6.12 report ran with VICTORY_STAND_IN=0: every draw
+    # of a new object whose pipeline was still compiling was dropped, 19-24 a
+    # frame when the world streamed). A stand-in is a finished pipeline of
+    # the same shaders that differs only in culling, depth test or blend
+    # factors: the object is drawn this frame. VICTORY_STAND_IN_FIRST (on in
+    # the engine, Kelvaroq 0050's idea) takes it before any wait, so the
+    # frame does not stand still for the compile either. The wait for
+    # pipelines with no stand-in is 250 ms a frame (500 before;
+    # VICTORY_PIPELINE_WAIT_MS sets it). Off again by itself if a run loses
+    # the card (see Check-Run).
+    $script:StandInFromTry = $c.standin -ne 'off'
+    if ($null -eq $script:UserAll['VICTORY_STAND_IN']) { [Environment]::SetEnvironmentVariable('VICTORY_STAND_IN', $(if ($script:StandInFromTry) { $null } else { '0' }), 'Process') }
+    if ($null -eq $script:UserAll['VICTORY_PIPELINE_WAIT_MS']) { [Environment]::SetEnvironmentVariable('VICTORY_PIPELINE_WAIT_MS', '250', 'Process') }
     # 6.14: the card's hashes of copies' pieces by a group of 64 threads a
     # piece instead of one (VICTORY_CARD_HASH_WIDE=1; fork #1014 by
     # martindevbr, made the default in Kelvaroq 0041 by stellarr-studio:
@@ -1071,7 +1086,7 @@ function Set-RunEnv {
     foreach ($kv in @(@('VICTORY_COPY_FETCH', $script:CopyFetchFromTry), @('VICTORY_TRIM_BARRIERS', $script:TrimFromTry))) {
         if ($null -eq $script:UserAll[$kv[0]]) { [Environment]::SetEnvironmentVariable($kv[0], $(if ($kv[1]) { $null } else { '0' }), 'Process') }
     }
-    Say "frame rate: card results fetched on the copy engine $(if ($env:VICTORY_COPY_FETCH -eq '0') { 'off' } else { 'ON' }), barrier trimming $(if ($env:VICTORY_TRIM_BARRIERS -eq '0') { 'off' } else { 'ON' }), card hashes by 64 threads a piece $(if ($env:VICTORY_CARD_HASH_WIDE -eq '1') { 'ON' } else { 'off' }), one frame ahead (console-style) $(if ($env:VICTORY_ASYNC_SUBMIT -eq '1') { 'ON' } else { 'off' }), lazy copy-back $(if ($env:VICTORY_LAZY_BACK -eq '0') { 'off' } else { 'ON' })"
+    Say "frame rate: card results fetched on the copy engine $(if ($env:VICTORY_COPY_FETCH -eq '0') { 'off' } else { 'ON' }), barrier trimming $(if ($env:VICTORY_TRIM_BARRIERS -eq '0') { 'off' } else { 'ON' }), card hashes by 64 threads a piece $(if ($env:VICTORY_CARD_HASH_WIDE -eq '1') { 'ON' } else { 'off' }), one frame ahead (console-style) $(if ($env:VICTORY_ASYNC_SUBMIT -eq '1') { 'ON' } else { 'off' }), lazy copy-back $(if ($env:VICTORY_LAZY_BACK -eq '0') { 'off' } else { 'ON' }), stand-ins for new objects $(if ($env:VICTORY_STAND_IN -eq '0') { 'off' } else { 'ON' })"
     # 6.4: upload memory on the card (Resizable BAR) on its own switch, on
     # unless a lost card turned it off (it was off with the other 3.8
     # additions since a lost card long ago). The CPU then writes texture
@@ -1161,11 +1176,11 @@ function Set-RunEnv {
     # runs the game; only the paths, cache folders, screen size and the two
     # skipped programs stay. The lost-card steps then have nothing to undo.
     if ($c.plain -eq '1') {
-        foreach ($k in @('VICTORY_SHADER_LOOP_LIMIT', 'VICTORY_LATE_WAIT', 'VICTORY_WIDE_BACK', 'VICTORY_CARD_BUFFERS_MIN_MB', 'VICTORY_CARD_BUFFERS_MB', 'VICTORY_RELAY', 'VICTORY_WAVE_WIDE', 'VICTORY_LAZY_BACK', 'VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH', 'VICTORY_TRIM_BARRIERS', 'VICTORY_CARD_FETCH_INFLIGHT', 'VICTORY_LATE_WAIT_LISTS', 'VICTORY_CARD_HASH_WIDE', 'VICTORY_ASYNC_SUBMIT', 'VICTORY_ASYNC_PRESENT')) {
+        foreach ($k in @('VICTORY_SHADER_LOOP_LIMIT', 'VICTORY_LATE_WAIT', 'VICTORY_WIDE_BACK', 'VICTORY_CARD_BUFFERS_MIN_MB', 'VICTORY_CARD_BUFFERS_MB', 'VICTORY_RELAY', 'VICTORY_WAVE_WIDE', 'VICTORY_LAZY_BACK', 'VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH', 'VICTORY_TRIM_BARRIERS', 'VICTORY_CARD_FETCH_INFLIGHT', 'VICTORY_LATE_WAIT_LISTS', 'VICTORY_CARD_HASH_WIDE', 'VICTORY_ASYNC_SUBMIT', 'VICTORY_ASYNC_PRESENT', 'VICTORY_PIPELINE_WAIT_MS')) {
             [Environment]::SetEnvironmentVariable($k, $null, 'Process')
         }
         $script:LoopFromTry = $false; $script:WideFromTry = $false; $script:WaveWideFromTry = $false
-        $script:NewFromTry = $false; $script:LazyFromTry = $false; $script:RebarFromTry = $false; $script:InflightFromTry = $false; $script:WideHashFromTry = $false; $script:AheadFromTry = $false; $script:CopyFetchFromTry = $false; $script:TrimFromTry = $false
+        $script:NewFromTry = $false; $script:LazyFromTry = $false; $script:RebarFromTry = $false; $script:InflightFromTry = $false; $script:WideHashFromTry = $false; $script:AheadFromTry = $false; $script:CopyFetchFromTry = $false; $script:TrimFromTry = $false; $script:StandInFromTry = $false
         Say 'PLAIN mode: VICTORY''s defaults, as ztrx runs the game   (Z switches back to Try''s settings)'
     }
     # 4.2: the frame-rate ideas. B (on by default): the game renders at 75%
@@ -1843,6 +1858,9 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
         } elseif ($script:AheadFromTry) {
             $c.ahead = 'off'
             Say 'next run: the game waits for its own submissions and present again (6.14 one-frame-ahead off).'
+        } elseif ($script:StandInFromTry) {
+            $c.standin = 'off'
+            Say 'next run: draws of new objects wait for their own pipeline again (6.15 stand-ins off).'
         } elseif ($c.fast -eq '1') {
             $c.fast = ''
             Say 'next run: back to the stable relay speed mode (F switches again).'
@@ -1857,7 +1875,7 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
             Say 'next run: Resizable BAR uploads (6.4) are off.'
         } elseif ($script:NewFromTry) {
             $c.new38 = 'off'
-            Say 'next run: the 3.8 card additions (stand-in pipelines, PC-side card copies) are off.'
+            Say 'next run: the 3.8 card addition (PC-side card copies) is off.'
         } elseif ($script:WaveWideFromTry) {
             $c.wavewide = 'off'
             Say 'next run: the 64-lane compute shaders are left out again, as before 3.6.'

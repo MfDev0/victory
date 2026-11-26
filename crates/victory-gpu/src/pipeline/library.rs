@@ -50,7 +50,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock, RwLock};
+use std::sync::{Mutex, MutexGuard, OnceLock, RwLock, TryLockError};
 
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::{HSTRING, Interface, PCWSTR};
@@ -741,35 +741,131 @@ pub(crate) fn pipeline(
         )
     });
     let _all = one_call();
+    if stores_later() {
+        match library.saving.try_read() {
+            Ok(_stores) => store(library, &wide, &pso),
+            Err(TryLockError::Poisoned(e)) => {
+                let _stores = e.into_inner();
+                store(library, &wide, &pso);
+            }
+            Err(TryLockError::WouldBlock) => {
+                LATER.lock().unwrap_or_else(|e| e.into_inner()).push(Later(wide, pso.clone()));
+                STORED_LATER.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        return Ok(pso);
+    }
     let _stores = library.saving.read().unwrap_or_else(|e| e.into_inner());
-    let _call = call("store", name);
+    store(library, &wide, &pso);
+    Ok(pso)
+}
+
+/// Stores `pso` as `wide`; the caller holds a read of `saving`.
+fn store(library: &Library, wide: &HSTRING, pso: &ID3D12PipelineState) {
+    let _call = call("store", &wide.to_string_lossy());
     // SAFETY: a live pipeline; a name already stored (a description that
-    // differs) is refused, which leaves the library as it was.
-    if unsafe { library.library.StorePipeline(PCWSTR(wide.as_ptr()), &pso) }.is_ok() {
+    // differs, or one made twice at once) is refused, which leaves the
+    // library as it was.
+    if unsafe { library.library.StorePipeline(PCWSTR(wide.as_ptr()), pso) }.is_ok() {
         library.added.fetch_add(1, Ordering::Relaxed);
     }
-    Ok(pso)
+}
+
+/// Whether a pipeline made while a save holds the library alone is handed
+/// out at once and stored after the save (`VICTORY_LIBRARY_STORE_LATER=0`:
+/// it waits for the whole save, as before). Try 6.15, after cool_fox
+/// 4a028f31 (Esteban Viera, opt-in there).
+///
+/// Why: a save writes the whole library (1.1 GB in the 6.12 report, ten
+/// times in eighteen minutes, every 20 s while pipelines were being made
+/// on a PC with memory to spare), and every pipeline finished meanwhile
+/// stood until it was written: the frames of those saves dropped 19 to 24
+/// draws a frame as "being made" and took 400 ms to 5.2 s. That is when
+/// new things come into view.
+fn stores_later() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_LIBRARY_STORE_LATER").is_none_or(|v| v != "0"))
+}
+
+/// A pipeline made while a save held the library, with its name.
+struct Later(HSTRING, ID3D12PipelineState);
+// SAFETY: D3D12 objects are free-threaded; only moved into and out of
+// `LATER`.
+unsafe impl Send for Later {}
+
+/// Pipelines handed out during a save and not stored yet ([`stores_later`]).
+static LATER: Mutex<Vec<Later>> = Mutex::new(Vec::new());
+/// Pipelines handed out during a save since the start (the save line).
+static STORED_LATER: AtomicU64 = AtomicU64::new(0);
+
+/// Stores what [`LATER`] holds (outside a save).
+fn store_later(library: &Library) {
+    let later = std::mem::take(&mut *LATER.lock().unwrap_or_else(|e| e.into_inner()));
+    if later.is_empty() {
+        return;
+    }
+    let _all = one_call();
+    let _stores = library.saving.read().unwrap_or_else(|e| e.into_inner());
+    for Later(wide, pso) in later {
+        store(library, &wide, &pso);
+    }
+}
+
+/// Saves the library now and then on a thread of its own (Try 6.15;
+/// `VICTORY_LIBRARY_SAVE_THREAD=0`: on the pipeline worker that finished
+/// a pipeline, as before). A save took that worker away from compiling
+/// for the seconds it wrote 1.1 GB, right when new things came into view.
+/// The thread looks every 5 s; [`save`] decides whether one is due.
+pub(crate) fn save_soon() {
+    static THREAD: OnceLock<bool> = OnceLock::new();
+    let running = *THREAD.get_or_init(|| {
+        std::env::var_os("VICTORY_LIBRARY_SAVE_THREAD").is_none_or(|v| v != "0")
+            && std::thread::Builder::new()
+                .name("pipeline library save".into())
+                .spawn(save_loop)
+                .is_ok()
+    });
+    if !running {
+        save(false);
+    }
+}
+
+/// [`save_soon`]'s thread.
+fn save_loop() {
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        save(false);
+    }
 }
 
 /// Writes the library and the early list if pipelines were added since the
 /// last save and `SAVE_EVERY` has passed (or `now`).
 pub(crate) fn save(now: bool) {
     static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    // One save at a time ([`save_soon`]'s thread and the last one at the end).
+    static ONE: Mutex<()> = Mutex::new(());
     const SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(20);
     let (Some(dir), Some(library)) = (DIR.get(), library()) else { return };
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    store_later(library);
     // Try 6.3: in the world, on a PC short of memory, at most every
     // `VICTORY_LIBRARY_SAVE_S` seconds (180 unless set): each save writes the
     // whole library again (770 MB in the 6.2 report, eight times in its
     // five minutes of world, with 400-800 MB of the PC's memory free), and
-    // those pages push the title's own out. Behind a loading screen, and
-    // with memory to spare, every 20 s as before; at the end always.
-    let every = if crate::draw::loading_now() || crate::pressure::level() == crate::pressure::Level::Normal {
+    // those pages push the title's own out. Behind a loading screen every
+    // 20 s as before; at the end always.
+    // Try 6.15: in the world at most every `VICTORY_LIBRARY_SAVE_S` (300
+    // unless set) with memory to spare too: the 6.12 report's PC (32 GB)
+    // wrote 1.1 GB every 20-40 s while new things came into view, and
+    // those frames took 0.4-5.2 s. The pipelines are kept in memory
+    // meanwhile; a crash loses at most those of the last minutes.
+    let every = if crate::draw::loading_now() {
         SAVE_EVERY
     } else {
         static S: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
         std::time::Duration::from_secs(
             (*S.get_or_init(|| {
-                std::env::var("VICTORY_LIBRARY_SAVE_S").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(180)
+                std::env::var("VICTORY_LIBRARY_SAVE_S").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(300)
             }))
             .max(20),
         )
@@ -814,6 +910,8 @@ pub(crate) fn save(now: bool) {
             size
         }
     };
+    // What was made while this save held the library alone.
+    store_later(library);
     let used: Vec<String> = USED.lock().unwrap_or_else(|e| e.into_inner()).iter().flatten().cloned().collect();
     let library_written = if bytes > 0 { replace_library(dir, &tmp) } else { Ok(()) };
     if bytes > 0 && library_written.is_ok() {
@@ -839,6 +937,7 @@ pub(crate) fn save(now: bool) {
             made = MADE.load(Ordering::Relaxed),
             loaded = LOADED.load(Ordering::Relaxed),
             started_early = EARLY.load(Ordering::Relaxed),
+            handed_out_during_saves = STORED_LATER.load(Ordering::Relaxed),
             "host pipeline library saved"
         ),
         Err(e) => tracing::warn!(error = %e, "host pipeline library not saved"),
