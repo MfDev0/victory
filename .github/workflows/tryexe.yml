@@ -22,7 +22,10 @@ jobs:
         run: |
           python3 -m venv /tmp/venv
           /tmp/venv/bin/pip install --quiet ziglang
-          bash scripts/try/build-exe.sh out
+          if ! bash scripts/try/build-exe.sh out > b.log 2>&1; then
+            echo "::error title=build::$(tail -c 3000 b.log | tr '\n\r%' '   ')"
+            exit 1
+          fi
       - name: Put it on the v1 release
         env:
           GH_TOKEN: ${{ github.token }}
