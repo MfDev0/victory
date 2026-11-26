@@ -6,6 +6,7 @@ name: Shader probe
 # Runs when scripts/try/probe.txt changes; the report names are in it.
 # (`translate --list` calls emit::emit: the pixel first-half retries of
 # emit::translate are not in it, so those three fail here only.)
+# (5.1: the last resort splits console waves around LDS too.)
 
 on:
   push:

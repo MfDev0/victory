@@ -839,6 +839,13 @@ pub(super) fn wave_local(p: &Program, st: &Structured) -> Result<(), (usize, &'s
     pass(&mut kind, &mut firsts, true)
 }
 
+/// Whether the last resort splits console waves the host waves cannot meet around
+/// (`VICTORY_WAVE_FORCE_SPLIT=0`: those keep 64-lane waves and are refused by 32-lane hosts).
+fn force_split_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_WAVE_FORCE_SPLIT").is_none_or(|v| v != "0"))
+}
+
 /// The mode of a group barrier the translation adds (host waves meeting):
 /// a wait for the group with a shared-memory fence; the fence alone with
 /// `VICTORY_GROUP_SYNC=0` ([`super::group_sync`]).
@@ -983,6 +990,7 @@ thread_local! {
 /// thread group gets per-half results. The last resort for programs that
 /// do not translate otherwise.
 pub(super) fn with_local_waves_any<R>(f: impl FnOnce() -> R) -> R {
+    // (also splits console waves around LDS the host waves cannot meet for: see `Lower::new`)
     let was = LOCAL_ANY.replace(true);
     let r = with_local_waves(f);
     LOCAL_ANY.set(was);
@@ -1379,7 +1387,18 @@ impl<'a> Lower<'a> {
                         matches!(i.fields, Fields::Ds { .. })
                             && !(i.name().starts_with("ds_swizzle") || i.name().contains("permute"))
                     };
-                    if let Some(all) = all_lane_blocks(x.st) {
+                    // The last resort (`LOCAL_ANY`, every mask and lane read per host wave) splits
+                    // the console wave even where the host waves cannot meet around some LDS
+                    // accesses (they meet where every lane runs, as before; not inside those
+                    // lane branches, where a barrier would hang the group), and in programs with
+                    // an indirect exit (no block taken as one every lane runs). Approximate where
+                    // one half reads in such a branch what the other half wrote there without a
+                    // barrier; the alternative is a pipeline a 32-lane host refuses
+                    // (`WaveSize(64)`, E_INVALIDARG: six in every run on an RTX 4060, their
+                    // dispatches dropped). `VICTORY_WAVE_FORCE_SPLIT=0` keeps those refused.
+                    let force = LOCAL_ANY.get() && force_split_on();
+                    let all_found = all_lane_blocks(x.st).or_else(|| force.then(|| vec![false; p.blocks.len()]));
+                    if let Some(all) = all_found {
                         let ok = p.blocks.iter().enumerate().all(|(b, blk)| {
                             blk.insts.iter().all(|inst| {
                                 !lds(inst) || all.get(b).copied().unwrap_or(false)
@@ -1398,6 +1417,10 @@ impl<'a> Lower<'a> {
                                     need(b);
                                 }
                             }
+                        }
+                        if !lds_ok && force {
+                            lds_meet = Some((all.clone(), vec![(false, false); p.blocks.len()]));
+                            lds_ok = true;
                         }
                         if lds_ok {
                             wave = 32;
@@ -2142,16 +2165,21 @@ impl<'a> Lower<'a> {
         if threads.iter().product::<u32>() % 64 != 0 {
             return Err("a wave sum of 16-bit floats in a wave that is not full");
         }
-        if self.local {
+        if self.local && !self.local_any {
             return Err("a wave sum of 16-bit floats in a half-wave");
         }
+        // the last resort: this host wave's half of the sum, its own 32 lanes (approximate)
+        let own_half = self.local && self.local_any;
         // two host waves of 32 that exchange, or one host wave of 64 lanes
         let halves = match (&self.exchange, self.s.wave_size) {
+            _ if own_half => true,
             (Some((_, false, _)), _) => true,
             (None, Some(64)) if self.x.p.wave64 => false,
             _ => return Err("a wave sum of 16-bit floats on these waves"),
         };
-        let every = if halves {
+        let every = if own_half {
+            true
+        } else if halves {
             self.all_lanes(self.cur_ir)
         } else {
             all_lane_blocks(self.x.st).is_some_and(|all| all.get(self.cur_ir).copied().unwrap_or(false))
@@ -2177,7 +2205,7 @@ impl<'a> Lower<'a> {
         let first = self.s.m.bin(c, Bin::And, first, high);
         let sum = self.s.m.bin(c, Bin::And, sum, low);
         let mine = self.s.m.bin(c, Bin::Or, first, sum);
-        if !halves {
+        if !halves || own_half {
             return Ok(mine);
         }
         let (lo, hi) = self.exchange_halves(c, mine);
@@ -3155,7 +3183,7 @@ impl<'a> Lower<'a> {
         // host waves know every lane runs that block.
         let made = self.def_block.get(&lo).copied();
         let whole = self.exchange.is_some() && !self.local && made.is_none_or(|b| self.all_lanes(b));
-        if !self.x.st.active.contains(&lo) && !whole && !MASKS_ELSEWHERE.get() {
+        if !self.x.st.active.contains(&lo) && !whole && !MASKS_ELSEWHERE.get() && !self.local_any {
             if self.exchange.is_some() && !self.local {
                 need(made.unwrap_or(0));
             }
@@ -3866,6 +3894,16 @@ impl<'a> Lower<'a> {
             let (name, code) = if any { ("waveAnyTrue", 113) } else { ("waveAllTrue", 114) };
             return Ok(self.s.op(c, name, Attr::NoUnwind, i1t, code, &[mine]));
         }
+        if self.local && self.local_any {
+            // the last resort: each host wave asks its own 32 lanes (approximate where the
+            // other half would have decided it)
+            let c = self.cur;
+            let mine = self.boolean(when, c)?;
+            let i1t = self.s.t.i1;
+            self.s.flags |= flags::WAVE_OPS;
+            let (name, code) = if any { ("waveAnyTrue", 113) } else { ("waveAllTrue", 114) };
+            return Ok(self.s.op(c, name, Attr::NoUnwind, i1t, code, &[mine]));
+        }
         if self.local || !self.exchange.as_ref().is_some_and(|e| !e.1) {
             return Err(WHY);
         }
@@ -4484,9 +4522,10 @@ impl<'a> Lower<'a> {
             // host (it left through a branch, not a guard) is read as the
             // host gives it; the console reads 0.
             self.cross_lane(false)?;
-            if self.exchange.as_ref().is_some_and(|e| !e.1) {
-                // a console wave of 64 run as two host waves: the lane named
-                // may be in the other one
+            // a console wave of 64 run as two host waves: the lane named may be in the other
+            // one (the last resort reads this host wave's lane of that number instead)
+            let own_half = self.local && self.local_any;
+            if self.exchange.as_ref().is_some_and(|e| !e.1) && !own_half {
                 return Err("a lane permute across two host waves");
             }
             let at = self.vgprs(inst, addr.as_ref().ok_or("a permute address")?, 1)?[0];
@@ -4495,7 +4534,7 @@ impl<'a> Lower<'a> {
             let at = self.s.m.bin(c, Bin::Add, at, o);
             let two = self.s.m.i32(2);
             let src = self.s.m.bin(c, Bin::LShr, at, two);
-            let last = self.s.m.i32(self.wave() - 1);
+            let last = self.s.m.i32(if own_half { 31 } else { self.wave() - 1 });
             let src = self.s.m.bin(c, Bin::And, src, last);
             let x = match guard {
                 Some(g) => {
