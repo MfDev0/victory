@@ -22,7 +22,7 @@ jobs:
         run: |
           python3 -m venv /tmp/venv
           /tmp/venv/bin/pip install --quiet ziglang
-          if ! bash scripts/try/build-exe.sh out > b.log 2>&1; then
+          if ! bash scripts/try/build-exe.sh "$PWD/out" > b.log 2>&1; then
             echo "::error title=build::$(tail -c 3000 b.log | tr '\n\r%' '   ')"
             exit 1
           fi
