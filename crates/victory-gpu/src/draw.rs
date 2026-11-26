@@ -454,6 +454,42 @@ fn loading_draws() -> u64 {
     *N.get_or_init(|| std::env::var("VICTORY_LOADING_DRAWS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(400))
 }
 
+/// Try 6.3: frames of few draws in a row before the texture pass takes a
+/// loading screen's budget (`VICTORY_LOADING_FRAMES`, 30 unless set). One
+/// such frame was enough in 6.1 and 6.2, and the world has some (a cut, a
+/// fade, a frame the title split): the report of 6.2 had passes of 750 ms
+/// to 2 s in the world, at 1 to 2 frames a second, from the loading budget
+/// of 1.2 s. A loading screen runs 25 frames a second with 1 to 17 draws.
+fn loading_frames() -> u64 {
+    static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *N.get_or_init(|| std::env::var("VICTORY_LOADING_FRAMES").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(30))
+}
+
+/// Try 6.3: the milliseconds of each loading-screen frame given to the
+/// texture pass (`VICTORY_LOADING_MS`, 200 unless set; 0: the 12 ms of any
+/// frame). A loading screen draws nothing but its own few draws, and the
+/// pass that runs there is the early one (`State::early_textures`), whose
+/// budget was 12 ms and 64 MB: the 6.1 loading budget never reached it, and
+/// the 6.2 report entered the world after 94 s of loading screen with
+/// 5,771 textures still due.
+fn loading_ms() -> u64 {
+    static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *N.get_or_init(|| std::env::var("VICTORY_LOADING_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(200))
+}
+
+/// Frames in a row, up to the last one the texture pass saw, with fewer
+/// draws than [`loading_draws`].
+static LOW_DRAW_FRAMES: AtomicU64 = AtomicU64::new(0);
+
+/// Whether a loading screen (or a menu, or a long fade) is up now: the
+/// last [`loading_frames`] frames all had fewer draws than
+/// [`loading_draws`]. The texture pass then has a big budget, and the
+/// texture rush (`crate::tiles::rush_levels`) is off: textures made behind
+/// a loading screen keep their detail.
+pub(crate) fn loading_now() -> bool {
+    loading_draws() > 0 && LOW_DRAW_FRAMES.load(Ordering::Relaxed) >= loading_frames()
+}
+
 /// Times a placed texture's slot was passed over because its memory is not
 /// mapped.
 pub(crate) static HEAP_TEXTURES_AWAY: AtomicU64 = AtomicU64::new(0);
@@ -1715,6 +1751,11 @@ impl State {
         let budget = if bake && left > 0 {
             // What a bake may read must be there now: up to 2 GiB.
             (left, 2 << 30)
+        } else if first && loading_now() && loading_ms() > 0 {
+            // Try 6.3: behind a loading screen, the loading budget (the
+            // pass of the world does not run there).
+            let bytes: u64 = if crate::pressure::texture_pass_quarters().1 { 768 << 20 } else { 384 << 20 };
+            (loading_ms().max(early_ms), bytes)
         } else if first && early_ms > 0 {
             (early_ms, 64 << 20)
         } else {
@@ -1870,7 +1911,13 @@ impl State {
         if FRAME.swap(frame, Ordering::Relaxed) != frame {
             SPENT.store(0, Ordering::Relaxed);
             let ever = crate::list::DRAWS_EVER.load(Ordering::Relaxed);
-            LAST_DRAWS.store(ever.saturating_sub(DRAWS_AT.swap(ever, Ordering::Relaxed)), Ordering::Relaxed);
+            let last = ever.saturating_sub(DRAWS_AT.swap(ever, Ordering::Relaxed));
+            LAST_DRAWS.store(last, Ordering::Relaxed);
+            if last < loading_draws() {
+                LOW_DRAW_FRAMES.fetch_add(1, Ordering::Relaxed);
+            } else {
+                LOW_DRAW_FRAMES.store(0, Ordering::Relaxed);
+            }
         }
         // No more of them are made while the card has no room
         // (`resource::room`): by what is alive now, not by what was ever
@@ -1911,6 +1958,12 @@ impl State {
             // (1,024 a pass, Try 6.0: 256 left a blurred backlog of
             // thousands for a minute after the card had room again.)
             crate::descriptor::host::sharpen(1024);
+            // Try 6.3: and the textures the rush made soft, once it is over,
+            // whatever texture quality says (it judges their levels again at
+            // the upload): `sharpen` waits for the card to be under its
+            // sharp line, and in the 6.2 report it stood above it for the
+            // whole world, so no rushed texture got its detail back.
+            crate::descriptor::host::unrush(1024);
             host.texture_slots_waiting(frame);
         }
         let (due, census) = host.texture_slots_due(frame, 4096);
@@ -1969,7 +2022,7 @@ impl State {
         // (384 MB when the PC is short of memory): nobody sees a loading
         // screen take longer, and the world then opens with its textures
         // there instead of coming in over the first minute.
-        let loading = !due.is_empty() && LAST_DRAWS.load(Ordering::Relaxed) < loading_draws();
+        let loading = !due.is_empty() && loading_now();
         let (per_frame, span) = if loading {
             let bytes: u64 = if backlog_ok { 768 << 20 } else { 384 << 20 };
             let n = HEAP_TEXTURES_LOADING.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1978,6 +2031,8 @@ impl State {
                     passes = n,
                     due = due.len(),
                     draws_last_frame = LAST_DRAWS.load(Ordering::Relaxed),
+                    frames_of_few_draws = LOW_DRAW_FRAMES.load(Ordering::Relaxed),
+                    early_pass_ms = PASS_BUDGET.get().map_or(0, |(ms, _)| ms),
                     mb = bytes >> 20,
                     "a loading screen: textures picked by index get a big budget behind it (VICTORY_LOADING_DRAWS=0: not)"
                 );

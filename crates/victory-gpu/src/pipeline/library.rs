@@ -661,9 +661,26 @@ pub(crate) fn save(now: bool) {
     static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
     const SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(20);
     let (Some(dir), Some(library)) = (DIR.get(), library()) else { return };
+    // Try 6.3: in the world, on a PC short of memory, at most every
+    // `VICTORY_LIBRARY_SAVE_S` seconds (180 unless set): each save writes the
+    // whole library again (770 MB in the 6.2 report, eight times in its
+    // five minutes of world, with 400-800 MB of the PC's memory free), and
+    // those pages push the title's own out. Behind a loading screen, and
+    // with memory to spare, every 20 s as before; at the end always.
+    let every = if crate::draw::loading_now() || crate::pressure::level() == crate::pressure::Level::Normal {
+        SAVE_EVERY
+    } else {
+        static S: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        std::time::Duration::from_secs(
+            (*S.get_or_init(|| {
+                std::env::var("VICTORY_LIBRARY_SAVE_S").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(180)
+            }))
+            .max(20),
+        )
+    };
     {
         let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
-        if !now && last.is_some_and(|t| t.elapsed() < SAVE_EVERY) {
+        if !now && last.is_some_and(|t| t.elapsed() < every) {
             return;
         }
         *last = Some(std::time::Instant::now());

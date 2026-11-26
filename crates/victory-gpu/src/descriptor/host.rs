@@ -169,6 +169,41 @@ pub(crate) fn blurred(start: u64) {
     BLURRED.lock().unwrap_or_else(|e| e.into_inner()).insert(start);
 }
 
+/// Try 6.3: where the placed textures start whose last upload left their
+/// largest levels out for the texture rush (`crate::tiles::rush_levels`).
+static RUSHED: Mutex<std::collections::BTreeSet<u64>> = Mutex::new(std::collections::BTreeSet::new());
+
+/// The placed texture at `start` was uploaded without its largest levels
+/// for the texture rush ([`RUSHED`]).
+pub(crate) fn rushed(start: u64) {
+    RUSHED.lock().unwrap_or_else(|e| e.into_inner()).insert(start);
+}
+
+/// Once the texture rush is over, up to `most` textures it made soft are
+/// made due as if their upload had left a level waiting: uploaded again,
+/// with the levels texture quality allows now. Since the start: how many.
+pub(crate) fn unrush(most: usize) -> u64 {
+    static UNRUSHED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    if crate::tiles::rush_levels() == 0 {
+        let starts: Vec<u64> = {
+            let mut rushed = RUSHED.lock().unwrap_or_else(|e| e.into_inner());
+            let starts: Vec<u64> = rushed.iter().copied().take(most).collect();
+            for start in &starts {
+                rushed.remove(start);
+            }
+            starts
+        };
+        if !starts.is_empty() {
+            let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
+            for &start in &starts {
+                waiting.entry(start).or_insert(1);
+            }
+            UNRUSHED.fetch_add(starts.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    UNRUSHED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// While texture quality leaves nothing out (the card has memory to spare
 /// again), up to `most` textures uploaded blurred are made due as if their
 /// upload had left a level waiting: uploaded again, with every level. They

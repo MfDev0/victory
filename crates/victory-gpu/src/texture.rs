@@ -729,7 +729,7 @@ pub(crate) fn upload(list: &HostList, resource: This, texture: &ID3D12Resource) 
         // Uploaded without its largest levels for the rush: made whole
         // again when it is over, as a texture made blurred is.
         if staging.rushed.load(Relaxed) != 0 {
-            crate::descriptor::host::blurred(staging.memory as u64);
+            crate::descriptor::host::rushed(staging.memory as u64);
         }
         // A texture picked by index has no staging buffer after this
         // upload: its slots are made due again by the texture pass.

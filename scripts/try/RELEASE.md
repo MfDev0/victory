@@ -1,6 +1,8 @@
-VIctory Try 6.2
-- The whole picture first, the detail after (how streaming games do it): while lots of textures are still waiting to load, each one first loads without its two biggest sizes. That is about 1/16 of the work, so the whole scene shows up fast, slightly soft. Once the backlog is gone, every texture gets its full detail back while you play
-- What the game draws on screen right now is still loaded first, on the spot; the rest fills in behind it
-- Loading screens pre-load the world (from 6.1): while a loading screen or menu is up, textures get a big budget so the world opens ready
-- Settings: VICTORY_TEXTURE_RUSH=0 turns the picture-first mode off (1 or 3 changes how many sizes it skips at first)
-- The version is in the window title, the game log and the report name, so please send the report from this run
+VIctory Try 6.3
+- Loading screens now really pre-load the world. Your 6.2 log showed the 6.1/6.2 pre-loading never ran on the loading screen itself (it only got 12 ms a frame there), so you entered the world with about 5,800 textures still waiting. Now each loading-screen frame spends 200 ms loading textures, about 16x more than before
+- No more random 1-2 second freezes in the world: the loading-screen budget was switching on in normal world frames too. It now needs 30 frames of loading screen in a row
+- Textures loaded behind a loading screen keep full detail (the "picture first" mode only runs in the world now)
+- Textures the "picture first" mode made soft now really get their detail back. In 6.2 they stayed soft because the card was always nearly full
+- Less RAM churn: the shader cache (770 MB) was saved again 8 times in 5 minutes of play. When the PC is short of memory it now saves every 3 minutes (and always on exit)
+- Shaders were already 100% loaded from the cache before the world (2,068 of 2,068 found, 2,516 ready-made pipelines), so that part is done
+- Settings: VICTORY_LOADING_MS (200), VICTORY_LOADING_FRAMES (30), VICTORY_LIBRARY_SAVE_S (180), VICTORY_TEXTURE_RUSH=0

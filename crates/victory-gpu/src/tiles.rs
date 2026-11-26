@@ -191,6 +191,11 @@ pub(crate) fn rush_levels() -> u32 {
     if n == 0 {
         return 0;
     }
+    // Try 6.3: not behind a loading screen; there is time there, and what
+    // is made there keeps its detail.
+    if crate::draw::loading_now() {
+        return 0;
+    }
     let due = crate::draw::HEAP_TEXTURES_QUEUE[1].load(Ordering::Relaxed);
     let was = ON.load(Ordering::Relaxed);
     let now = if was { due >= 300 } else { due >= 1500 };

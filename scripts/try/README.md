@@ -477,6 +477,19 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      time. When the backlog has drained, those textures are uploaded whole
      again (`sharpen`, 1,024 a pass) and textures that draws read through
      tables are detiled whole at their next use.
+   6.3 (the 6.2 report, 154745):
+   - **loading screens really pre-load**: the pass that runs behind a
+     loading screen is the early one (12 ms and 64 MB a frame); the 6.1
+     loading budget was only in the world's pass. Now a loading screen gives
+     the early pass `VICTORY_LOADING_MS` (200) and 768 MB a frame.
+   - **a loading screen is 30 frames of few draws in a row**
+     (`VICTORY_LOADING_FRAMES`); one such frame turned the 1.2 s budget on
+     in the world (passes of 750 ms to 2 s at 1-2 fps).
+   - no texture rush behind a loading screen; textures it made soft are
+     uploaded again once it is over (`unrush`), not only under the sharp line.
+   - the pipeline library (770 MB) is saved at most every
+     `VICTORY_LIBRARY_SAVE_S` (180) in the world when the PC is short of
+     memory.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,
