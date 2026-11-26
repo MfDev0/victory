@@ -365,6 +365,23 @@ pub(crate) fn rushed(start: u64) {
     RUSHED.lock().unwrap_or_else(|e| e.into_inner()).insert(start);
 }
 
+/// Try 6.16: where the placed textures start that [`unrush`] made due to
+/// get their detail back: their next detile leaves out no level for the
+/// rush ([`unrushing`]), or a rush that starts meanwhile makes them soft
+/// again and puts them back in [`RUSHED`] (the 6.15 report: the same
+/// textures uploaded soft and sharp in turn, about once a second).
+static UNRUSHING: Mutex<std::collections::BTreeSet<u64>> = Mutex::new(std::collections::BTreeSet::new());
+
+/// Whether the texture at `start` is being made whole again after the
+/// rush ([`UNRUSHING`]); asked by its detile, which takes it off the list.
+pub(crate) fn unrushing(start: u64) -> bool {
+    let mut set = UNRUSHING.lock().unwrap_or_else(|e| e.into_inner());
+    if set.is_empty() {
+        return false;
+    }
+    set.remove(&start)
+}
+
 /// Once the texture rush is over, up to `most` textures it made soft are
 /// made due as if their upload had left a level waiting: uploaded again,
 /// with the levels texture quality allows now. Since the start: how many.
@@ -380,6 +397,7 @@ pub(crate) fn unrush(most: usize) -> u64 {
             starts
         };
         if !starts.is_empty() {
+            UNRUSHING.lock().unwrap_or_else(|e| e.into_inner()).extend(starts.iter().copied());
             let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
             for &start in &starts {
                 waiting.entry(start).or_insert(1);

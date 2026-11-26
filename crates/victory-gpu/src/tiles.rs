@@ -182,9 +182,26 @@ pub(crate) fn top_dropped() -> u32 {
 /// (`crate::descriptor::host::sharpen`) while the game plays. In the world
 /// up to 27,668 slots were due (report 141631) and textures came in one by
 /// one over a minute.
+///
+/// Try 6.16: at most once in [`rush_gap_ms`]. In the 6.15 report the rush
+/// went on and off 209 times in six minutes, about once a second: when it
+/// ended, the textures it had made soft were made due again to get their
+/// detail back (`crate::descriptor::host::unrush`, 1,024 a pass), which put
+/// the queue over 1,500 again, so the rush came back on and made them soft
+/// again, and so on. Thousands of textures were uploaded again and again
+/// (111,497 uploads, 51,988 MB, in six minutes; 35 to 51 ms a frame of
+/// texture refreshes, 88 to 94 ms of the heap worker), alternately with and
+/// without their largest levels, and each change of a texture's first level
+/// is a change of its views: faces went from their skin to blank (the
+/// placeholder's white) to see-through (the levels without memory) and
+/// back. Now a texture `unrush` made due is uploaded whole whatever the
+/// rush says ([`crate::descriptor::host::unrushing`]), and the rush stays
+/// off for a while after it ends.
 pub(crate) fn rush_levels() -> u32 {
     static N: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    // When the rush last ended (`now_ms` plus one; 0: never).
+    static ENDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = *N.get_or_init(|| {
         std::env::var("VICTORY_TEXTURE_RUSH").ok().and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(2).min(3)
     });
@@ -198,16 +215,38 @@ pub(crate) fn rush_levels() -> u32 {
     }
     let due = crate::draw::HEAP_TEXTURES_QUEUE[1].load(Ordering::Relaxed);
     let was = ON.load(Ordering::Relaxed);
-    let now = if was { due >= 300 } else { due >= 1500 };
+    let ended = ENDED.load(Ordering::Relaxed);
+    let rested = ended == 0 || crate::host::now_ms().saturating_sub(ended - 1) >= rush_gap_ms();
+    let now = rush_next(was, due, rested);
     if now != was && ON.compare_exchange(was, now, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+        if !now {
+            ENDED.store(crate::host::now_ms() + 1, Ordering::Relaxed);
+        }
         tracing::info!(
             due,
             on = now,
             levels = n,
-            "texture rush (VICTORY_TEXTURE_RUSH): the scene first without the largest levels, the detail after"
+            gap_s = rush_gap_ms() / 1000,
+            "texture rush (VICTORY_TEXTURE_RUSH): the scene first without the largest levels, the detail after (at most once in gap_s, VICTORY_TEXTURE_RUSH_GAP_S)"
         );
     }
     if now { n } else { 0 }
+}
+
+/// Whether the rush is on after this look: it was (`was`), `due` slots
+/// are due, and the gap since it last ended has passed (`rested`). Pure,
+/// for testing.
+fn rush_next(was: bool, due: u64, rested: bool) -> bool {
+    if was { due >= 300 } else { due >= 1500 && rested }
+}
+
+/// How long the rush stays off after it ends (`VICTORY_TEXTURE_RUSH_GAP_S`,
+/// 30 unless set; 0: no gap, as before Try 6.16), in milliseconds.
+fn rush_gap_ms() -> u64 {
+    static MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *MS.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_RUSH_GAP_S").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(30).min(3600) * 1000
+    })
 }
 
 /// Whether textures are made level by level whatever they hold, for
@@ -1039,6 +1078,17 @@ mod tests {
 
     use super::*;
     use crate::host::{compile, transition, warp_adapter};
+
+    /// Try 6.16: the rush keeps its two lines, and after it ends it does not
+    /// come back before the gap has passed however long the queue is.
+    #[test]
+    fn the_rush_rests_between_turns() {
+        assert!(!rush_next(false, 1499, true));
+        assert!(rush_next(false, 1500, true));
+        assert!(!rush_next(false, 3000, false), "not again within the gap");
+        assert!(rush_next(true, 300, false), "an ongoing rush runs on");
+        assert!(!rush_next(true, 299, true));
+    }
 
     const SIDE: u32 = 1024;
     const LEVELS: u16 = 11;

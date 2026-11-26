@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.15'
+$TryVersion = '6.16'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -70,11 +70,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = ''; tidy = ''; meter = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin', 'tidy', 'meter')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -384,8 +384,9 @@ function Save-Backup {
             Remove-Item -Force -ErrorAction SilentlyContinue $tmp
         }
     }
+    # (6.16: the newest 2; 5 before. Each is the fork's whole history.)
     Get-ChildItem -Path $BackupDir -Filter 'catez-*.bundle' | Sort-Object LastWriteTime -Descending |
-        Select-Object -Skip 5 | Remove-Item -Force -ErrorAction SilentlyContinue
+        Select-Object -Skip 2 | Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
 # Puts the fork in the source folder, then upstream's commits that came after
@@ -513,7 +514,107 @@ function Built { $r = @($input); return ($r.Count -gt 0) -and ($r[-1] -eq $true)
 # first, and if that does not build, the fork alone. (Up to Try 4.0 they
 # were always added: one of them, upstream #1180, does not build with this
 # fork's shader code.)
+# ------------------------------------------------------------- the disk
+# 6.16: why every new version took more of the disk, and what goes now.
+# - The shader cache (cache-gta6\shaders): each build of the translator
+#   translated all 25,746 of the game's shaders again (about a gigabyte) and
+#   kept them beside every older build's, which nothing read again. VIctory
+#   itself now keeps the two most recently used builds' translations and
+#   removes the rest a minute and a half into a run or a prepare
+#   (VICTORY_SHADER_CACHE_KEEP; the 6.15 cache's files go once).
+# - The build folder (target): cargo never removes the pieces older builds
+#   made. Past 12 GB (VICTORY_TRY_TARGET_MAX_GB) it is emptied before the
+#   next build, which then takes longer once.
+# - The other engines (victory-avm, target-avm, cache-avm, victory-8gb,
+#   target-8gb, cache-8gb): removed while that engine is not the one in use
+#   (N builds it again).
+# - Game logs: the newest 10; fork backups: the newest 2; failed shaders
+#   older than 3 days; half-made report folders; a refused pipeline library.
+#   (Report zips in Downloads are left to you.)
+# config.json tidy=off: nothing is removed. TIDY shows what takes what.
+function Folder-Mb([string]$path) {
+    if (-not $path -or -not (Test-Path -LiteralPath $path)) { return [int64]0 }
+    $sum = (Get-ChildItem -LiteralPath $path -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+    if ($null -eq $sum) { return [int64]0 }
+    return [int64]($sum / 1MB)
+}
+function Remove-Folder([string]$path, [string]$why) {
+    if (-not $path -or -not (Test-Path -LiteralPath $path)) { return [int64]0 }
+    $mb = Folder-Mb $path
+    Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $path) {
+        $left = Folder-Mb $path
+        Bad "disk: could not remove all of $path ($left MB left; in use?)"
+        return [int64]($mb - $left)
+    }
+    Say "disk: removed $path ($mb MB): $why"
+    return $mb
+}
+function Keep-Newest([string]$dir, [string]$filter, [int]$n) {
+    if (-not $dir -or -not (Test-Path -LiteralPath $dir)) { return [int64]0 }
+    $old = @(Get-ChildItem -LiteralPath $dir -Filter $filter -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Skip $n)
+    $bytes = [int64]0
+    foreach ($f in $old) {
+        $bytes += $f.Length
+        Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
+    }
+    return [int64]($bytes / 1MB)
+}
+function Target-MaxGb {
+    $v = 0
+    if ([int]::TryParse("$env:VICTORY_TRY_TARGET_MAX_GB", [ref]$v) -and $v -gt 0) { return $v }
+    return 12
+}
+# Before a build of this fork's engine: an overgrown build folder is emptied.
+function Tidy-Target {
+    if ($script:Config.tidy -eq 'off' -or -not (Test-Path -LiteralPath $Target)) { return }
+    $mb = Folder-Mb $Target
+    $max = Target-MaxGb
+    if ($mb -gt ($max * 1024)) {
+        Say ("disk: the build folder holds {0:N1} GB (cargo keeps every older build's pieces): emptied before this build (over {1} GB, VICTORY_TRY_TARGET_MAX_GB); this build takes longer once" -f ($mb / 1024), $max)
+        $null = Remove-Folder $Target 'older builds'' pieces'
+    }
+}
+function Tidy-Disk([bool]$sizes) {
+    $c = $script:Config
+    if ($c.tidy -eq 'off') {
+        if ($sizes) { Say 'disk: tidy=off in config.json: nothing is removed' }
+        return
+    }
+    $freed = [int64]0
+    if (-not (EngineAvm)) {
+        foreach ($p in @($SrcA, $TargetA, (Join-Path $TryHome 'cache-avm'))) { $freed += Remove-Folder $p 'the AvatarManz engine is not in use (N builds it again)' }
+    }
+    if (-not (Engine8)) {
+        foreach ($p in @($Src8, $Target8, (Join-Path $TryHome 'cache-8gb'))) { $freed += Remove-Folder $p 'the 8 GB engine is not in use (N builds it again)' }
+    }
+    $freed += Keep-Newest $LogDir 'game-*.log' 10
+    $freed += Keep-Newest $BackupDir 'catez-*.bundle' 2
+    foreach ($d in @(Get-ChildItem -LiteralPath $TryHome -Directory -Filter 'report-*' -ErrorAction SilentlyContinue)) { $freed += Remove-Folder $d.FullName 'a report folder left half made' }
+    $rejected = Join-Path $TryHome 'cache-gta6\pipelines\host-pipelines.rejected.bin'
+    if (Test-Path -LiteralPath $rejected) {
+        $freed += [int64]((Get-Item -LiteralPath $rejected).Length / 1MB)
+        Remove-Item -LiteralPath $rejected -Force -ErrorAction SilentlyContinue
+    }
+    if ($freed -gt 0) { Say ("disk: {0:N2} GB freed" -f ($freed / 1024)) }
+    if ($sizes) {
+        $cache = Join-Path $TryHome 'cache-gta6'
+        $parts = [ordered]@{
+            'build (target)' = Folder-Mb $Target
+            'shader cache' = Folder-Mb (Join-Path $cache 'shaders')
+            'pipelines' = Folder-Mb (Join-Path $cache 'pipelines')
+            'source' = Folder-Mb $Src
+            'logs' = Folder-Mb $LogDir
+            'backups' = Folder-Mb $BackupDir
+        }
+        $all = Folder-Mb $TryHome
+        $line = (@($parts.Keys | ForEach-Object { '{0} {1:N1}' -f $_, ($parts[$_] / 1024) }) -join ', ')
+        Say ("disk: VIctory Try takes {0:N1} GB in {1}: {2} (GB). Older builds' shader translations go during the next run." -f ($all / 1024), $TryHome, $line)
+    }
+}
+
 function Build-All {
+    Tidy-Target
     $null = Prepare-Source ($env:VICTORY_TRY_UPSTREAM -eq '1')
     $added = @($script:Added | Where-Object { $_ })
     $ok = Build | Built
@@ -916,6 +1017,14 @@ function Set-AllOut {
     $ramCrit = [Math]::Max(128, [int]($ramMb / 100))
     $commitCrit = [Math]::Max(256, [int]($virtMb / 100))
     $cardMb = [Math]::Max(1024, [int]($vram / 5))
+    # 6.16: on cards under 8 GB, textures up to 94% of the card and the card's
+    # pressure at 95/98%. At 99% (the 6.15 report, 6 GB RTX 4050 Laptop) the
+    # card stood at 5,050-5,100 MB of its 5,153 MB budget for the whole world
+    # and the game's memory windows found no room on it: shaders read them
+    # from the PC's memory across the bus (about 200 ms of card work a frame).
+    $small = $vram -gt 0 -and $vram -lt 8000
+    $texRoom = $(if ($small) { '94' } else { '99' })
+    $cardPressure = $(if ($small) { '95,98' } else { '98,99' })
     $set = [ordered]@{
         # The process at high priority (never realtime) and a soft hold on
         # 90% of the memory: Windows takes the game's pages last.
@@ -925,10 +1034,10 @@ function Set-AllOut {
         # what Windows can commit); the card at 98 and 99% of its budget.
         'VICTORY_PRESSURE_RAM_MB' = "$(2 * $ramCrit),$ramCrit"
         'VICTORY_PRESSURE_COMMIT_MB' = "$(2 * $commitCrit),$commitCrit"
-        'VICTORY_PRESSURE_CARD_PERCENT' = '98,99'
+        'VICTORY_PRESSURE_CARD_PERCENT' = $cardPressure
         # Textures up to 99% of the card's budget (90), up to 512 MB of
         # uploads a frame (192), 256 MB of kept staging (128).
-        'VICTORY_TEXTURE_ROOM_PERCENT' = '99'
+        'VICTORY_TEXTURE_ROOM_PERCENT' = $texRoom
         'VICTORY_TEXTURE_STAGE_MB' = '512'
         'VICTORY_STAGING_POOL_MB' = '256'
         # 256 MB of compressed reads in flight (128; cool_fox / CGBJ).
@@ -952,7 +1061,7 @@ function Set-AllOut {
     if ($script:BarWindowsMb -gt 0 -and $null -eq $script:UserAll['VICTORY_WINDOWS_BAR_MB'] -and $vram -gt 0) {
         $env:VICTORY_WINDOWS_BAR_MB = [string]([Math]::Min(3072, [int]($vram * 0.35)))
     }
-    Say "ALL-OUT: this PC has $threads threads, $ramMb MB of memory ($virtMb MB with the page file), a $vram MB card; the game gets $use threads at high priority, textures up to 99% of the card, no texture cap, memory guard at $ramCrit MB free   (MAX switches)"
+    Say "ALL-OUT: this PC has $threads threads, $ramMb MB of memory ($virtMb MB with the page file), a $vram MB card; the game gets $use threads at high priority, textures up to $texRoom% of the card, no texture cap, memory guard at $ramCrit MB free   (MAX switches)"
     Bad '         all-out runs at the edge of this PC: if it stutters hard, pages to disk or loses the card, press MAX to go back.'
 }
 function Undo-AllOut {
@@ -1227,6 +1336,11 @@ function Set-RunEnv {
     # cards (missing ceiling, dark room: fxceless/victory-fork #62): the
     # translator keeps them out of it by itself now; W switches that off
     # (VICTORY_WAVE_DEEP_SKIPS_NOT=none) for a comparison.
+    # 6.16: the card's time measured by kind of list and by the game's passes
+    # (two timestamps a list), so a report says what the card spends its
+    # frame on: in the 6.15 report it was busy about 200 ms of every 300-420.
+    # VICTORY_CARD_METER=0 (or meter=off in config.json): not measured.
+    if ($null -eq $script:UserAll['VICTORY_CARD_METER']) { $env:VICTORY_CARD_METER = $(if ($c.meter -eq 'off') { '0' } else { '1' }) }
     if ($null -eq $script:UserFx['VICTORY_SHADER_OPT']) { [Environment]::SetEnvironmentVariable('VICTORY_SHADER_OPT', $(if ($c.opt -eq 'on') { $null } else { '0' }), 'Process') }
     if ($null -eq $script:UserFx['VICTORY_WAVE_DEEP_SKIPS_NOT']) { [Environment]::SetEnvironmentVariable('VICTORY_WAVE_DEEP_SKIPS_NOT', $(if ($c.shadowfix -eq 'off') { 'none' } else { $null }), 'Process') }
     # 4.7: speed. The game's own buffer-to-buffer copies run on the card
@@ -1610,6 +1724,12 @@ function Run-Game {
     Say 'To stop: close the game window.'
     # (6.9: none of this fork's settings for the AvatarManz engine.)
     if (-not (EngineAvm)) { Set-RunEnv }
+    # 6.16: failed shaders older than 3 days go (each run and prepare saves
+    # its own again; recent ones stay for the report).
+    if ((OwnEngine) -and $script:Config.tidy -ne 'off' -and $env:VICTORY_DUMP_FAILED -and (Test-Path -LiteralPath $env:VICTORY_DUMP_FAILED)) {
+        $old = (Get-Date).AddDays(-3)
+        Get-ChildItem -LiteralPath $env:VICTORY_DUMP_FAILED -File -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -lt $old } | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
     Tune-PC
     if (EngineAvm) { Set-EngineAvmEnv; Prepare-Avm 'new build or new pipelines' }
     elseif (Engine8) { Set-Engine8Env }
@@ -2018,7 +2138,9 @@ Run-Newer
 if (OwnEngine) {
     if ($changed -or -not (Test-Path (Ours-Exe))) { if (-not (Build-All)) { exit 1 } }
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
+Tidy-Disk ([bool]$changed)
 if (OwnEngine) {
+    Say '6.16: the fps: the textures had filled the card, so the game''s memory windows stayed in the PC''s memory and the card read them across the bus (about 200 ms of card work a frame on a 6 GB laptop card); room on the card is kept for them now and all-out leaves 6% of a small card free. The texture rush no longer goes on and off every second (the same textures uploaded again and again, and faces flicking between skin, white and see-through). The disk: older builds'' shader translations, the other engines and old logs are removed (TIDY shows what takes what). The card''s time is measured in every report.'
     Say '6.13: NVIDIA fixes from the other forks: on PCs under 24 GB of memory the game''s memory windows go straight into the card through Resizable BAR (out-of-memory and the driver crash gone, 1.6-3 -> 10-12 fps on a 16 GB RTX 3060 PC; Indy2l), texture read-backs on their own thread (no more 100-400 ms landing stalls while the world streams), a slow shader is waited for in one frame only (no more freezes while it compiles), compute shaders start compiling as soon as the game makes them, face decorations found by name (no black faces in cutscenes), streamed textures are no longer forgotten when the change list fills, and the card''s buffer compare goes out on its own (D3D12 error 538).'
     Say '6.12: MAX: all-out mode (no caps: every CPU thread but one at high priority, textures up to 99% of the card, the memory guard at 1% free, read from this PC); the ray-tracing light passes that made rooms and reflections white and hazy are left out (fewer pipelines to compile too), and NaN colours no longer spread into black or blocky patches (both from trustno1-coder/VIctory-NVIDIA).'
     Say '6.11: shader stutter: the pipeline library is read into memory ahead on 16 GB PCs too (it was skipped: every pipeline in play waited on the disk), every shader of the game translated once per build with the game closed; joined submissions, copy-back split finer over the cores (lepotane), anisotropic filtering keeps point mips (AvatarManz).'
@@ -2094,6 +2216,7 @@ function Show-Commands {
         @('MAX', 'All-out mode', $(& $on (AllOut)), 'no caps: every CPU thread but one, high priority, textures up to 99% of the card, memory guard at 1% free (risky)'),
         @('Z', 'Plain mode', $(& $on ($c.plain -eq '1')), 'VIctory''s own defaults instead of Try''s settings (for comparing)'),
         @('P', 'Prepare again', '', 'compile all pipelines again with the game closed (done by itself after updates)'),
+        @('TIDY', 'Disk', '', 'what VIctory Try takes on the disk, and old builds, logs and other engines removed'),
         @('S', 'Reports folder', '', "where report zips are saved: $(Reports-Dir)"),
         @('E', 'Open reports', '', 'open the reports folder in Explorer'),
         @('Q', 'Quit', '', 'close VIctory Try')
@@ -2135,6 +2258,7 @@ while ($true) {
     while ($true) {
         $k = (Read-Host '  Choice').Trim().ToUpper()
         if ($k -eq 'V') { Show-Version; Show-Commands; continue }
+        if ($k -eq 'TIDY') { Tidy-Disk $true; Show-Commands; continue }
         if ($k -eq 'J') { Save-Menu; Show-Commands; continue }
         if ($k -eq 'S') { Ask-Reports; Save-Config; Show-Commands; continue }
         if ($k -eq 'E') { try { Start-Process explorer.exe -ArgumentList "`"$(Reports-Dir)`"" } catch { Bad "could not open it: $(Reports-Dir)" }; Show-Commands; continue }

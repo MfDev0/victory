@@ -1221,6 +1221,11 @@ impl Staging {
     /// (`crate::tiles::rush_levels`): from level 0, those of 512 KiB or
     /// more on the host, never past the fourth level from the smallest.
     fn rush_mask(&self) -> u32 {
+        // Try 6.16: one being made whole again after a rush stays whole
+        // (asked first: the detile takes it off that list either way).
+        if crate::descriptor::host::unrushing(self.memory as u64) {
+            return 0;
+        }
         let n = crate::tiles::rush_levels();
         if n == 0 || self.mips < 5 {
             return 0;

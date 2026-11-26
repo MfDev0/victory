@@ -692,10 +692,13 @@ const LONG_MOST: usize = 8;
 /// A frame ends: called at the end of the title's present call, on the
 /// thread that made it.
 pub fn frame() {
+    // Try 6.16: the card meter's lines also without the frame log (Try's
+    // builds have neither by default; VICTORY_CARD_METER=1 alone gave no
+    // line, its pairs were never read).
+    crate::cardmeter::collect();
     if !on() {
         return;
     }
-    crate::cardmeter::collect();
     add(T::RenderLooks, 1);
     if on_slow_core() {
         add(T::RenderSlow, 1);

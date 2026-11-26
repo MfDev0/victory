@@ -1,4 +1,4 @@
-# VIctory Try: plan and to-do (6.10, updated for 6.15)
+# VIctory Try: plan and to-do (6.10, updated for 6.16)
 
 Goal: the whole picture rendered, **20+ fps** on the reporter's PC: RTX 4050
 Laptop (5921 MB, budget about 5153 MB), 12 threads, about 16 GB of RAM,
@@ -48,6 +48,30 @@ below are checked again.
       66afb2b4; parser only so far).
 - [x] Logs: `upscaler PC FidelityFX ...` line at start, providers offered
       and chosen, every 600 upscales how many were jittered (both paths).
+
+## Done in 6.16 ("room for windows")
+
+Found in the 6.15 report (RTX 4050 Laptop, MAX, low preset, 2.4-3.4 fps in
+the world, 30-36 in the menu): VRAM 5,048-5,102 of 5,153 MB all through the
+world (`TEXTURE_ROOM_PERCENT=99`), windows: BAR 117 (436 MB), card 0 (768
+turned down for room), so most windows were read across the bus; card 58-72 %
+busy. Texture rush toggled 209 times (111,497 uploads, 51,988 MB, 75,957
+placeholders shown, BC4 white / BC5 128,128,255 = the face flicker). Disk: a
+new shader translation set per build (~1 GB), target never collected, other
+engines' trees, logs never pruned.
+
+- [x] `shadow::windows_room_kept` counted in `resource::room`; `window_line`
+      96 % (80 off); `windows_line` in the stats (BAR / card / PC MB).
+- [x] Rush: `rush_next` with a gap (`VICTORY_TEXTURE_RUSH_GAP_S`, 30);
+      `descriptor::host::unrushing`: an unrushed texture's detile leaves out
+      no level.
+- [x] Shader cache per build folder, `prune` (`VICTORY_SHADER_CACHE_KEEP`).
+- [x] Card meter without the frame log; kinds line; table at least every
+      60 s. Try sets `VICTORY_CARD_METER=1` (config `meter=off`).
+- [x] Try: `Tidy-Disk` / `Tidy-Target` / `TIDY`; MAX on small cards 94 %.
+- Next, from the next report: the submit thread's 55-169 ms a frame
+  (descriptor slots, heap-buffers 47-78 ms, heap worker 88-94 ms, monitorx
+  450k exceptions/s); keep the last real view instead of the placeholder.
 
 ## Done in 6.15 ("new things fast")
 

@@ -1514,11 +1514,13 @@ pub(crate) fn room() -> bool {
     }
     match crate::host::host().and_then(|h| h.video_memory()) {
         // What is kept for card copies of title buffers not made yet
-        // (`crate::shadow::card_room_kept`) and for the render targets a
-        // world makes in its first frame ([`targets_room_kept`]) counts as
-        // used.
+        // (`crate::shadow::card_room_kept`), for the render targets a
+        // world makes in its first frame ([`targets_room_kept`]) and, Try
+        // 6.16, for windows that shaders would otherwise read from the
+        // PC's memory (`crate::shadow::windows_room_kept`) counts as used.
         Some([budget, used, ..]) => {
-            used + crate::shadow::card_room_kept() + targets_room_kept(budget) < budget / 100 * room_percent()
+            used + crate::shadow::card_room_kept() + targets_room_kept(budget) + crate::shadow::windows_room_kept(budget)
+                < budget / 100 * room_percent()
         }
         None => filled < WITHOUT_BUDGET,
     }

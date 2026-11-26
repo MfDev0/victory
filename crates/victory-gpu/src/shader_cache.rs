@@ -8,28 +8,160 @@
 //! The entry is our own encoding of [`HostShader`]: a field added to it
 //! must be added to `encode` and `decode` too (entries of older builds
 //! are ignored anyway).
+//!
+//! Try 6.16, the disk: each build of the translator keys its translations
+//! afresh (`build`), so every new version translated the title's 25,746
+//! shaders again (the 6.15 prepare log: "2879 already cached, 25749
+//! translated now") and filed them beside every older version's, which
+//! nothing read again and nothing removed: about a gigabyte more of the
+//! cache folder with each update. Now each build key has a folder of its
+//! own (`b-` and 16 hex digits) with a stamp of when a run last used it,
+//! and a while after the start the folders of all but the
+//! `VICTORY_SHADER_CACHE_KEEP` (2 unless set; 0: none removed) most
+//! recently used builds go, as do the entries of the flat layout before
+//! 6.16 (folders of two hex digits). A folder used in the last hour stays
+//! whatever its rank.
 
-use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use victory_pipeline::{Cache, Converter};
 use victory_shader::emit::{HostShader, StaticSampler, UserData};
 use victory_shader::resource::RootIndexedView;
 use victory_shader::{HwStage, RootType};
 
-static CACHE: OnceLock<Cache> = OnceLock::new();
+/// The cache folder ([`use_shader_cache`]), absolute.
+static ROOT: OnceLock<PathBuf> = OnceLock::new();
+/// The caches of the build keys met so far, each in its folder under
+/// [`ROOT`] ([`cache_for`]): one or two a run.
+static CACHES: Mutex<Vec<([u8; 32], Cache)>> = Mutex::new(Vec::new());
 static HITS: AtomicU64 = AtomicU64::new(0);
 static MISSES: AtomicU64 = AtomicU64::new(0);
 
-/// Keeps translated shaders in `dir` from now on.
+/// The file in a build's folder that says when a run last used it
+/// (seconds since 1970, as text).
+const USED: &str = "used";
+
+/// A folder used within this many seconds is never removed.
+const RECENT_S: u64 = 3600;
+
+/// Keeps translated shaders in `dir` from now on, each build's in a folder
+/// of its own; the folders of older builds are removed a while after the
+/// start ([`prune`]).
 pub fn use_shader_cache(dir: PathBuf) {
-    match Cache::open(dir) {
-        Ok(cache) => {
-            let _ = CACHE.set(cache);
+    match Cache::open(&dir) {
+        Ok(_) => {
+            let root = std::path::absolute(&dir).unwrap_or(dir);
+            if ROOT.set(root.clone()).is_ok() {
+                prune_later(root);
+            }
         }
         Err(e) => tracing::warn!(error = %e, "no shader cache"),
     }
+}
+
+/// How many of the most recently used builds' folders are kept
+/// (`VICTORY_SHADER_CACHE_KEEP`; 2 unless set; 0: nothing is removed).
+fn keep() -> usize {
+    std::env::var("VICTORY_SHADER_CACHE_KEEP").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(2)
+}
+
+/// The folder of a build key's translations.
+fn build_folder(build: &[u8; 32]) -> String {
+    let mut name = String::from("b-");
+    for b in &build[..8] {
+        name.push_str(&format!("{b:02x}"));
+    }
+    name
+}
+
+fn now_s() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// The cache of `build`'s translations, its folder made and stamped as
+/// used at the first ask of this run; none without a cache folder.
+fn cache_for(build: &[u8; 32]) -> Option<Cache> {
+    let root = ROOT.get()?;
+    let mut caches = CACHES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, cache)) = caches.iter().find(|(b, _)| b == build) {
+        return Some(cache.clone());
+    }
+    let dir = root.join(build_folder(build));
+    match Cache::open(&dir) {
+        Ok(cache) => {
+            let _ = std::fs::write(dir.join(USED), now_s().to_string());
+            caches.push((*build, cache.clone()));
+            Some(cache)
+        }
+        Err(e) => {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| tracing::warn!(error = %e, dir = %dir.display(), "no shader cache folder for this build"));
+            None
+        }
+    }
+}
+
+/// [`prune`] on a thread of its own, 90 seconds after the start: by then
+/// this run has stamped the folders it uses, and removing a gigabyte of
+/// small files takes nothing from the loading.
+fn prune_later(root: PathBuf) {
+    let keep = keep();
+    if keep == 0 {
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("victory-shader-cache-tidy".into()).spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(90));
+        let (builds, flat) = prune(&root, keep, now_s());
+        if builds + flat > 0 {
+            tracing::info!(
+                builds,
+                flat,
+                keep,
+                "shader cache: translations of older builds removed (VICTORY_SHADER_CACHE_KEEP; each version translates the game's shaders again)"
+            );
+        }
+    });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "no thread to remove older builds' translations");
+    }
+}
+
+/// Removes from the cache folder `root` the folders of builds other than
+/// the `keep` most recently used and those used in the last hour (`now`
+/// in seconds since 1970), and the folders of the flat layout before Try
+/// 6.16 (two hex digits). Other files and folders stay. Returns how many
+/// build folders and flat folders went.
+fn prune(root: &Path, keep: usize, now: u64) -> (usize, usize) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return (0, 0);
+    };
+    let mut builds = Vec::new();
+    let mut flat = 0;
+    for e in entries.flatten() {
+        let path = e.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.len() == 2 && name.bytes().all(|b| b.is_ascii_hexdigit()) {
+            if std::fs::remove_dir_all(&path).is_ok() {
+                flat += 1;
+            }
+        } else if name.len() == 18 && name.starts_with("b-") && name[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
+            let used = std::fs::read_to_string(path.join(USED)).ok().and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(0);
+            builds.push((used, path));
+        }
+    }
+    builds.sort_by_key(|b| std::cmp::Reverse(b.0));
+    let mut gone = 0;
+    for (used, path) in builds.into_iter().skip(keep) {
+        if now.saturating_sub(used) > RECENT_S && std::fs::remove_dir_all(&path).is_ok() {
+            gone += 1;
+        }
+    }
+    (gone, flat)
 }
 
 /// Shaders found in the cache and translated since the start.
@@ -115,13 +247,14 @@ fn translate_listed(c: &[u8]) -> Result<HostShader, String> {
 /// was translated now. Needs [`use_shader_cache`] and the same host facts
 /// the run will have (`victory_shader::emit::translation_fingerprint`).
 pub fn warm(container: &[u8]) -> Result<bool, String> {
-    let cache = CACHE.get().ok_or("no shader cache")?;
+    let build = build();
+    let cache = cache_for(&build).ok_or("no shader cache")?;
     let ran = AtomicBool::new(false);
     let translate = |c: &[u8]| {
         ran.store(true, Ordering::Relaxed);
         translate_listed(c)
     };
-    cached(cache, &build(), victory_shader::emit::host_uses_wave32(), container, translate).map(|_| ran.load(Ordering::Relaxed))
+    cached(&cache, &build, victory_shader::emit::host_uses_wave32(), container, translate).map(|_| ran.load(Ordering::Relaxed))
 }
 
 /// Fills the cache ahead of a run (`victory prepare`): the container's
@@ -147,8 +280,9 @@ pub fn prepared_counts() -> (u64, u64) {
 /// there is one.
 pub(crate) fn host_shader(container: &[u8]) -> Result<HostShader, String> {
     let translate = translate_listed;
-    match CACHE.get() {
-        Some(cache) => cached(cache, &build(), victory_shader::emit::host_uses_wave32(), container, translate),
+    let build = build();
+    match cache_for(&build) {
+        Some(cache) => cached(&cache, &build, victory_shader::emit::host_uses_wave32(), container, translate),
         None => translate(container),
     }
 }
@@ -484,6 +618,50 @@ mod tests {
             assert_eq!(result, Ok(expected));
         }
         assert_eq!(runs.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn older_builds_folders_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let now = 1_000_000;
+        let make = |name: &str, used: Option<u64>| {
+            let d = root.join(name);
+            std::fs::create_dir_all(d.join("ab")).unwrap();
+            std::fs::write(d.join("ab").join("cdef"), b"VSH1").unwrap();
+            if let Some(used) = used {
+                std::fs::write(d.join(USED), used.to_string()).unwrap();
+            }
+        };
+        make("b-0000000000000001", Some(now));
+        make("b-0000000000000002", Some(now - 10_000));
+        make("b-0000000000000003", Some(now - 20_000));
+        make("b-0000000000000004", Some(now - 100));
+        make("b-0000000000000005", None);
+        // The flat layout before 6.16, and things that are not the cache's.
+        std::fs::create_dir_all(root.join("7f")).unwrap();
+        std::fs::write(root.join("7f").join("0123"), b"VSH1").unwrap();
+        std::fs::create_dir_all(root.join("pipelines")).unwrap();
+        std::fs::write(root.join("notes.txt"), b"x").unwrap();
+
+        assert_eq!(prune(root, 1, now), (3, 1));
+        let left: std::collections::BTreeSet<String> =
+            std::fs::read_dir(root).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        // The newest, and the one used within the hour, stay.
+        let want: std::collections::BTreeSet<String> =
+            ["b-0000000000000001", "b-0000000000000004", "pipelines", "notes.txt"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(left, want);
+        // Nothing more to do.
+        assert_eq!(prune(root, 1, now), (0, 0));
+    }
+
+    #[test]
+    fn a_build_folder_is_named_by_its_key() {
+        let mut key = [0u8; 32];
+        key[0] = 0xab;
+        key[7] = 0x01;
+        key[8] = 0xff;
+        assert_eq!(build_folder(&key), "b-ab00000000000001");
     }
 
     fn walk(dir: &std::path::Path) -> Vec<PathBuf> {

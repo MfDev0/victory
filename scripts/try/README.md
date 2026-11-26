@@ -568,6 +568,19 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.16 ("room for windows"; plan and to-do in `scripts/try/PLAN.md`):
+   - `VICTORY_WINDOWS_ROOM` (on): the texture queue's room counts what
+     windows outside buffers may still take on the card (BAR and card
+     copies, at most `VICTORY_WINDOWS_ROOM_MB`, a quarter of the budget);
+     windows go to the card up to 96 % of it (80 % with it off).
+   - `VICTORY_TEXTURE_RUSH_GAP_S` (30): the rush rests after it ends;
+     textures `unrush` made due are uploaded whole.
+   - `VICTORY_SHADER_CACHE_KEEP` (2): shader translations in a folder per
+     build key (`b-<hex>`), older builds' removed 90 s into a run.
+   - The card meter (`VICTORY_CARD_METER`, Try: on) works without the frame
+     log and writes a line by kind of list. Try: MAX under 8 GB of card
+     memory, textures 94 % and card pressure 95/98; `TIDY` and the disk
+     tidy (config `tidy`).
    6.15 ("new things fast"; plan and to-do in `scripts/try/PLAN.md`):
    - `VICTORY_LIBRARY_STORE_LATER` (on; cool_fox 4a028f31),
      `VICTORY_LIBRARY_SAVE_THREAD` (on), `VICTORY_LIBRARY_SAVE_S` 300 in the

@@ -11335,6 +11335,7 @@ impl Meter {
                 slow[2] as f64 / 1e3
             );
             video_memory_line();
+            crate::shadow::windows_line();
             if crate::shadow::cards() {
                 let per_frame = |i: usize| card[i] as f64 / frames;
                 tracing::info!(
@@ -11425,9 +11426,10 @@ impl Meter {
             }
             {
                 tracing::info!(
-                    "sharper image (5.8): texture levels left out now {}, textures made sharp again {}, slots given a placeholder instead of black {}",
+                    "sharper image (5.8): texture levels left out now {}, textures made sharp again {}, textures the rush made soft made whole again {}, slots given a placeholder instead of black {}",
                     crate::tiles::top_dropped(),
                     crate::descriptor::host::sharpen(0),
+                    crate::descriptor::host::unrush(0),
                     crate::descriptor::host::PLACEHOLDERS_SHOWN.load(Ordering::Relaxed)
                 );
             }

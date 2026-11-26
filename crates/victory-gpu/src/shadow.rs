@@ -636,6 +636,88 @@ fn window_bar_most() -> u64 {
 /// ([`window_bar_most`]).
 static WINDOW_BAR_BYTES: AtomicU64 = AtomicU64::new(0);
 
+/// Bytes alive of windows whose only buffer is in the PC's memory (neither
+/// in place, nor through the BAR, nor on the card): shaders read those
+/// across the bus at every read.
+static WINDOW_PC_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// Try 6.16: whether the texture queue keeps room on the card for windows
+/// (`VICTORY_WINDOWS_ROOM=0`: off, as before), and windows may then go to
+/// the card up to [`window_line`]'s 96 % of its budget rather than 80 %.
+///
+/// Why: in the 6.15 report (RTX 4050 Laptop, 6 GB, all-out) the card stood
+/// at 5,050 to 5,100 MB of a 5,153 MB budget for the whole world, filled by
+/// the texture queue (`VICTORY_TEXTURE_ROOM_PERCENT=99`) before the windows
+/// asked: windows through the BAR stopped at 117 (436 MB), and from then on
+/// every window was turned down for the card's room (768 of them; "so far 0
+/// on the card" for `VICTORY_CARD_WINDOWS_MB`), so their only buffer was in
+/// the PC's memory, which shaders read across the laptop's bus at every
+/// read. The card was 58 to 72 % busy over frames of 300 to 420 ms: about
+/// 200 ms of card work a frame for 4,500 draws at 1280x720. In the 6.13
+/// port's measurements (trustno1-coder cda4987a, RTX 3060) windows in the
+/// card's memory were the step from 1.6-3 to 10-12 fps. Textures can wait
+/// and be drawn soft (texture quality, the rush); a window read from the
+/// PC's memory slows every draw that reads it.
+fn windows_room_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_WINDOWS_ROOM").is_none_or(|v| v != "0"))
+}
+
+/// The line under which windows go to the card's memory, of a card whose
+/// budget is `budget` bytes ([`windows_room_on`]).
+fn window_line(budget: u64) -> u64 {
+    if windows_room_on() { budget / 100 * 96 } else { budget / 10 * 8 }
+}
+
+/// The most bytes the texture queue keeps for windows on a card whose
+/// budget is `budget` (`VICTORY_WINDOWS_ROOM_MB`; unset: a quarter of the
+/// budget, about 1,290 MB of a 6 GB card's 5,153).
+fn windows_room_most(budget: u64) -> u64 {
+    static MB: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    let asked = *MB.get_or_init(|| std::env::var("VICTORY_WINDOWS_ROOM_MB").ok().and_then(|v| v.trim().parse::<u64>().ok()));
+    asked.map_or(budget / 4, |mb| mb << 20)
+}
+
+/// The room kept: what windows may take on the card (through the BAR and
+/// as card copies, at most [`windows_room_most`]) less what they hold
+/// there now. Pure, for testing.
+fn windows_room_left(may: u64, most: u64, alive: u64) -> u64 {
+    may.min(most).saturating_sub(alive)
+}
+
+/// The bytes of the card's memory the texture queue leaves free for windows
+/// not made yet ([`windows_room_on`]): 0 with the switch off or where no
+/// window can go to the card (no BAR and no card windows asked for).
+pub(crate) fn windows_room_kept(budget: u64) -> u64 {
+    if !windows_room_on() {
+        return 0;
+    }
+    let Some(host) = host() else { return 0 };
+    let bar = if host.gpu_upload() { window_bar_most() } else { 0 };
+    let card = if cards() { window_card_most() } else { 0 };
+    let alive = WINDOW_BAR_BYTES.load(Ordering::Relaxed) + WINDOW_CARD_BYTES.load(Ordering::Relaxed);
+    windows_room_left(bar + card, windows_room_most(budget), alive)
+}
+
+/// For the frame line, every few seconds: where the windows' bytes are.
+pub(crate) fn windows_line() {
+    let bar = WINDOW_BAR_BYTES.load(Ordering::Relaxed);
+    let card = WINDOW_CARD_BYTES.load(Ordering::Relaxed);
+    let pc = WINDOW_PC_BYTES.load(Ordering::Relaxed);
+    if bar + card + pc == 0 {
+        return;
+    }
+    let kept = host().and_then(|h| h.video_memory()).map_or(0, |[budget, ..]| windows_room_kept(budget));
+    tracing::info!(
+        "windows outside buffers alive: {} MB in the card's memory through the BAR, {} MB as copies on the card, {} MB only in the PC's memory (read across the bus); \
+         room the texture queue keeps for more on the card {} MB (VICTORY_WINDOWS_ROOM=0: none, windows only under 80 % of the card)",
+        bar >> 20,
+        card >> 20,
+        pc >> 20,
+        kept >> 20
+    );
+}
+
 /// A window's buffer of `size` bytes in a GPU upload heap and where it is
 /// mapped, if it is to be there ([`window_bar_most`]).
 fn window_bar_for(size: u64) -> Option<(ID3D12Resource, *mut u8)> {
@@ -659,7 +741,7 @@ fn window_bar_for(size: u64) -> Option<(ID3D12Resource, *mut u8)> {
         }
     };
     if let Some([budget, used, ..]) = host.video_memory()
-        && used + size > budget / 10 * 8
+        && used + size > window_line(budget)
     {
         say(1, "no room on the card for");
         return None;
@@ -723,7 +805,7 @@ fn window_card_room(size: u64, how: &str) -> bool {
         }
     };
     if let Some([budget, used, ..]) = host.video_memory()
-        && used + size > budget / 10 * 8
+        && used + size > window_line(budget)
     {
         say(1, "no room on the card for");
         return false;
@@ -866,7 +948,22 @@ fn card_piece_of(start: usize, len: usize, span: &CardSpan, i: u32) -> (usize, u
 
 #[cfg(test)]
 mod card_tests {
-    use super::{CardSpan, PIECE, card_piece_of, card_span_of, joined, joined_piece_runs};
+    use super::{CardSpan, PIECE, card_piece_of, card_span_of, joined, joined_piece_runs, window_line, windows_room_left};
+
+    /// Try 6.16: the room kept for windows is what they may take, at most
+    /// the cap, less what they hold; never below nothing.
+    #[test]
+    fn windows_room_is_what_they_may_still_take() {
+        const MB: u64 = 1 << 20;
+        // 6.15's card: BAR windows up to 1,804 MB and card windows 512,
+        // a quarter of a 5,153 MB budget as the cap; 436 MB made.
+        assert_eq!(windows_room_left(2316 * MB, 5153 * MB / 4, 436 * MB), 5153 * MB / 4 - 436 * MB);
+        assert_eq!(windows_room_left(300 * MB, 1000 * MB, 100 * MB), 200 * MB);
+        assert_eq!(windows_room_left(300 * MB, 1000 * MB, 400 * MB), 0);
+        assert_eq!(windows_room_left(0, 1000 * MB, 0), 0);
+        // With the switch on (the default) windows go up to 96 % of the card.
+        assert_eq!(window_line(1000 * MB), 960 * MB);
+    }
 
     /// Joined runs hold every piece of the runs given, once, and no other.
     #[test]
@@ -2754,6 +2851,9 @@ impl Drop for Shadow {
             KEPT_BYTES.fetch_sub(self.len, Ordering::Relaxed);
         }
         let window = self.window;
+        if window && self.uploaded == 0 && self.card.is_none() {
+            WINDOW_PC_BYTES.fetch_sub(self.len, Ordering::Relaxed);
+        }
         if self.uploaded != 0 {
             // (Counted where `window_upload_for` counted it.)
             if window_bar_most() > 0 {
@@ -5218,6 +5318,9 @@ fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Sha
     );
     let mut shadow = Shadow::new(buffer, data, gpu, start, len);
     shadow.window = true;
+    if card.is_none() {
+        WINDOW_PC_BYTES.fetch_add(len, Ordering::Relaxed);
+    }
     shadow.card = card;
     let shadow = Arc::new(shadow);
     if let Some(card) = &shadow.card {

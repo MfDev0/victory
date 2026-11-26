@@ -98,6 +98,13 @@ struct Meter {
     gap_line: std::time::Instant,
     /// Since that line: clamps timed and their microseconds ([`clamp_begin`]).
     clamps: (u64, u64),
+    /// Since that line, by kind (the title's lists, our send-and-hash
+    /// lists, our compares): lists and their microseconds. Try 6.16: the
+    /// frame log has them too, but Try's builds run without it.
+    kinds: [(u64, u64); 3],
+    /// When the last table by name was written: at least once a minute
+    /// (256 frames are 85 s at 3 fps).
+    table_at: std::time::Instant,
 }
 
 // SAFETY: host objects (free-threaded) and a mapping only read, behind a lock.
@@ -167,6 +174,8 @@ fn make() -> Option<Meter> {
             gap_frames: 0,
             gap_line: std::time::Instant::now(),
             clamps: (0, 0),
+            kinds: [(0, 0); 3],
+            table_at: std::time::Instant::now(),
         })
     }
 }
@@ -319,7 +328,23 @@ fn micros(begin: u64, end: u64, frequency: u64) -> u64 {
 /// title, for a present, for memory to be mapped under a texture, for
 /// another program's turn on the card. Diagnostics, every five seconds.
 fn gaps_line(m: &mut Meter) {
-    let frames = std::mem::take(&mut m.gap_frames).max(1) as f64;
+    let frames = m.gap_frames.max(1) as f64;
+    let kinds = std::mem::take(&mut m.kinds);
+    if kinds.iter().any(|k| k.0 > 0) {
+        let ms = |us: u64| us as f64 / 1e3 / frames;
+        let n = |lists: u64| lists as f64 / frames;
+        tracing::info!(
+            "the card's time per frame by kind of list (VICTORY_CARD_METER): the title's lists {:.1} ms in {:.0}, our send-and-hash lists {:.1} ms in {:.0}, \
+             our compares after a submission {:.1} ms in {:.0}",
+            ms(kinds[0].1),
+            n(kinds[0].0),
+            ms(kinds[1].1),
+            n(kinds[1].0),
+            ms(kinds[2].1),
+            n(kinds[2].0)
+        );
+    }
+    m.gap_frames = 0;
     let mut spans = std::mem::take(&mut m.spans);
     if spans.len() < 2 || m.frequency == 0 {
         return;
@@ -424,14 +449,20 @@ pub(crate) fn collect() {
             Kind::Sync => {
                 add(T::CardSyncUs, us);
                 add(T::CardSyncLists, 1);
+                m.kinds[1].0 += 1;
+                m.kinds[1].1 += us;
             }
             Kind::Check => {
                 add(T::CardCheckUs, us);
                 add(T::CardCheckLists, 1);
+                m.kinds[2].0 += 1;
+                m.kinds[2].1 += us;
             }
             Kind::Lists => {
                 add(T::CardListsUs, us);
                 add(T::CardLists, 1);
+                m.kinds[0].0 += 1;
+                m.kinds[0].1 += us;
                 if let Some(name) = m.names.remove(&pair) {
                     let e = m.by_name.entry(name).or_insert((0, 0));
                     e.0 += 1;
@@ -460,7 +491,8 @@ pub(crate) fn collect() {
         m.gap_line = now;
     }
     m.frames += 1;
-    if m.frames >= 256 {
+    if m.frames >= 256 || (m.frames >= 16 && now.duration_since(m.table_at) >= std::time::Duration::from_secs(60)) {
+        m.table_at = now;
         let frames = m.frames as f64;
         let mut table: Vec<(String, (u64, u64))> = m.by_name.drain().collect();
         table.sort_by_key(|&(_, (_, us))| std::cmp::Reverse(us));
