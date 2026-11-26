@@ -80,11 +80,19 @@ const FORBIDDEN_MAGIC: &[(&[u8], &str)] = &[
     (b"\xD0\xCF\x11\xE0", "MSI/OLE"),
 ];
 
+/// VIctory Try's report zips that the owner uploads to the top of `main` for
+/// reading (`VIctory-report-<date>.zip`: the run's logs and settings, which
+/// the Try launcher writes; nothing of the game's). CI checks pull requests
+/// merged onto `main`, so without this every pull request failed on them.
+fn report_zip(path: &str) -> bool {
+    !path.contains('/') && path.starts_with("VIctory-report-") && path.ends_with(".zip")
+}
+
 pub fn run(root: &Path, staged: bool) -> Result<()> {
     let files = list_files(root, staged)?;
     let mut violations = Vec::new();
     for path in &files {
-        if EXCEPTIONS.iter().any(|(p, _)| p == path) {
+        if EXCEPTIONS.iter().any(|(p, _)| p == path) || report_zip(path) {
             continue;
         }
         let content = if staged {
@@ -241,6 +249,17 @@ fn longest_encoded_run(content: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::check;
+
+    /// The owner's report zips at the top are let through; nothing deeper,
+    /// nothing else.
+    #[test]
+    fn report_zips_at_the_top_only() {
+        assert!(super::report_zip("VIctory-report-20261126-122220.zip"));
+        assert!(super::report_zip("VIctory-report-6.2-20261126-154745 (1).zip"));
+        assert!(!super::report_zip("docs/VIctory-report-1.zip"));
+        assert!(!super::report_zip("VIctory-report-1.7z"));
+        assert!(!super::report_zip("game.zip"));
+    }
 
     /// Enforces the policy wherever tests run, even in clones without the hook.
     #[test]
