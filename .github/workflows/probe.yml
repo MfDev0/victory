@@ -57,7 +57,7 @@ jobs:
           exe=target/release/victory
           out=probe-out.txt
           : > $out
-          for mode in default 0 1 last; do
+          for mode in default; do
             for f in shaders/*; do
               echo "---- $(basename "$f") WAVE_WIDE=$mode" >> $out
               if [ "$mode" = default ]; then
@@ -76,7 +76,13 @@ jobs:
           exe=target/release/victory
           out=disasm-out.txt
           : > $out
-          for pair in pixel-38bf0814e721a1b3:1464 compute-7f05ddab771799a9:89ec; do
+          f=$(ls shaders/compute-ceb5eb68cd99cb07*.dxbc 2>/dev/null | head -n 1)
+          if [ -n "$f" ]; then
+            "$exe" shader-info --disasm "$f" > d.txt 2>&1 || true
+            echo "==== ceb5 whole" >> $out
+            grep -aE "^ *[0-9a-f]{6}: " d.txt | cut -c1-12,58-110 | head -n 380 >> $out || true
+          fi
+          for pair in compute-7f05ddab771799a9:89ec; do
             name=${pair%%:*}; off=${pair##*:}
             f=$(ls shaders/$name*.dxbc 2>/dev/null | head -n 1)
             [ -n "$f" ] || continue

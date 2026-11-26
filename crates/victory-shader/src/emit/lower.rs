@@ -7620,11 +7620,12 @@ impl<'a> Lower<'a> {
                     // this lane's bit of it. Exact where host lanes are
                     // the console's.
                     None if self.mask_data == MaskData::Console => {
-                        // Each host wave taken as a wave of its own has no
-                        // console lane numbers to pick the bits by.
-                        if self.local {
-                            return Err("a constant lane mask in a half-wave");
-                        }
+                        // (Also with each host wave taken as a wave of its
+                        // own: a thread still knows its console lane, the
+                        // relabelled thread index (`console_lane`), and the
+                        // bit it picks is its own; nothing crosses lanes.
+                        // Refused once, it was all that stopped 64-lane
+                        // compute programs a 32-lane card then refused.)
                         let m = mask.ok_or(UNTRACKED)?;
                         let lo = self.i32_of(m).map_err(|_| UNTRACKED)?;
                         // wave64: the register after it holds lanes 32-63.
@@ -7819,9 +7820,8 @@ impl<'a> Lower<'a> {
                     None => self.s.m.i32(0),
                 };
                 self.cross_lane(false)?;
-                if self.local && !self.local_any {
-                    return Err("a lane write in a half-wave");
-                }
+                // (Each host wave on its own too: the lane named compares
+                // its own console lane, and nothing crosses lanes.)
                 let me = self.console_lane();
                 let is = self.s.m.cmp(c, pred::EQ, me, lane);
                 let r = self.s.m.select(c, is, a, old);
