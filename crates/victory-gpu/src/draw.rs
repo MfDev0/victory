@@ -1178,6 +1178,23 @@ impl State {
                         }
                         continue;
                     }
+                    if srv && slot == victory_shader::emit::SLOT_TABLE_STRIDES {
+                        // Ours: the kinds of the views of the shader's tables
+                        // (its d16 typed accesses of integer views).
+                        match self.heap_strides(list) {
+                            // SAFETY: an open list; the table lives as long
+                            // as the heap the list holds.
+                            Some(gpu) => unsafe {
+                                if compute {
+                                    l.SetComputeRootShaderResourceView(param, gpu);
+                                } else {
+                                    l.SetGraphicsRootShaderResourceView(param, gpu);
+                                }
+                            },
+                            None => once!("a shader looks at its tables' view kinds without a view heap set"),
+                        }
+                        continue;
+                    }
                     let tabled = srv && crate::pipeline::host::bounded_root_srvs();
                     let Some(&Root::View(address)) = self.roots_ref(compute).get(usize::from(slot))
                     else {
@@ -1334,7 +1351,12 @@ impl State {
             Some((index, shadow)) => (*index, address.zip(shadow.clone())),
             None => {
                 let shadow = address.and_then(|a| find(a).map(|s| (a, s)));
-                let Some(index) = host.dynamic(1) else {
+                let Some(index) = host.dynamic(1).or_else(|| {
+                    // out of slots: settle what has run, its slots come back
+                    // (codec_d, cool_fox f4b48ad)
+                    crate::host::settle_for_fence();
+                    host.dynamic(1)
+                }) else {
                     return false;
                 };
                 self.dynamic.push((key.0, index, 1));
@@ -1405,7 +1427,12 @@ impl State {
             Some((index, shadow)) => (*index, address.zip(shadow.clone())),
             None => {
                 let shadow = address.and_then(|a| crate::shadow::find(a, 1).map(|s| (a, s)));
-                let Some(index) = host.dynamic(1) else {
+                let Some(index) = host.dynamic(1).or_else(|| {
+                    // out of slots: settle what has run, its slots come back
+                    // (codec_d, cool_fox f4b48ad)
+                    crate::host::settle_for_fence();
+                    host.dynamic(1)
+                }) else {
                     return false;
                 };
                 self.dynamic.push((key.0, index, 1));
@@ -1467,6 +1494,30 @@ impl State {
     /// writes through a picked unordered access view stays in the host
     /// copy. A list refreshes them where it first runs such a shader;
     /// title writes recorded later in the same list are not seen.
+    /// The table of strides and view kinds of the bound view heap, for a
+    /// shader that only looks at the views of its tables
+    /// (`victory_shader::emit::SLOT_TABLE_STRIDES`): bound without the pass
+    /// over the heap's buffers [`Self::heap_buffers`] makes (codec_d,
+    /// cool_fox f4b48ad).
+    fn heap_strides(&self, list: &HostList) -> Option<u64> {
+        let heap = self
+            .heaps
+            .iter()
+            .filter(|&&h| h != 0)
+            .map(|&h| crate::descriptor::heap(h as This))
+            .find(|h| !h.samplers())?;
+        let host = heap.host()?;
+        let gpu = host.strides_gpu()?;
+        // (its own key, apart from `heap_buffers`'s)
+        const ONCE: usize = usize::MAX - 0x5f;
+        if list.first_use(ONCE)
+            && let Some(buffer) = host.strides_buffer()
+        {
+            list.keep(buffer);
+        }
+        Some(gpu)
+    }
+
     fn heap_buffers(&self, list: &HostList) -> Option<u64> {
         let heap = self
             .heaps
@@ -2751,7 +2802,10 @@ impl State {
                 made.push((slot, first * 32));
                 continue;
             }
-            let Some(first) = host.dynamic(n) else {
+            let Some(first) = host.dynamic(n).or_else(|| {
+                crate::host::settle_for_fence();
+                host.dynamic(n)
+            }) else {
                 // No room: the draw must not run with the title's own
                 // offsets (slots never made for it); `bind` drops it.
                 made.push((slot, u32::MAX));

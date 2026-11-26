@@ -1254,6 +1254,12 @@ fn translated_compute_matches_pc() {
         root_views.extend(cs_c.root_srvs.iter().map(|&s| (s, true)));
         root_views.sort_unstable();
         for (n, (slot, srv)) in root_views.into_iter().enumerate() {
+            // (the table of view kinds of d16 typed accesses through tables:
+            // no integer views here)
+            if srv && slot == super::SLOT_TABLE_STRIDES {
+                roots.push((1 + n as u32, Root::View { srv, data: vec![0u32; 1024] }));
+                continue;
+            }
             assert_eq!(slot, 4 + u8::from(srv), "{name}: root view");
             let data = if srv {
                 root_srv.clone()

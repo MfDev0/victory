@@ -4514,7 +4514,7 @@ impl Host {
         let mut landed = Vec::new();
         for (item, early) in items.into_iter().zip(early) {
             match item {
-                Late::Run(flight) => {
+                Late::Run(mut flight) => {
                     last = flight.number;
                     if !read_back_early {
                         for &i in &flight.order {
@@ -4523,6 +4523,12 @@ impl Host {
                     }
                     if let Some(card) = flight.card {
                         self.card_done(card);
+                    }
+                    // The dynamic descriptor slots of lists that have run go back now, not
+                    // after the allocator's delay (codec_d, cool_fox f4b48ad: held, they ran
+                    // NVIDIA's slots out and draws went without their tables).
+                    for detached in &mut flight.lists {
+                        detached.release_tables();
                     }
                     landed.push((flight.lists, flight.order));
                 }
@@ -4926,13 +4932,19 @@ impl Host {
             let mut landed = Vec::new();
             for item in items {
                 match item {
-                    Late::Run(flight) => {
+                    Late::Run(mut flight) => {
                         last = flight.number;
                         for &i in &flight.order {
                             read_backs(flight.lists[i].host());
                         }
                         if let Some(card) = flight.card {
                             self.card_done(card);
+                        }
+                        // The dynamic descriptor slots of lists that have run go back now, not
+                        // after the allocator's delay (codec_d, cool_fox f4b48ad: held, they ran
+                        // NVIDIA's slots out and draws went without their tables).
+                        for detached in &mut flight.lists {
+                            detached.release_tables();
                         }
                         landed.push((flight.lists, flight.order));
                     }

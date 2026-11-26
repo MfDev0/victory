@@ -118,7 +118,9 @@ void main(uint3 id : SV_DispatchThreadID) {
         budget.InterlockedOr(0, 0, before);
         [allow_uav_condition]
         while (before < BUDGET) {
-            uint next = (BUDGET - before <= cost) ? BUDGET : (before + cost);
+            // (`REST` 0: a record that does not fit takes nothing, and those
+            // after it that fit still run)
+            uint next = (BUDGET - before < cost) ? (REST ? BUDGET : before) : (before + cost);
             uint prev;
             budget.InterlockedCompareExchange(0, before, next, prev);
             if (prev == before) break;
@@ -174,14 +176,29 @@ fn make() -> windows::core::Result<Clamp> {
     make_for(device)
 }
 
+/// Whether a record that does not fit in what is left of its list's budget
+/// takes the rest, so that every record after it runs empty too
+/// (`VICTORY_INDIRECT_REST=1`). Off by default, as in codec_d's cool_fox
+/// (f4b48ad): one oversized garbage record takes nothing and the later valid
+/// draws still run (Belobug 76387c2d saw draws flicker as the records past
+/// the budget changed from frame to frame).
+fn rest() -> bool {
+    std::env::var("VICTORY_INDIRECT_REST").is_ok_and(|v| v == "1")
+}
+
 fn make_for(device: &ID3D12Device) -> windows::core::Result<Clamp> {
+    make_with(device, rest())
+}
+
+fn make_with(device: &ID3D12Device, rest: bool) -> windows::core::Result<Clamp> {
+    let source = format!("#define REST {}\n{SOURCE}", u32::from(rest));
     let mut code: Option<ID3DBlob> = None;
     let mut errors: Option<ID3DBlob> = None;
     // SAFETY: the source and names live through the call; out pointers ours.
     let compiled = unsafe {
         D3DCompile(
-            SOURCE.as_ptr().cast(),
-            SOURCE.len(),
+            source.as_ptr().cast(),
+            source.len(),
             s!("clamp"),
             None,
             None,
@@ -494,7 +511,8 @@ void main() {
                     .ok()?;
                 let fence: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE).ok()?;
                 let event = CreateEventW(None, false, false, None).ok()?;
-                let clamp = make_for(&device).expect("clamp shader must compile on WARP");
+                // (the tests below count on a record that does not fit taking the rest)
+                let clamp = make_with(&device, true).expect("clamp shader must compile on WARP");
                 let worker = compile_cs(&device, WORKER_CS).expect("worker shader must compile");
                 Some(Self {
                     device,

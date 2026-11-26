@@ -766,10 +766,46 @@ pub(crate) fn device_removed() -> Option<String> {
 pub(crate) static PLACED_TEXTURE_SLOTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub(crate) static OBJECT_TEXTURE_SLOTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// The packed word of the table of strides for `view`: its stride and, for a
+/// typed buffer view of an integer format, `victory_shader::emit::VIEW_INTEGER`
+/// (and `VIEW_SIGNED`), whose d16 accesses keep their bits (VIctory 4243a96a,
+/// avatarmanz 9a6c829d; codec_d, cool_fox f4b48ad).
+fn view_stride_word(view: &View) -> u32 {
+    let (stride, kind) = view_stride_and_kind(view);
+    stride.unwrap_or(0) | kind
+}
+
 /// Bytes per element of a buffer view, as the console's descriptor holds
 /// them for indexed reads (structured: the stride; raw: 1, the index is the
-/// byte; typed: the format's); `None` if `view` is not a buffer view.
-fn view_stride(view: &View) -> Option<u32> {
+/// byte; typed: the format's; `None` if `view` is not a buffer view), and
+/// the integer kind bits of a typed buffer view.
+fn view_stride_and_kind(view: &View) -> (Option<u32>, u32) {
+    use victory_shader::emit::{VIEW_INTEGER, VIEW_SIGNED};
+    let Some((stride, raw, format)) = view_elements(view) else {
+        return (None, 0);
+    };
+    let bytes = if stride > 0 {
+        stride
+    } else if raw {
+        1
+    } else {
+        crate::resource::element(format).map_or(0, |(bytes, _)| bytes as u32)
+    };
+    let kind = if stride == 0 && !raw {
+        match format {
+            3 | 7 | 12 | 17 | 25 | 30 | 36 | 42 | 50 | 57 | 62 => VIEW_INTEGER,
+            4 | 8 | 14 | 18 | 32 | 38 | 43 | 52 | 59 | 64 => VIEW_INTEGER | VIEW_SIGNED,
+            _ => 0,
+        }
+    } else {
+        0
+    };
+    (Some(bytes), kind)
+}
+
+/// A buffer view's structure stride, whether it is raw, and its format;
+/// `None` if `view` is not a buffer view.
+fn view_elements(view: &View) -> Option<(u32, bool, u32)> {
     const BUFFER: u32 = 1;
     let (words, unordered): (&[u32; 10], bool) = match view {
         View::Shader(_, Some(d)) if d[1] == BUFFER => (d, false),
@@ -791,13 +827,7 @@ fn view_stride(view: &View) -> Option<u32> {
             (b.StructureByteStride, b.Flags.0 & D3D12_BUFFER_SRV_FLAG_RAW.0 != 0, d.Format)
         }
     };
-    Some(if stride > 0 {
-        stride
-    } else if raw {
-        1
-    } else {
-        crate::resource::element(format.0 as u32).map_or(0, |(bytes, _)| bytes as u32)
-    })
+    Some((stride, raw, format.0 as u32))
 }
 
 /// Host heaps' GPU ranges (start, bytes, bytes per slot, sampler), for
@@ -1629,14 +1659,8 @@ impl HostHeap {
                 textures.remove(slot);
             }
         }
-        let stride = view.and_then(view_stride);
-        if let Some((_, _, data)) = &self.strides
-            && index < victory_shader::emit::SLOT_STRIDES_COUNT
-        {
-            // SAFETY: inside the mapping; shaders read it while we write (a
-            // dword, either value is one the slot had).
-            unsafe { (*data as *mut u32).add(index as usize).write_volatile(stride.unwrap_or(0)) };
-        }
+        let (stride, kind) = view.map_or((None, 0), view_stride_and_kind);
+        self.write_stride(index, stride.unwrap_or(0) | kind);
         let mut buffers = self.buffers.lock().unwrap_or_else(|e| e.into_inner());
         let was = if stride.is_some() {
             buffers.insert(index);
@@ -1678,6 +1702,9 @@ impl HostHeap {
         if kept.is_none() {
             null_for(view, self.cpu(index));
         }
+        // (the table of strides and view kinds for the dynamic slots of
+        // tables too: codec_d, cool_fox f4b48ad)
+        self.write_stride(index, if kept.is_some() { view_stride_word(view) } else { 0 });
         self.keep(index, kept.flatten());
     }
 
@@ -1687,8 +1714,23 @@ impl HostHeap {
             self.null_sampler(index);
         } else {
             null_view(self.cpu(index));
+            self.write_stride(index, 0);
         }
         self.keep(index, None);
+    }
+
+    /// Writes `word` (stride | format kind) for view heap slot `index` into
+    /// the host's table of strides ([`victory_shader::emit::SLOT_STRIDES`],
+    /// [`victory_shader::emit::SLOT_TABLE_STRIDES`]).
+    #[inline]
+    fn write_stride(&self, index: u32, word: u32) {
+        if let Some((_, _, data)) = &self.strides
+            && index < victory_shader::emit::SLOT_STRIDES_COUNT
+        {
+            // SAFETY: inside the mapping; shaders read it while we write (a
+            // single aligned dword: either value is one the slot had).
+            unsafe { (*data as *mut u32).add(index as usize).write_volatile(word) };
+        }
     }
 
     /// Slot `index` now views `resource` (or nothing of the host's).
@@ -1728,6 +1770,7 @@ impl HostHeap {
             host.device
                 .CreateShaderResourceView(buffer, Some(&desc), self.cpu(index))
         };
+        self.write_stride(index, 1);
         self.keep(index, Some(buffer.clone()));
     }
 
@@ -1735,6 +1778,7 @@ impl HostHeap {
     /// zeros.
     pub(crate) fn null_raw_at(&self, index: u32) {
         null_buffer_view(self.cpu(index));
+        self.write_stride(index, 0);
         self.keep(index, None);
     }
 
@@ -1767,12 +1811,14 @@ impl HostHeap {
                 self.cpu(index),
             )
         };
+        self.write_stride(index, 1);
         self.keep(index, Some(buffer.clone()));
     }
 
     /// Makes slot `index` (a dynamic one) a raw unordered access view of
     /// nothing: reads give zeros, writes are dropped.
     pub(crate) fn null_raw_uav_at(&self, index: u32) {
+        self.write_stride(index, 0);
         self.keep(index, None);
         let Some(host) = host() else { return };
         let desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
@@ -1809,6 +1855,7 @@ impl HostHeap {
     /// Makes slot `index` (a dynamic one) a constant buffer view of host
     /// memory (the list's own, which it holds).
     pub(crate) fn constant_at(&self, index: u32, gpu: u64, size: u32) {
+        self.write_stride(index, 0);
         self.keep(index, None);
         let Some(host) = host() else { return };
         let desc = D3D12_CONSTANT_BUFFER_VIEW_DESC {
