@@ -792,13 +792,18 @@ function Set-EngineAvmEnv {
     # R on Series X: the title's own output size (VICTORY_OUTPUT; the title
     # ignores the display mode). Series S outputs 1080p by itself.
     if ($c.console -eq 'series-x') { $set.VICTORY_OUTPUT = $(if ($c.res -eq '4k') { '3840x2160' } else { '1920x1080' }) }
+    # Under 32 GB of RAM: the copies of title memory windows (7 GB of its
+    # 40-46 GB in AvatarManz's findings) are capped at 1.5 GB once the PC's
+    # memory gets tight (its "Watch" and "High" RAM bands; nothing changes
+    # while there is room).
+    $ram = Ram-Info
+    if ($ram[0] -gt 0 -and $ram[0] -lt 32000) { $set.VICTORY_WINDOW_BUDGET_MB = '1536' }
     foreach ($k in $set.Keys) {
         if ($null -eq $script:UserAll[$k] -and $null -ne $set[$k]) { [Environment]::SetEnvironmentVariable($k, [string]$set[$k], 'Process') }
     }
     Say "engine: $EngineAvmName   (N switches engines)"
     Say "its settings: AvatarManz's play.ps1$(if ($c.safe -eq '1') { ' -Safe' }), renderer patches $(if ($c.ports -ne 'off') { 'on' } else { 'off' }) (Y), ray tracing $(if ($c.rt -eq '1') { 'on' } else { 'off' }) (B), textures $(if ($c.texcap) { $c.texcap } else { 'by free card memory' }) (X), ambient $($env:VICTORY_AMBIENT) (A)"
     Say 'F3 in the game shows its panel of numbers (where a frame goes).'
-    $ram = Ram-Info
     if ($ram[0] -gt 0) {
         Say "memory: $([int]($ram[0] / 1024)) GB of RAM, $([int]($ram[1] / 1024)) GB with the page file"
         if ($ram[1] -lt 40000) {

@@ -46,4 +46,7 @@ jobs:
           $code = $LASTEXITCODE
           $hits = @(Select-String -CaseSensitive -Path check.txt -Pattern '^error|: error' | Select-Object -First 40 | ForEach-Object { $_.Line.Trim() })
           if ($code -ne 0 -and $hits.Count -gt 0) { Write-Output ("::error::" + ($hits -join ' %0A ')) }
+          $head = (git log -1 --format='%h %ad %s' --date=short)
+          $fin = @(Select-String -Path check.txt -Pattern 'Finished|Checking victory ' | Select-Object -Last 2 | ForEach-Object { $_.Line.Trim() })
+          Write-Output ("::notice::${{ matrix.repo }} $head (exit $code): " + ($fin -join ' / '))
           exit $code
