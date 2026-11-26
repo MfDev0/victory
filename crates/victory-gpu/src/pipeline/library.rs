@@ -217,6 +217,7 @@ impl Blob {
         if mapped()
             && let Some(file) = Mapped::open(&path)
         {
+            prefetch(file.at.Value as usize, file.len);
             return Blob::Mapped(file);
         }
         match std::fs::read(&path) {
@@ -231,6 +232,52 @@ impl Blob {
             Blob::Held(bytes) => bytes,
             Blob::Mapped(file) => file.bytes(),
         }
+    }
+}
+
+/// Try 6.4: the mapped library file read into memory at the start, on a
+/// thread of its own, while the PC has its memory to spare (the file and 4
+/// GB more free; `VICTORY_LIBRARY_PREFETCH=0`: not). The pipelines the
+/// title asks for at the loading screen then load from memory: in the 6.2
+/// report pipelines loaded from the library took 2.6-4.5 s each there,
+/// read page by page from the disk. (A hint to the system: the pages are
+/// the file's, which it may drop again when memory runs short.)
+fn prefetch(at: usize, len: usize) {
+    if len == 0 || std::env::var_os("VICTORY_LIBRARY_PREFETCH").is_some_and(|v| v == "0") {
+        return;
+    }
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: plain data the call fills in.
+    let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: a sized structure.
+    let free = if unsafe { GlobalMemoryStatusEx(&mut m) } != 0 { m.ullAvailPhys } else { 0 };
+    if free < len as u64 + (4 << 30) {
+        tracing::info!(
+            free_mb = free >> 20,
+            library_mb = len >> 20,
+            "host pipeline library not read ahead: the PC has too little memory free"
+        );
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("library read-ahead".into()).spawn(move || {
+        use windows_sys::Win32::System::Memory::{PrefetchVirtualMemory, WIN32_MEMORY_RANGE_ENTRY};
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        let began = std::time::Instant::now();
+        let range = WIN32_MEMORY_RANGE_ENTRY { VirtualAddress: at as *mut core::ffi::c_void, NumberOfBytes: len };
+        // SAFETY: a range of this process's mapped view of the library
+        // file; the call only reads its pages in (a hint, it changes no
+        // byte).
+        let ok = unsafe { PrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0) } != 0;
+        tracing::info!(
+            ok,
+            mb = len >> 20,
+            ms = began.elapsed().as_millis() as u64,
+            "host pipeline library read ahead into memory (VICTORY_LIBRARY_PREFETCH=0: not)"
+        );
+    });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "no thread to read the host pipeline library ahead");
     }
 }
 

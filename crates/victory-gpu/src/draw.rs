@@ -490,6 +490,103 @@ pub(crate) fn loading_now() -> bool {
     loading_draws() > 0 && LOW_DRAW_FRAMES.load(Ordering::Relaxed) >= loading_frames()
 }
 
+/// Try 6.4, the console's curtain: the Series S version keeps its loading
+/// screen up until what the first shot needs has streamed in. Here the
+/// first world frames after a loading screen are that curtain: for up to
+/// `VICTORY_JOIN_HOLD_MS` (10,000 unless set; 0: none) after the loading
+/// screen went, while 300 or more textures picked by index are due, each
+/// pass of the world gets 1.5 s and the loading screen's bytes. The first
+/// seconds of the world run at under a frame a second, and the world then
+/// stands there whole instead of filling in over the first minute (the
+/// 6.2 report entered it with 5,771 textures due).
+fn join_hold_ms() -> u64 {
+    static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *N.get_or_init(|| std::env::var("VICTORY_JOIN_HOLD_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(10_000))
+}
+
+/// Whether the last frame the texture pass saw was behind a loading screen
+/// ([`loading_now`]), and when the last loading screen went
+/// (`crate::host::now_ms`, never 0; 0: the curtain is not up).
+static WAS_LOADING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static JOINED_AT: AtomicU64 = AtomicU64::new(0);
+/// Passes made behind the curtain ([`join_hold_ms`]), since the start.
+pub(crate) static JOIN_HOLD_PASSES: AtomicU64 = AtomicU64::new(0);
+
+/// Whether the curtain is up now with `due` slots due: ends (with a line)
+/// when they are under 300 or its time is up.
+fn join_hold(due: usize) -> bool {
+    let at = JOINED_AT.load(Ordering::Relaxed);
+    if at == 0 {
+        return false;
+    }
+    let took = crate::host::now_ms().saturating_sub(at);
+    if due >= 300 && took < join_hold_ms() {
+        return true;
+    }
+    if JOINED_AT.compare_exchange(at, 0, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+        tracing::info!(
+            ms = took,
+            due,
+            passes = JOIN_HOLD_PASSES.load(Ordering::Relaxed),
+            uploaded_so_far = HEAP_TEXTURES.load(Ordering::Relaxed),
+            "the world's curtain is down: its textures were uploaded before it went on (VICTORY_JOIN_HOLD_MS)"
+        );
+    }
+    false
+}
+
+/// Try 6.4, the order of a pass's due slots
+/// (`VICTORY_TEXTURE_PRIORITY=0`: as the queue hands them out):
+/// 1. the slots the queue looks at again (memory that has arrived since,
+///    and the looks after an upload): cheap, and the newest streaming;
+/// 2. then the others in the queue's order (newest write and oldest
+///    write in turns: what the title streamed for the shot now, and first
+///    come first served so that nothing waits for ever), three small
+///    textures (up to 256 KiB) to one large: a small one costs little and
+///    gives a whole surface its colour, as a console's streamer brings in
+///    the small levels of everything before the large levels of anything.
+fn prioritize(
+    heap: &crate::descriptor::Heap,
+    host: &crate::descriptor::host::HostHeap,
+    due: Vec<(u32, u64)>,
+) -> Vec<(u32, u64)> {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_PRIORITY").is_none_or(|v| v != "0")) || due.len() < 2 {
+        return due;
+    }
+    let mut first = Vec::new();
+    let mut small = std::collections::VecDeque::new();
+    let mut large = std::collections::VecDeque::new();
+    for (index, write) in due {
+        if host.texture_slot_checked(index).is_some() || host.texture_slot_mapped(index) > 0 {
+            first.push((index, write));
+            continue;
+        }
+        let bytes = match heap.handle(index).and_then(crate::descriptor::view) {
+            Some(View::Placed(false, resource, _)) => crate::resource::placed_bytes(&resource).unwrap_or(0),
+            _ => 0,
+        };
+        if bytes > 256 << 10 {
+            large.push_back((index, write));
+        } else {
+            small.push_back((index, write));
+        }
+    }
+    let mut order = first;
+    order.reserve(small.len() + large.len());
+    while !small.is_empty() || !large.is_empty() {
+        for _ in 0..3 {
+            if let Some(next) = small.pop_front() {
+                order.push(next);
+            }
+        }
+        if let Some(next) = large.pop_front() {
+            order.push(next);
+        }
+    }
+    order
+}
+
 /// Times a placed texture's slot was passed over because its memory is not
 /// mapped.
 pub(crate) static HEAP_TEXTURES_AWAY: AtomicU64 = AtomicU64::new(0);
@@ -1918,6 +2015,16 @@ impl State {
             } else {
                 LOW_DRAW_FRAMES.store(0, Ordering::Relaxed);
             }
+            // A loading screen just went: the curtain goes up.
+            let loading = loading_now();
+            if WAS_LOADING.swap(loading, Ordering::Relaxed) && !loading && join_hold_ms() > 0 {
+                JOINED_AT.store(crate::host::now_ms().max(1), Ordering::Relaxed);
+                tracing::info!(
+                    hold_ms = join_hold_ms(),
+                    due = HEAP_TEXTURES_QUEUE[1].load(Ordering::Relaxed),
+                    "a loading screen went: the world's first frames upload its textures first (VICTORY_JOIN_HOLD_MS=0: not)"
+                );
+            }
         }
         // No more of them are made while the card has no room
         // (`resource::room`): by what is alive now, not by what was ever
@@ -1967,6 +2074,7 @@ impl State {
             host.texture_slots_waiting(frame);
         }
         let (due, census) = host.texture_slots_due(frame, 4096);
+        let due = prioritize(heap, host, due);
         HEAP_TEXTURES_WAITING.store(census[0], Ordering::Relaxed);
         for (count, now) in HEAP_TEXTURES_QUEUE.iter().zip(census) {
             count.store(now, Ordering::Relaxed);
@@ -2023,6 +2131,15 @@ impl State {
         // screen take longer, and the world then opens with its textures
         // there instead of coming in over the first minute.
         let loading = !due.is_empty() && loading_now();
+        // The world's curtain (`join_hold_ms`): the world's own pass, right
+        // after a loading screen, with a loading screen's bytes and 1.5 s.
+        let (per_frame, span) = if PASS_BUDGET.get().is_none() && join_hold(due.len()) {
+            JOIN_HOLD_PASSES.fetch_add(1, Ordering::Relaxed);
+            let bytes: u64 = if backlog_ok { 768 << 20 } else { 384 << 20 };
+            (per_frame.max(bytes), span.max(std::time::Duration::from_millis(1500)))
+        } else {
+            (per_frame, span)
+        };
         let (per_frame, span) = if loading {
             let bytes: u64 = if backlog_ok { 768 << 20 } else { 384 << 20 };
             let n = HEAP_TEXTURES_LOADING.fetch_add(1, Ordering::Relaxed) + 1;

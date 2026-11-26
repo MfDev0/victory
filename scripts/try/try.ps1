@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.3'
+$TryVersion = '6.4'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -48,11 +48,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -680,8 +680,14 @@ function Set-RunEnv {
     $script:LazyFromTry = $c.lazy -ne 'off'
     if (-not $script:LazyFromTry) { [Environment]::SetEnvironmentVariable('VICTORY_LAZY_BACK', '0', 'Process') }
     if (-not $script:NewFromTry) {
-        foreach ($k in @('VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH', 'VICTORY_TRIM_BARRIERS')) { [Environment]::SetEnvironmentVariable($k, '0', 'Process') }
+        foreach ($k in @('VICTORY_STAND_IN', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH', 'VICTORY_TRIM_BARRIERS')) { [Environment]::SetEnvironmentVariable($k, '0', 'Process') }
     }
+    # 6.4: upload memory on the card (Resizable BAR) on its own switch, on
+    # unless a lost card turned it off (it was off with the other 3.8
+    # additions since a lost card long ago). The CPU then writes texture
+    # staging straight into the card's memory while the card has room.
+    $script:RebarFromTry = $c.rebar -ne 'off'
+    [Environment]::SetEnvironmentVariable('VICTORY_GPU_UPLOAD', $(if ($script:RebarFromTry) { $null } else { '0' }), 'Process')
     # 4.1: the screen the console says it is plugged into. 1080p by default
     # (a Series X on a 1080p TV): at 4K the game renders 2560x1440 inside and
     # upscales to 3840x2160 every frame, on an 8 GB card that is also
@@ -702,7 +708,7 @@ function Set-RunEnv {
             [Environment]::SetEnvironmentVariable($k, $null, 'Process')
         }
         $script:LoopFromTry = $false; $script:WideFromTry = $false; $script:WaveWideFromTry = $false
-        $script:NewFromTry = $false; $script:LazyFromTry = $false
+        $script:NewFromTry = $false; $script:LazyFromTry = $false; $script:RebarFromTry = $false
         Say 'PLAIN mode: VICTORY''s defaults, as ztrx runs the game   (Z switches back to Try''s settings)'
     }
     # 4.2: the frame-rate ideas. B (on by default): the game renders at 75%
@@ -736,7 +742,9 @@ function Set-RunEnv {
     # switches it. And the pool-full stop about 8 minutes in (mangrove,
     # VIctory #698): the allocation returns nothing instead. (Each only when
     # not set before VIctory Try started.)
-    if ($null -eq $script:UserFx['VICTORY_AMBIENT']) { $env:VICTORY_AMBIENT = $(if ($c.ambient -eq 'off') { 'off' } else { '0.6' }) }
+    # 6.4: 0.45 by default (0.6 made people too bright); A goes normal ->
+    # low (0.3) -> high (0.6, as before 6.4) -> off.
+    if ($null -eq $script:UserFx['VICTORY_AMBIENT']) { $env:VICTORY_AMBIENT = $(switch ($c.ambient) { 'off' { 'off' } 'low' { '0.3' } 'high' { '0.6' } default { '0.45' } }) }
     if ($null -eq $script:UserFx['VICTORY_LEVELS_ON_DEMAND']) { $env:VICTORY_LEVELS_ON_DEMAND = $(if ($c.levels -eq 'off') { '0' } else { '1' }) }
     if ($null -eq $script:UserFx['VICTORY_POOL_NO_ASSERT']) { $env:VICTORY_POOL_NO_ASSERT = '1' }
     # 4.5: walls, ceilings and floors. The shader clean-up passes left the
@@ -770,7 +778,7 @@ function Set-RunEnv {
     if ($null -eq $script:UserFx['VICTORY_CARD_REHASH_RUNS']) { [Environment]::SetEnvironmentVariable('VICTORY_CARD_REHASH_RUNS', $(if ($c.gpucopy -eq 'off') { $null } else { '1' }), 'Process') }
     Say "speed: copies on the card $(if ($env:VICTORY_GPU_COPIES -ne '0') { 'ON' } else { 'off' }), checks joined $(if ($env:VICTORY_CARD_REHASH_RUNS -eq '1') { 'ON' } else { 'off' })   (K switches)"
     Say "walls: shader clean-up $(if ($env:VICTORY_SHADER_OPT -eq '0') { 'off (walls and roofs kept)' } else { 'ON' })   (O switches)   shadow fix $(if ($env:VICTORY_WAVE_DEEP_SKIPS_NOT -eq 'none') { 'off' } else { 'ON' })   (W switches)"
-    Say "picture: ambient light $(if ($env:VICTORY_AMBIENT -ne 'off') { 'ON' } else { 'off' })   (A switches)   textures level by level $(if ($env:VICTORY_LEVELS_ON_DEMAND -eq '1') { 'ON' } else { 'off' })   (L switches)"
+    Say "picture: ambient light $(if ($env:VICTORY_AMBIENT -ne 'off') { $env:VICTORY_AMBIENT } else { 'off' })   (A: normal 0.45 / low 0.3 / high 0.6 / off)   textures level by level $(if ($env:VICTORY_LEVELS_ON_DEMAND -eq '1') { 'ON' } else { 'off' })   (L switches)"
     Say "fps boost: $(if ($c.boost -ne 'off') { 'ON (75% render scale + sharpen, no ray tracing)' } else { 'off' })   frames in between: $(if ($c.between -eq '1') { 'ON' } else { 'off' })   shared small buffers: $(if ($c.hybrid -eq '1') { 'ON' } else { 'off' })"
     # Its own cache: the old base's pipeline library and shaders do not mix.
     if (-not $env:VICTORY_CACHE_DIR -or $env:VICTORY_CACHE_DIR -eq (Join-Path $TryHome 'cache-8gb')) { $env:VICTORY_CACHE_DIR = Join-Path $TryHome 'cache-gta6' }
@@ -1154,6 +1162,9 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
         if ($c.fast -eq '1') {
             $c.fast = ''
             Say 'next run: back to the stable relay speed mode (F switches again).'
+        } elseif ($script:RebarFromTry) {
+            $c.rebar = 'off'
+            Say 'next run: Resizable BAR uploads (6.4) are off.'
         } elseif ($script:NewFromTry) {
             $c.new38 = 'off'
             Say 'next run: the 3.8 and 3.9 card additions (stand-in pipelines, Resizable BAR uploads, PC-side card copies, copy-engine fetches) are off.'
@@ -1290,7 +1301,7 @@ if (-not (Engine8)) {
 if (Engine8) {
     Say 'engine: the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb). N goes back to this fork''s engine.'
 } else {
-    Say '6.3: this fork''s engine: loading screens really pre-load the world now, no world stalls from it, the whole picture first and detail after; the 6.0 speed fixes (all CPU cores, the card''s queues first, the CPU''s own graphics for other programs). N switches to the 8 GB engine.'
+    Say '6.4: this fork''s engine: the world waits behind its curtain until its textures are in, small textures first, reused upload buffers, shader cache read ahead, softer light on people; the 6.0 speed fixes (all CPU cores, the card''s queues first, the CPU''s own graphics for other programs). N switches to the 8 GB engine.'
 }
 
 # Every command of the menu: its key, what it is, whether it is on now, and
@@ -1310,7 +1321,7 @@ function Show-Commands {
         @('B', 'Fps boost', $(& $on ($c.boost -ne 'off')), 'Series X: renders at 75% and sharpens; both: skips ray tracing (gave black shadows)'),
         @('M', 'Frames in between', $(& $on ($c.between -eq '1')), 'adds a moved frame between the game''s own (smoother; Series X only)'),
         @('H', 'Shared buffers', $(& $on ($c.hybrid -eq '1')), 'small buffers shared with the card instead of copied'),
-        @('A', 'Ambient light', $(& $on ($c.ambient -ne 'off')), 'soft light where the sun does not reach (no pitch-black shadows)'),
+        @('A', 'Ambient light', $(switch ($c.ambient) { 'off' { 'off' } 'low' { 'low' } 'high' { 'hi ' } default { 'ON ' } }), 'soft light where the sun does not reach: normal, low (if people look too bright), high, off'),
         @('L', 'Textures by level', $(& $on ($c.levels -ne 'off')), 'textures take card memory only for the sizes in use (8 GB cards: no black doors)'),
         @('O', 'Shader clean-up', $(& $on ($c.opt -eq 'on')), 'off keeps walls, roofs and floors (they went missing with it on)'),
         @('W', 'Shadow fix', $(& $on ($c.shadowfix -ne 'off')), 'NVIDIA: keeps the ceiling and lit rooms (14 shadow programs translated safely)'),
@@ -1370,7 +1381,7 @@ while ($true) {
             'B' { $c.boost = $(if ($c.boost -eq 'off') { '' } else { 'off' }) }
             'M' { $c.between = $(if ($c.between -eq '1') { '' } else { '1' }) }
             'H' { $c.hybrid = $(if ($c.hybrid -eq '1') { '' } else { '1' }) }
-            'A' { $c.ambient = $(if ($c.ambient -eq 'off') { '' } else { 'off' }) }
+            'A' { $c.ambient = $(switch ($c.ambient) { 'low' { 'high' } 'high' { 'off' } 'off' { '' } default { 'low' } }) }
             'L' { $c.levels = $(if ($c.levels -eq 'off') { '' } else { 'off' }) }
             'O' { $c.opt = $(if ($c.opt -eq 'on') { '' } else { 'on' }) }
             'W' { $c.shadowfix = $(if ($c.shadowfix -eq 'off') { '' } else { 'off' }) }

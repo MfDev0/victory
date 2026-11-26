@@ -34,6 +34,9 @@ macro_rules! once {
 /// texture's subresources, and what was last detiled.
 pub(crate) struct Staging {
     buffer: ID3D12Resource,
+    /// The size class the buffer goes back to the pool as when the last
+    /// holder lets go (`crate::host::take_staging`; 0: not kept).
+    class: u64,
     /// Its bytes.
     #[cfg(feature = "diagnostics")]
     size: u64,
@@ -407,6 +410,9 @@ impl Drop for Staging {
         use std::sync::atomic::Ordering::Relaxed;
         STAGED[0].fetch_sub(1, Relaxed);
         STAGED[1].fetch_sub(self.bytes, Relaxed);
+        // The lists that copied from it have been reset (they held it
+        // until then): the buffer goes back for the next texture.
+        crate::host::give_staging(self.buffer.clone(), self.data, self.class);
     }
 }
 
@@ -1545,7 +1551,7 @@ fn staging(resource: This, texture: &ID3D12Resource) -> Option<Arc<Staging>> {
     if crate::pressure::backing_off() {
         return None;
     }
-    let (buffer, data) = host.upload_buffer(total)?;
+    let (buffer, data, class) = crate::host::take_staging(host, total)?;
     crate::host::name(&buffer, || {
         format!(
             "staging of {resource:?} {}x{}x{} f{}",
@@ -1557,6 +1563,7 @@ fn staging(resource: This, texture: &ID3D12Resource) -> Option<Arc<Staging>> {
     STAGED[1].fetch_add(total, std::sync::atomic::Ordering::Relaxed);
     let s = Arc::new(Staging {
         buffer,
+        class,
         #[cfg(feature = "diagnostics")]
         size: total,
         data,

@@ -1,8 +1,8 @@
-VIctory Try 6.3
-- Loading screens now really pre-load the world. Your 6.2 log showed the 6.1/6.2 pre-loading never ran on the loading screen itself (it only got 12 ms a frame there), so you entered the world with about 5,800 textures still waiting. Now each loading-screen frame spends 200 ms loading textures, about 16x more than before
-- No more random 1-2 second freezes in the world: the loading-screen budget was switching on in normal world frames too. It now needs 30 frames of loading screen in a row
-- Textures loaded behind a loading screen keep full detail (the "picture first" mode only runs in the world now)
-- Textures the "picture first" mode made soft now really get their detail back. In 6.2 they stayed soft because the card was always nearly full
-- Less RAM churn: the shader cache (770 MB) was saved again 8 times in 5 minutes of play. When the PC is short of memory it now saves every 3 minutes (and always on exit)
-- Shaders were already 100% loaded from the cache before the world (2,068 of 2,068 found, 2,516 ready-made pipelines), so that part is done
-- Settings: VICTORY_LOADING_MS (200), VICTORY_LOADING_FRAMES (30), VICTORY_LIBRARY_SAVE_S (180), VICTORY_TEXTURE_RUSH=0
+VIctory Try 6.4
+- Load before you join: when a loading screen ends, the world waits behind a "curtain" (up to 10 s) and loads its textures first, the way the Series S keeps its loading screen up until the first shot is streamed. The first seconds run slowly, then the world shows up whole instead of filling in over a minute
+- New priority order: textures whose data just arrived come first, then the queue takes turns between the newest (what the game streams for where you look) and the oldest waiting (first come, first served, so nothing waits forever), with 3 small textures for every big one: a small texture is cheap and colours a whole surface
+- Faster texture uploads: buffers are reused from a pool instead of being created for every texture (59,000 of them were created in your last 10 minutes)
+- Shader cache read into memory at startup while the PC has RAM to spare, so the loading screen doesn't wait on the disk (pipelines took 2.6-4.5 s there before)
+- Resizable BAR uploads back on (they were switched off together with other things after a lost card long ago). Turns itself off again if the card is lost
+- People less bright: ambient light 0.45 instead of 0.6. A cycles normal / low (0.3) / high (0.6) / off
+- Settings: VICTORY_JOIN_HOLD_MS (10000, 0 off), VICTORY_TEXTURE_PRIORITY=0, VICTORY_STAGING_POOL_MB, VICTORY_LIBRARY_PREFETCH=0, VICTORY_GPU_UPLOAD=0

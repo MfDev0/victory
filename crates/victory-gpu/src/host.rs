@@ -1515,12 +1515,90 @@ fn trim_upload_spare() {
     let most = upload_spare_most();
     let freed = UPLOAD_SPARE.lock().unwrap_or_else(|e| e.into_inner()).trim(most);
     drop(freed);
+    let freed = STAGING_SPARE.lock().unwrap_or_else(|e| e.into_inner()).trim(staging_spare_most());
+    drop(freed);
+}
+
+/// Try 6.4: texture staging buffers no texture holds any more, by size
+/// class ([`upload_class`]), kept for the next texture of that class. Every
+/// texture uploaded made one (a committed upload buffer, zeroed by the
+/// system, mapped) and freed it after its list ran: 59,447 of them in the
+/// 6.2 report's first ten minutes, on the thread that records the frame.
+static STAGING_SPARE: Mutex<Spare<KeptUpload>> = Mutex::new(Spare::new());
+/// Since the start: staging buffers taken from those kept, and made anew
+/// for the pool.
+pub(crate) static STAGING_REUSE: [std::sync::atomic::AtomicU64; 2] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// The most bytes of staging buffers kept ([`STAGING_SPARE`]):
+/// `VICTORY_STAGING_POOL_MB` (0: none kept, one made per texture as
+/// before), else 128 MB, 96 MB when the PC is getting short of memory and
+/// 48 MB when it is nearly out (a texture's staging buffer lives for a
+/// frame or two: the pool is its churn, not more memory held).
+fn staging_spare_most() -> u64 {
+    static SET: OnceLock<Option<u64>> = OnceLock::new();
+    let set = *SET.get_or_init(|| std::env::var("VICTORY_STAGING_POOL_MB").ok().and_then(|v| v.trim().parse().ok()));
+    match set {
+        Some(mb) => mb << 20,
+        None => match crate::pressure::level() {
+            crate::pressure::Level::Normal => 128 << 20,
+            crate::pressure::Level::Mild => 96 << 20,
+            crate::pressure::Level::Critical => 48 << 20,
+        },
+    }
+}
+
+/// A texture's staging buffer of at least `size` bytes: one kept
+/// ([`STAGING_SPARE`], zeroed again here as a new one is) or a new one of
+/// the size class. The third answer is the class it goes back as
+/// ([`give_staging`]); 0: made to measure, not kept.
+pub(crate) fn take_staging(host: &Host, size: u64) -> Option<(ID3D12Resource, *mut u8, u64)> {
+    let class = upload_class(size).filter(|_| staging_spare_most() > 0);
+    let Some(class) = class else {
+        let (buffer, data) = host.upload_buffer(size)?;
+        return Some((buffer, data, 0));
+    };
+    let kept = STAGING_SPARE.lock().unwrap_or_else(|e| e.into_inner()).take(class);
+    if let Some(KeptUpload(buffer, data)) = kept {
+        let n = STAGING_REUSE[0].fetch_add(1, Ordering::Relaxed) + 1;
+        if n >= 256 && n.is_power_of_two() {
+            tracing::info!(
+                reused = n,
+                made = STAGING_REUSE[1].load(Ordering::Relaxed),
+                "texture staging buffers taken from the pool instead of made (VICTORY_STAGING_POOL_MB=0: one made each time)"
+            );
+        }
+        let data = data as *mut u8;
+        // SAFETY: the buffer's persistent mapping, `class` bytes, which no
+        // list reads any more (it came back when its last holder let go).
+        unsafe { std::ptr::write_bytes(data, 0, class as usize) };
+        return Some((buffer, data, class));
+    }
+    let (buffer, data) = host.upload_buffer(class)?;
+    STAGING_REUSE[1].fetch_add(1, Ordering::Relaxed);
+    Some((buffer, data, class))
+}
+
+/// A texture's staging buffer nothing holds any more (`class` from
+/// [`take_staging`]): kept for the next texture of its class while the
+/// pool has room, freed if not.
+pub(crate) fn give_staging(buffer: ID3D12Resource, data: *mut u8, class: u64) {
+    if class == 0 {
+        return;
+    }
+    let most = staging_spare_most();
+    let back = STAGING_SPARE.lock().unwrap_or_else(|e| e.into_inner()).give(KeptUpload(buffer, data as usize), class, most);
+    // Freed outside the lock.
+    drop(back);
 }
 
 /// Lets go of every kept buffer no list holds (upload buffers and scratch
 /// chunks), for an allocation the driver refused: the bytes they held.
 fn free_spares() -> u64 {
     let uploads = UPLOAD_SPARE.lock().unwrap_or_else(|e| e.into_inner()).trim(0);
+    let staging = STAGING_SPARE.lock().unwrap_or_else(|e| e.into_inner()).trim(0);
+    let staging_bytes: u64 = staging.iter().map(|(_, size)| size).sum();
+    drop(staging);
     let chunks = SPARE.lock().unwrap_or_else(|e| e.into_inner()).trim(0);
     let mut bytes = 0;
     for (_, size) in &chunks {
@@ -1530,7 +1608,7 @@ fn free_spares() -> u64 {
         ALIVE[4].fetch_sub(*size, Ordering::Relaxed);
         bytes += size;
     }
-    bytes + uploads.iter().map(|(_, size)| size).sum::<u64>()
+    bytes + staging_bytes + uploads.iter().map(|(_, size)| size).sum::<u64>()
 }
 
 /// Upload buffers a list held until its reset: kept for the next list if

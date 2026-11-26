@@ -11,7 +11,7 @@
 //! -9.75). The title's own lighting then applies it with the surfaces'
 //! colors. Raised, not added: the result is the next frame's history.
 //!
-//! `VICTORY_AMBIENT=<level>` sets it (0.6 by default, 0 for none); `off`
+//! `VICTORY_AMBIENT=<level>` sets it (0.45 by default, 0 for none); `off`
 //! keeps the title's own output.
 //! shortcut: the same light everywhere, from everywhere; gone once rays run.
 
@@ -32,9 +32,12 @@ pub(crate) const PROGRAM: &[u8] = b"CS_ScreenProbes_TemporalResolve";
 /// integers): root parameter and place in its table.
 pub(crate) const LIGHT: (u8, u32) = (1, 176);
 
-/// 0.6 looked balanced in run a2. `VICTORY_AMBIENT=off` leaves what the
-/// title's resolve wrote; 0 is no indirect diffuse light at all.
-const DEFAULT: f32 = 0.6;
+/// 0.6 looked balanced in run a2; Try 6.4: 0.45, as people came out too
+/// bright with 0.6 (the level is the same in every shot, and the title
+/// raises its exposure in dark ones, at night and indoors, which made skin
+/// and clothes glow). `VICTORY_AMBIENT=off` leaves what the title's resolve
+/// wrote; 0 is no indirect diffuse light at all.
+const DEFAULT: f32 = 0.45;
 
 /// The floor; `None` if off.
 pub(crate) fn level() -> Option<f32> {

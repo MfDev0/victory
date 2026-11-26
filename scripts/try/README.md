@@ -490,6 +490,22 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - the pipeline library (770 MB) is saved at most every
      `VICTORY_LIBRARY_SAVE_S` (180) in the world when the PC is short of
      memory.
+   6.4:
+   - **the world's curtain**: for up to `VICTORY_JOIN_HOLD_MS` (10,000; 0:
+     none) after a loading screen went, while 300 or more textures picked
+     by index are due, the world's pass gets 1.5 s and 768 MB (384 MB short
+     of memory); a line says when the curtain is down.
+   - **priority** (`VICTORY_TEXTURE_PRIORITY=0`: off): the slots looked at
+     again first, then the queue's order (newest and oldest write in turns)
+     with three textures of up to 256 KiB to one larger.
+   - **staging pool**: texture staging buffers go back to a pool by size
+     class (`VICTORY_STAGING_POOL_MB`; 128, 96 short of memory, 48 nearly
+     out) and are zeroed when taken again.
+   - **library read-ahead** (`VICTORY_LIBRARY_PREFETCH=0`: off): the mapped
+     pipeline library is prefetched at the start when the PC has its size
+     and 4 GB more free.
+   - Resizable BAR uploads on their own config switch (`rebar`), off again
+     after a lost card; ambient light 0.45 (A: normal / low / high / off).
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,
