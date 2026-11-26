@@ -1366,7 +1366,8 @@ function Run-Game {
     Say "console: Xbox $(if ($c.console -eq 'series-s') { 'Series S' } else { 'Series X' })   (C switches)"
     Say "command: victory.exe run `"$($c.game_exe)`" --execute --console $($c.console)   (VICTORY_GAME_DIR=$($c.game_dir))"
     Say 'To stop: close the game window.'
-    Set-RunEnv
+    # (6.9: none of this fork's settings for the AvatarManz engine.)
+    if (-not (EngineAvm)) { Set-RunEnv }
     Tune-PC
     if (EngineAvm) { Set-EngineAvmEnv; Prepare-Avm 'new build or new pipelines' }
     elseif (Engine8) { Set-Engine8Env }

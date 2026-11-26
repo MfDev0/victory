@@ -133,6 +133,15 @@ pub fn run(
         }
     }
     show(&exe_name, image.bind_imports(&TakeDispatch(&with_dlls), policy)?);
+    // The title's output size and render scale (VICTORY_OUTPUT,
+    // VICTORY_TITLE_SCALE, VICTORY_FFX_SCALE, VICTORY_UPSCALER; each off
+    // without it), from avatarmanz/VIctory-7900XTX (Try 6.9).
+    #[cfg(windows)]
+    if execute {
+        let size = image.info().size_of_image as usize;
+        // SAFETY: the image stays mapped and nothing of it has run yet.
+        unsafe { victory_loader::resolution::apply_asked(image.base(), size) };
+    }
     if !execute {
         println!("not executing (pass --execute to start the title)");
         return Ok(());

@@ -1,9 +1,9 @@
-VIctory Try 6.8 "the breakthrough" (fxceless's fork merged whole, fewer CPU traps, low preset)
-- fxceless/victory-fork is merged in whole (8.2-8.6 fps in the world on an RTX 4070 there). The heap pass (92 ms a frame in the 6.7 report) now runs on its own thread beside the one that sends work to the card. Texture checks run side by side with the preparing. Settles make room in one go. Found copies are looked up once per table. Y switches this set, and it turns off by itself if a run loses the card
-- Their picture fixes come too: mouths and faces (half views), the black faces fixed by tracking page writes, water textures read back from the card, and 512 MB of buffer windows on the card (no black textures)
-- Fewer CPU traps: the console's wait instructions (monitorx / mwaitx), about 125,000 traps a second in the 6.7 report, are patched in place the first time they are met. After that they run as a plain spin with no trip into Windows. VICTORY_MWAIT_PATCH=0 goes back to trapping every one
-- Card results fetched inside their flight are OFF by default now. On your RTX 4050 they made the card's time per frame about 3x longer, and others saw the same on an RTX 5060 Ti
-- Low preset (X), on by itself for cards under 7 GB: the game is told a 1280x720 screen and texture copies stop at 1536 MB of the card's memory (blurrier far textures, but the card stops running out: it was "Critical" all through 6.7)
-- The threads that copy back and compare are capped at 8 (they were 10 on your 12-thread CPU) so the new heap and texture threads get cores of their own
-- The shader translator changed, so the first run translates the shaders again (the cache notices this by itself; nothing to delete)
-- Settings: VICTORY_HEAP_WORKER, VICTORY_PARALLEL_REFRESH, VICTORY_SETTLE_ROOM, VICTORY_LOOKUP_CACHE, VICTORY_TEXTURE_BACK, VICTORY_CARD_WINDOWS_MB (512 from Try), VICTORY_TEXTURE_BUDGET_MB (1536 with the low preset), VICTORY_MWAIT_PATCH=0, VICTORY_WIDE_THREADS
+VIctory Try 6.9 "AvatarManz engine" (the engine of PortWatch #1 and #2 is now the default)
+- The default engine is AvatarManz's, in Belobug's branch: avatarmanz/VIctory-7900XTX (16-22 fps, 45 ms a frame on Series S on an RX 7900 XTX) plus Belobug's three fixes (#1 on PortWatch, about 22 fps): trees and signs stop flickering, texture sizes follow the card's free memory (what lets a 6 GB card hold it), and PC FSR 4.1.2. N switches back to this fork's engine or the 8 GB one
+- It runs with AvatarManz's own settings: list calls on eight threads, submissions joined, textures on their own copy queue, fills done on the card. Its five renderer patches are on (Y turns them off)
+- No more shaders compiling while you play: with the game closed, every shader of the game is translated once per build, and every pipeline your earlier runs drew with is made. The first time takes a few minutes
+- New switches for this engine: B ray tracing (lit rooms and right reflections, about a third slower), X textures (auto, sharp, low), A ambient light, F above 30 fps, Z safe mode
+- AvatarManz's engine takes 30-46 GB of RAM plus page file for now. VIctory Try shows how much your PC has before each run. If the game closes by itself, set the page file to System managed (or 49152 MB) and restart
+- After a lost card the next run is safer by itself: ray tracing off, then safe mode, then the patches off
+- The report zip now also has settings.txt (every setting, RAM, page file, card) and prepare.log
+- This fork's engine gets AvatarManz's real output size switch (VICTORY_OUTPUT). The game ignored VICTORY_DISPLAY_MODE

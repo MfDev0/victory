@@ -28,6 +28,7 @@ mod crash;
 mod pool_asserts;
 pub mod prepare;
 pub mod resolve;
+pub mod resolution;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod stacks;
 #[cfg(windows)]

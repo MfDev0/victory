@@ -568,6 +568,36 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.9 ("AvatarManz engine"; plan and to-do in `scripts/try/PLAN.md`):
+   - **The default engine is AvatarManz's** (PortWatch #1 and #2:
+     Belobug ~22 fps on an RX 9070 XT, AvatarManz 16 fps / 45 ms on an
+     RX 7900 XTX): `Belobug/VIctory-Belobug-AMD` branch `a-publier`, which
+     is `avatarmanz/VIctory-7900XTX` c9c932c plus Belobug's flicker fix,
+     VRAM-aware texture cap and FSR 4.1.2 (`VICTORY_TRY_AVM=avatarmanz`:
+     avatarmanz main itself). Source in `%LOCALAPPDATA%\VIctoryTry\victory-avm`,
+     build in `target-avm\diag`, cache in `cache-avm`; saves are shared.
+     Built with their command (`cargo build --locked --profile diag -p
+     victory --features diagnostics`), for this CPU first. If it does not
+     build, this fork's engine runs. **N** goes avm -> own -> 8GB.
+   - Run with their `scripts/play.ps1` settings, renderer patches 1, 2, 5,
+     6, 7 on (`VICTORY_PORT_CONSTANTS`, `_DESCRIPTORS`, `_CBV`, `_GUARD`,
+     `_JOURNAL`; **Y**), `VICTORY_PIPELINE_BOOK=1`.
+   - With the game closed: `victory shaders` (every shader, once per build)
+     and `victory warm --used` (the pipelines earlier runs drew with), so
+     nothing met before compiles while playing (`logs\prepare.log`).
+   - Its menu: **B** ray tracing (`VICTORY_BVH_BUILDER=1`), **X** textures
+     (auto / sharp `VICTORY_TEXTURE_MAX=2048` / low 512), **A** ambient
+     (0.8 / 0.5 / 1.1 / 0), **F** above 30 fps
+     (`VICTORY_FRAME_INTERVAL_MS=16.667`), **Z** their -Safe set, **R**
+     output size on Series X (`VICTORY_OUTPUT`).
+   - After a lost card: ray tracing off, then Safe, then patches off. An
+     out-of-memory end prints the page-file fix (their engine takes 30-46 GB
+     of RAM + page file for now). RAM and commit limit are shown each run.
+   - The report zip has `settings.txt` (every `VICTORY_` setting, RAM,
+     commit limit, card memory, threads) and `prepare.log`.
+   - This fork's engine: avatarmanz's output size / render scale / upscaler
+     patches (`VICTORY_OUTPUT`, `VICTORY_TITLE_SCALE`, `VICTORY_FFX_SCALE`,
+     `VICTORY_UPSCALER`; victory-loader `resolution.rs`).
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,
