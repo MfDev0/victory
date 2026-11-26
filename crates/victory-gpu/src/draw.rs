@@ -1926,8 +1926,10 @@ impl State {
                     continue;
                 }
                 let n = HEAP_TEXTURES_RECHECKED[1].fetch_add(1, Ordering::Relaxed);
+                // (Not a fault: the title fills such textures itself, and this
+                // is the look that catches it; told as information.)
                 if n < 200 || n.is_multiple_of(1000) {
-                    tracing::warn!(
+                    tracing::info!(
                         slot = index,
                         address = format_args!("{at:#x}"),
                         bytes = len,

@@ -994,6 +994,26 @@ thread_local! {
     static APPROX_FIRST_HALVES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+thread_local! {
+    /// While [`with_masks_elsewhere`] runs `f`.
+    static MASKS_ELSEWHERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` (a lowering) with a lane mask that holds lanes outside EXEC where
+/// it is written read as the ballot of the lanes that reach the block that
+/// writes it. Exact for the loop idiom that stopped 7f05ddab771799a9 at
+/// 0x89ec (`s_and_saveexec` then `s_andn2 rest, rest, exec`: the lanes still
+/// looping, every one of which reached the block); approximate for a mask
+/// with bits for lanes that never get there (the complement of EXEC): those
+/// read 0. `emit::translate` takes this only for programs that stop on such
+/// a mask; `VICTORY_MASK_ELSEWHERE=0` refuses it.
+pub(super) fn with_masks_elsewhere<R>(f: impl FnOnce() -> R) -> R {
+    let was = MASKS_ELSEWHERE.replace(true);
+    let r = f();
+    MASKS_ELSEWHERE.set(was);
+    r
+}
+
 /// Runs `f` (a lowering) with every first half of an interpolation that a
 /// second half completes lowered as the whole pair: approximate where its
 /// result is also read as data (P0 + i P10 on the console). `emit::translate`
@@ -2695,6 +2715,35 @@ impl<'a> Lower<'a> {
     /// moving it (at most `depth` moves are followed) or comparing it: a
     /// waterfall loop keeps a descriptor's dwords per lane, reads the first
     /// lane's back and compares the lanes' with them.
+    /// Whether any instruction reads `v`.
+    fn read_anywhere(&self, v: Value) -> bool {
+        self.x.p.blocks.iter().flat_map(|b| &b.insts).any(|i| i.reads.iter().any(|r| r.1 == v))
+    }
+
+    /// The record count (dword 2) of the buffer view whose descriptor the
+    /// scalar load at `site` reads from the start of a table entry: the host
+    /// view's size, in elements for a structured view and bytes for a raw
+    /// one, as the console counts them; 0 for a view that is not there.
+    fn record_count(&mut self, site: Site) -> Option<V> {
+        let src = Source::Loaded { load: site, first: 0 };
+        let used = self.used_kind(&src);
+        let (uav, stride) = match used {
+            Some(u) if matches!(u.kind, ResourceType::Srv | ResourceType::Uav) => {
+                (u.kind == ResourceType::Uav, u.stride)
+            }
+            _ => return None,
+        };
+        let u = if uav { 0x1000 } else { 0 };
+        let props = if stride >= 4 && stride.is_multiple_of(4) { (12 | u, stride) } else { (11 | u, 0) };
+        let h = self.handle(site, &src, false, props).ok()?;
+        let c = self.cur;
+        let i32t = self.s.t.i32;
+        let dims = self.s.m.named_struct("dx.types.Dimensions", vec![i32t; 4]);
+        let mip = self.s.m.undef(i32t);
+        let d = self.s.op(c, "getDimensions", Attr::ReadOnly, dims, 72, &[h, mip]);
+        Some(self.s.m.extract(c, d, 0))
+    }
+
     fn computed_with(&self, v: Value, depth: u32) -> bool {
         self.x.p.blocks.iter().flat_map(|b| &b.insts).any(|i| {
             if !i.reads.iter().any(|r| r.1 == v) {
@@ -3106,7 +3155,7 @@ impl<'a> Lower<'a> {
         // host waves know every lane runs that block.
         let made = self.def_block.get(&lo).copied();
         let whole = self.exchange.is_some() && !self.local && made.is_none_or(|b| self.all_lanes(b));
-        if !self.x.st.active.contains(&lo) && !whole {
+        if !self.x.st.active.contains(&lo) && !whole && !MASKS_ELSEWHERE.get() {
             if self.exchange.is_some() && !self.local {
                 need(made.unwrap_or(0));
             }
@@ -5786,9 +5835,17 @@ impl<'a> Lower<'a> {
                 {
                     for k in 0..count {
                         let reg = Reg::S(code + k as u8);
+                        // Its record count where the code reads it (a buffer
+                        // left empty is skipped by testing it against 0:
+                        // ceb5eb68cd99cb07 at 0x34): the host view's size.
+                        let records = match (k, inst.write(reg)) {
+                            (2, Some(v)) if self.read_anywhere(v) => self.record_count(site),
+                            _ => None,
+                        };
                         match k {
                             0 => self.write(inst, reg, lo, None),
                             1 => self.write(inst, reg, hi, None),
+                            2 if records.is_some() => self.write(inst, reg, records.expect("checked"), None),
                             _ => {
                                 if let Some(v) = inst.write(reg) {
                                     self.vals.insert(v, Val::Missing(OTHER));

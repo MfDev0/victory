@@ -76,12 +76,6 @@ jobs:
           exe=target/release/victory
           out=disasm-out.txt
           : > $out
-          f=$(ls shaders/compute-ceb5eb68cd99cb07*.dxbc 2>/dev/null | head -n 1)
-          if [ -n "$f" ]; then
-            "$exe" shader-info --disasm "$f" > d.txt 2>&1 || true
-            echo "==== ceb5 whole" >> $out
-            grep -aE "^ *[0-9a-f]{6}: " d.txt | cut -c1-12,58-110 | head -n 380 >> $out || true
-          fi
           for pair in compute-7f05ddab771799a9:89ec; do
             name=${pair%%:*}; off=${pair##*:}
             f=$(ls shaders/$name*.dxbc 2>/dev/null | head -n 1)
@@ -105,7 +99,7 @@ jobs:
               t += open("disasm-out.txt", encoding="utf-8", errors="replace").read()
           t += "\n#### translate\n"
           lines = [l for l in open("probe-out.txt", encoding="utf-8", errors="replace").read().splitlines()
-                   if l.startswith("----") or "WAVE64-WHY" in l or " emit: " in l or "translated of" in l]
+                   if l.startswith("----") or "WAVE64" in l or " emit: " in l or "translated of" in l]
           t += "\n".join(lines)
           chunks = [t[i:i + 3900] for i in range(0, len(t), 3900)][:10]
           for n, c in enumerate(chunks):

@@ -343,6 +343,15 @@ pub fn translate(container: &[u8]) -> Result<HostShader, ShaderError> {
     {
         return Ok(shader);
     }
+    // A lane mask holding lanes outside EXEC read as data: once more with it
+    // read as the ballot of the lanes that reach its block
+    // ([`lower::with_masks_elsewhere`]; `VICTORY_MASK_ELSEWHERE=0` refuses).
+    if matches!(&out, Err(ShaderError::Unsupported { what, .. }) if *what == lower::MASK_ELSEWHERE)
+        && std::env::var_os("VICTORY_MASK_ELSEWHERE").is_none_or(|v| v != "0")
+        && let Ok(shader) = lower::with_masks_elsewhere(|| emit(&c, &native, &p, &st, &io, &res))
+    {
+        return Ok(shader);
+    }
     out
 }
 
