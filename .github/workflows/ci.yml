@@ -35,28 +35,30 @@ jobs:
       - name: Clippy
         shell: pwsh
         run: |
-          cargo clippy --workspace --all-targets --locked --message-format=short -- -D warnings 2>&1 | Tee-Object -FilePath clippy.txt
+          cargo clippy --workspace --all-targets --locked --message-format=short -- -D warnings 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\clippy.txt"
           $code = $LASTEXITCODE
-          $hits = @(Select-String -CaseSensitive -Path clippy.txt -Pattern ': (error|warning)|^error' | Select-Object -First 60 | ForEach-Object { $_.Line.Trim() })
+          $hits = @(Select-String -CaseSensitive -Path "$env:RUNNER_TEMP\clippy.txt" -Pattern ': (error|warning)|^error' | Select-Object -First 60 | ForEach-Object { $_.Line.Trim() })
           if ($code -ne 0 -and $hits.Count -gt 0) { Write-Output ("::error::" + ($hits -join ' %0A ')) }
           exit $code
       - name: Clippy, diagnostics build
         shell: pwsh
         run: |
-          cargo clippy --workspace --all-targets --all-features --locked --message-format=short -- -D warnings 2>&1 | Tee-Object -FilePath clippy.txt
+          cargo clippy --workspace --all-targets --all-features --locked --message-format=short -- -D warnings 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\clippy.txt"
           $code = $LASTEXITCODE
-          $hits = @(Select-String -CaseSensitive -Path clippy.txt -Pattern ': (error|warning)|^error' | Select-Object -First 60 | ForEach-Object { $_.Line.Trim() })
+          $hits = @(Select-String -CaseSensitive -Path "$env:RUNNER_TEMP\clippy.txt" -Pattern ': (error|warning)|^error' | Select-Object -First 60 | ForEach-Object { $_.Line.Trim() })
           if ($code -ne 0 -and $hits.Count -gt 0) { Write-Output ("::error::" + ($hits -join ' %0A ')) }
           exit $code
       # Includes xtask's repository_passes_policy, the asset-policy check.
+      # (The step outputs go to the runner's temp folder: inside the checkout
+      # the policy check saw them as files of the repository.)
       - name: Tests
         shell: pwsh
         run: |
-          cargo test --workspace --locked --no-fail-fast 2>&1 | Tee-Object -FilePath test-output.txt
+          cargo test --workspace --locked --no-fail-fast 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\test-output.txt"
           $code = $LASTEXITCODE
           # Failing tests and panics as annotations (readable through the API).
           # (case-sensitive, and all in one: a step shows at most 10 annotations)
-          $hits = @(Select-String -CaseSensitive -Path test-output.txt -Pattern ' FAILED|panicked|^error|could not compile|STATUS_|^---- |left: |right: ' |
+          $hits = @(Select-String -CaseSensitive -Path "$env:RUNNER_TEMP\test-output.txt" -Pattern ' FAILED|panicked|^error|could not compile|STATUS_|^---- |left: |right: |POLICY: ' |
             Select-Object -First 80 | ForEach-Object { $_.Line.Trim() })
           if ($hits.Count -gt 0) { Write-Output ("::error::" + ($hits -join ' %0A ')) }
           exit $code
