@@ -180,7 +180,8 @@ pub(crate) fn top_dropped() -> u32 {
 /// soft, in a fraction of the time; when the backlog has drained, the
 /// textures made that way get their full detail back
 /// (`crate::descriptor::host::sharpen`) while the game plays. In the world
-/// 17,000 slots were due and textures came in one by one over a minute.
+/// up to 27,668 slots were due (report 141631) and textures came in one by
+/// one over a minute.
 pub(crate) fn rush_levels() -> u32 {
     static N: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
