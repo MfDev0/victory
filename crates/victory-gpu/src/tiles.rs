@@ -126,7 +126,7 @@ pub(crate) fn floor() -> u64 {
     });
     match set {
         Some(bytes) => bytes,
-        None if top_dropped() > 0 => 256 << 10,
+        None if by_quality() => 256 << 10,
         None => parse_floor(None),
     }
 }
@@ -144,42 +144,90 @@ pub(crate) fn small_tiles() -> u32 {
 }
 
 /// Texture quality on cards with little memory: how many of the largest
-/// levels of a texture made level by level get no memory
-/// (`VICTORY_TEXTURE_TOP_DROP`, 0 to 3). By default one on a card whose
-/// budget is under 7,000 MB (6 and 8 GB cards: the 2026-11-26 report
-/// uploaded 7,072 MB of textures onto a budget of 5,153 MB and the rest
-/// stayed black), none on larger ones; one more while the card has no room
-/// for whole textures. The largest level is three quarters of a texture's
-/// bytes: PC games' "texture quality: medium" and other emulators'
-/// texture-size caps drop it the same way. Only levels of 4 tiles (256 KiB)
-/// or more are dropped, and never down past the fourth level from the
-/// smallest, so small textures keep all their detail.
+/// levels of a texture made level by level get no memory. The largest
+/// level is three quarters of a texture's bytes: PC games' "texture
+/// quality" and other emulators' texture-size caps drop it the same way.
+/// Only levels of 4 tiles (256 KiB) or more are dropped, and never down past
+/// the fourth level from the smallest, so small textures keep all their
+/// detail.
+/// `VICTORY_TEXTURE_TOP_DROP` (0 to 3) fixes the count. Unset (5.8:
+/// adaptive, as engines stream to a memory budget): on a card whose budget
+/// is under 7,000 MB, none while the card is under 70 % of it (full
+/// detail), one past that, and one more while the card has no room for
+/// whole textures; textures that were made blurred get their largest levels
+/// back once it is under 70 % again (`crate::descriptor::host::sharpen`).
+/// 5.6 and 5.7 dropped one level on such cards always: blurred even with
+/// memory to spare.
 pub(crate) fn top_dropped() -> u32 {
-    // The base count once known (`u32::MAX`: not yet; asked again until
-    // the card says its budget).
-    static BASE: AtomicU32 = AtomicU32::new(u32::MAX);
-    let mut base = BASE.load(Ordering::Relaxed);
-    if base == u32::MAX {
-        let set = std::env::var("VICTORY_TEXTURE_TOP_DROP").ok().and_then(|v| v.trim().parse::<u32>().ok());
-        let known = match set {
-            Some(n) => Some(n.min(3)),
-            None => host().and_then(|h| h.video_memory()).map(|[budget, ..]| u32::from(budget < 7000 << 20)),
-        };
-        let Some(n) = known else {
-            return 0;
-        };
-        if BASE.swap(n, Ordering::Relaxed) == u32::MAX {
-            tracing::info!(
-                dropped = n,
-                "texture quality: the largest levels of a texture left without memory on this card (VICTORY_TEXTURE_TOP_DROP)"
-            );
+    match quality_base() {
+        None | Some(Quality::Full) => 0,
+        Some(Quality::Fixed(n)) => n,
+        Some(Quality::Adaptive) => adaptive_drop(),
+    }
+}
+
+/// Whether textures are made level by level whatever they hold, for
+/// texture quality to work on ([`top_dropped`]): a card it may drop levels
+/// on.
+pub(crate) fn by_quality() -> bool {
+    matches!(quality_base(), Some(Quality::Adaptive | Quality::Fixed(1..)))
+}
+
+#[derive(Clone, Copy)]
+enum Quality {
+    Full,
+    Fixed(u32),
+    Adaptive,
+}
+
+/// What [`top_dropped`] goes by, once the card says its budget.
+fn quality_base() -> Option<Quality> {
+    // 0: not known yet; 1: full; 2: adaptive; 3 + n: fixed at n.
+    static BASE: AtomicU32 = AtomicU32::new(0);
+    let known = match BASE.load(Ordering::Relaxed) {
+        0 => {
+            let set = std::env::var("VICTORY_TEXTURE_TOP_DROP").ok().and_then(|v| v.trim().parse::<u32>().ok());
+            let code = match set {
+                Some(n) => 3 + n.min(3),
+                None => {
+                    let [budget, ..] = host().and_then(|h| h.video_memory())?;
+                    if budget < 7000 << 20 { 2 } else { 1 }
+                }
+            };
+            if BASE.swap(code, Ordering::Relaxed) == 0 {
+                tracing::info!(
+                    quality = code,
+                    "texture quality (1: full detail; 2: adaptive, the largest levels left out only while the card is short; 3 + n: n levels left out always; VICTORY_TEXTURE_TOP_DROP)"
+                );
+            }
+            code
         }
-        base = n;
+        code => code,
+    };
+    Some(match known {
+        1 => Quality::Full,
+        2 => Quality::Adaptive,
+        code => Quality::Fixed(code - 3),
+    })
+}
+
+/// [`top_dropped`] when adaptive, asked of the card at most every tenth of
+/// a second.
+fn adaptive_drop() -> u32 {
+    // The tenth of the last asking, counted from 1, and its answer in the
+    // lowest two bits.
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let tenth = crate::host::now_ms() / 100 + 1;
+    let last = LAST.load(Ordering::Relaxed);
+    if last >> 2 == tenth {
+        return (last & 3) as u32;
     }
-    if base == 0 {
-        return 0;
-    }
-    (base + u32::from(!crate::resource::room_lately())).min(3)
+    let short = host()
+        .and_then(|h| h.video_memory())
+        .is_some_and(|[budget, used, ..]| used >= budget / 100 * 70);
+    let n = if short { 1 + u32::from(!crate::resource::room_lately()) } else { 0 };
+    LAST.store((tenth << 2) | u64::from(n), Ordering::Relaxed);
+    n
 }
 
 /// The bytes of the tiles given to textures now: the card's memory they
@@ -342,6 +390,10 @@ pub(crate) struct Tiled {
     held: AtomicU32,
     /// The levels the card itself wrote, in lists submitted so far.
     card: AtomicU32,
+    /// The last upload left levels the title holds without memory because
+    /// texture quality dropped them ([`top_dropped`]): the texture is drawn
+    /// blurred, and is uploaded again when the card has memory to spare.
+    blurred: std::sync::atomic::AtomicBool,
     /// The levels a recorded list of the card's own writes has already
     /// written with zeros first ([`Tiled::claim`]).
     claimed: AtomicU32,
@@ -410,6 +462,7 @@ impl Tiled {
             shown: AtomicU32::new(u32::MAX),
             held: AtomicU32::new(0),
             card: AtomicU32::new(0),
+            blurred: std::sync::atomic::AtomicBool::new(false),
             claimed: AtomicU32::new(0),
         })
     }
@@ -470,6 +523,7 @@ impl Tiled {
         may: u32,
     ) -> (bool, bool) {
         let mut held = held & self.every_level();
+        let all_held = held;
         // Texture quality ([`top_dropped`]): the largest levels count as
         // not held, so they get no memory, wait for none, and views start
         // below them. (Not if nothing else would be held.)
@@ -485,7 +539,14 @@ impl Tiled {
         // waiting: a write of the card's into no memory is lost.
         let changed = self.give_locked(&mut given, queue, device, texture, named, (named & may) | card);
         let missing = self.without_locked(&given, named) != 0;
+        let blurred = self.without_locked(&given, all_held & !held) != 0;
+        self.blurred.store(blurred, Ordering::Relaxed);
         (changed, missing)
+    }
+
+    /// Whether the last upload left held levels out for texture quality.
+    pub(crate) fn blurred(&self) -> bool {
+        self.blurred.load(Ordering::Relaxed)
     }
 
     /// The largest levels left without memory ([`top_dropped`]), a bit a
@@ -1728,6 +1789,7 @@ void look() {
             shown: AtomicU32::new(u32::MAX),
             held: AtomicU32::new(0),
             card: AtomicU32::new(0),
+            blurred: std::sync::atomic::AtomicBool::new(false),
             claimed: AtomicU32::new(0),
         };
         assert_eq!(tiled.claim(1 << 0), 1 << 0);

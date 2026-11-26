@@ -1889,6 +1889,9 @@ impl State {
         // And with room, the textures whose upload left a held level
         // without the card's memory are uploaded again.
         if room {
+            // Texture quality: blurred textures get their largest levels
+            // back while the card has memory to spare.
+            crate::descriptor::host::sharpen(256);
             host.texture_slots_waiting(frame);
         }
         let (due, census) = host.texture_slots_due(frame, 4096);

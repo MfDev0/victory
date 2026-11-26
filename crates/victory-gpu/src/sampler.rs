@@ -71,6 +71,78 @@ impl Fields {
     }
 }
 
+/// Try 5.8, sharper surfaces (what PC drivers' and other emulators'
+/// "anisotropic filtering override" and upscalers' LOD bias do):
+/// - a sampler that filters linearly between levels (a textured surface,
+///   not a data lookup: no point filter, no comparison, no minimum or
+///   maximum) and has levels to filter between is made anisotropic, 16x
+///   (`VICTORY_ANISO`, 1 to 16; 1: as the title asked). Roads, walls and
+///   pavements seen at an angle are sampled from their sharp levels along
+///   the line of sight instead of the blurred ones trilinear picks;
+/// - the same samplers get a negative level bias where the title renders
+///   smaller than the screen (`crate::dxgi::render_scale`): log2 of the
+///   scale, -0.42 at 75 %, as DLSS, FSR and XeSS ask of the titles that use
+///   them, so textures keep the sharpness of the screen's size
+///   (`VICTORY_LOD_BIAS` sets the bias, in hundredths: -50 is -0.5).
+pub(crate) fn enhance(desc: &mut D3D12_SAMPLER_DESC) {
+    let (aniso, bias) = enhancement();
+    let filter = desc.Filter.0 as u32;
+    // Reduction (bits 7-8) plain; mip linear (bit 0) and min linear (bit
+    // 4), or anisotropic already (bit 6).
+    let plain = filter >> 7 == 0;
+    let trilinear = filter & 0x11 == 0x11 || filter & 0x40 != 0;
+    if !plain || !trilinear || desc.MaxLOD <= desc.MinLOD {
+        return;
+    }
+    if aniso > 1 {
+        desc.Filter = D3D12_FILTER_ANISOTROPIC;
+        desc.MaxAnisotropy = desc.MaxAnisotropy.max(aniso);
+    }
+    if bias != 0.0 {
+        desc.MipLODBias = (desc.MipLODBias + bias).clamp(-16.0, 15.99);
+    }
+}
+
+/// The same for a static sampler of a root signature.
+pub(crate) fn enhance_static(filter: &mut u32, max_anisotropy: &mut u32, bias: &mut f32, min_lod: f32, max_lod: f32) {
+    let mut desc = D3D12_SAMPLER_DESC {
+        Filter: D3D12_FILTER(*filter as i32),
+        MaxAnisotropy: *max_anisotropy,
+        MipLODBias: *bias,
+        MinLOD: min_lod,
+        MaxLOD: max_lod,
+        ..Default::default()
+    };
+    enhance(&mut desc);
+    *filter = desc.Filter.0 as u32;
+    *max_anisotropy = desc.MaxAnisotropy;
+    *bias = desc.MipLODBias;
+}
+
+/// The anisotropy and level bias of [`enhance`].
+fn enhancement() -> (u32, f32) {
+    static ONCE: std::sync::OnceLock<(u32, f32)> = std::sync::OnceLock::new();
+    *ONCE.get_or_init(|| {
+        let aniso = std::env::var("VICTORY_ANISO")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .map_or(16, |n| n.clamp(1, 16));
+        let bias = std::env::var("VICTORY_LOD_BIAS")
+            .ok()
+            .and_then(|v| v.trim().parse::<i32>().ok())
+            .map_or_else(
+                || (crate::dxgi::render_scale() as f32 / 100.0).log2(),
+                |h| h.clamp(-300, 300) as f32 / 100.0,
+            );
+        tracing::info!(
+            anisotropy = aniso,
+            lod_bias = bias,
+            "sharper surfaces: textured samplers made anisotropic, level bias for the render scale (VICTORY_ANISO, VICTORY_LOD_BIAS)"
+        );
+        (aniso, bias)
+    })
+}
+
 /// The console's sampler description (27 words): flags, magnification,
 /// minification, mip and depth filters, filter mode, three address modes,
 /// minimum and maximum LOD, LOD bias, secondary bias, anisotropy, its bias

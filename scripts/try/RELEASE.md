@@ -1,5 +1,6 @@
-VIctory Try 5.7
-- Your last run was still Series X, so the card was over its memory limit and 22,500 textures waited (black). VIctory now switches 6/8 GB cards to Series S by itself (press C to keep Series X)
-- Pressing U now starts the new VIctory Try right away, so launcher fixes apply without restarting
-- Lower texture detail now also covers small textures (256 KB and up), where most of the memory went (textures average 411 KB)
-- New log line showing exactly what uses the card's memory, to aim the next fixes
+VIctory Try 5.8
+- Sharper image: the upscaled picture now uses AMD FSR's RCAS sharpening (the old sharpening was mostly cancelled out)
+- 16x anisotropic filtering forced on: roads, walls and pavements stay sharp at an angle
+- Texture detail tuned for the 75% render scale (negative LOD bias, like DLSS/FSR games use)
+- Textures only lose detail while the card is really full (over 70%), and get their full detail back when memory frees up
+- Textures still loading show plain grey instead of black

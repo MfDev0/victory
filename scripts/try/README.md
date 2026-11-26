@@ -145,7 +145,8 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - **render scale** (as DLSS/FSR mods do): the game is told a screen 75%
      the size (`VICTORY_RENDER_SCALE`, 50-100) and renders every pass that
      small; our present scales each frame up to the window with a clamped
-     Catmull-Rom filter and sharpens it (`VICTORY_SHARPEN`, percent, 35);
+     Catmull-Rom filter and sharpens it (`VICTORY_SHARPEN`, percent, 35; 5.8:
+     RCAS, 80);
    - **no ray tracing** (as "RT off" mods): the console's ray structures
      are not built here, so the rays walked empty memory, cost the card time
      and gave black shadows and overbright light; with `VICTORY_SKIP_RT=1`
@@ -368,6 +369,26 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      largest level is left out from 256 KB up;
    - a new log line says where the card's memory goes (render targets,
      textures, tiles, staging buffers) and which console ran.
+   5.8 (a sharper image, not a blurrier one):
+   - the scaled-up frame is sharpened with **FSR 1's RCAS** (contrast-adaptive:
+     edges and texture detail get their contrast back, flat areas and noise
+     are left alone), 80 % by default (`VICTORY_SHARPEN`, percent); the old
+     sharpening was mostly undone by its own clamp;
+   - **16x anisotropic filtering** on every textured sampler that filters
+     between levels (roads and walls seen at an angle stay sharp;
+     `VICTORY_ANISO=1` to 16), and a **negative level bias** for the render
+     scale (-0.42 at 75 %, as DLSS and FSR ask of games; `VICTORY_LOD_BIAS`,
+     in hundredths);
+   - **adaptive texture quality**: the largest levels are left out only while
+     the card is past 70 % of its budget, not always; textures uploaded
+     blurred get their full detail back once memory frees up (256 a frame;
+     `VICTORY_TEXTURE_TOP_DROP` still fixes the count);
+   - **placeholders instead of black**: a texture not on the card yet reads
+     a mid grey (colour), a flat normal (normal maps) or white (occlusion and
+     masks) instead of zeros, so surfaces look plain rather than black while
+     they load (`VICTORY_PLACEHOLDERS=0`: off);
+   - a log line counts levels left out, textures made sharp again and
+     placeholders shown.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,

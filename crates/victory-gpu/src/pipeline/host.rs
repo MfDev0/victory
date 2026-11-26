@@ -875,13 +875,16 @@ impl HostPipeline {
                 }
             }
             for (n, s) in t.static_samplers.iter().enumerate() {
+                // Sharper surfaces (`crate::sampler::enhance`).
+                let (mut filter, mut max_anisotropy, mut bias) = (s.filter, s.max_anisotropy, s.mip_lod_bias);
+                crate::sampler::enhance_static(&mut filter, &mut max_anisotropy, &mut bias, s.min_lod, s.max_lod);
                 samplers.push(D3D12_STATIC_SAMPLER_DESC {
-                    Filter: D3D12_FILTER(s.filter as i32),
+                    Filter: D3D12_FILTER(filter as i32),
                     AddressU: D3D12_TEXTURE_ADDRESS_MODE(s.address[0] as i32),
                     AddressV: D3D12_TEXTURE_ADDRESS_MODE(s.address[1] as i32),
                     AddressW: D3D12_TEXTURE_ADDRESS_MODE(s.address[2] as i32),
-                    MipLODBias: s.mip_lod_bias,
-                    MaxAnisotropy: s.max_anisotropy,
+                    MipLODBias: bias,
+                    MaxAnisotropy: max_anisotropy,
                     ComparisonFunc: D3D12_COMPARISON_FUNC(s.comparison as i32),
                     BorderColor: D3D12_STATIC_BORDER_COLOR(s.border as i32),
                     MinLOD: s.min_lod,

@@ -155,6 +155,42 @@ pub(crate) fn levels_waiting(start: u64) {
     WAITING.lock().unwrap_or_else(|e| e.into_inner()).insert(start, crate::host::moment());
 }
 
+/// Texture quality (`crate::tiles::top_dropped`): where the placed textures
+/// start whose last upload left their largest levels out while the card
+/// was short of memory (drawn blurred).
+static BLURRED: Mutex<std::collections::BTreeSet<u64>> = Mutex::new(std::collections::BTreeSet::new());
+
+/// The placed texture at `start` was uploaded blurred ([`BLURRED`]).
+pub(crate) fn blurred(start: u64) {
+    BLURRED.lock().unwrap_or_else(|e| e.into_inner()).insert(start);
+}
+
+/// While texture quality leaves nothing out (the card has memory to spare
+/// again), up to `most` textures uploaded blurred are made due as if their
+/// upload had left a level waiting: uploaded again, with every level. They
+/// stayed blurred for the rest of the run. Since the start: how many.
+pub(crate) fn sharpen(most: usize) -> u64 {
+    static SHARPENED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    if crate::tiles::top_dropped() == 0 {
+        let starts: Vec<u64> = {
+            let mut blurred = BLURRED.lock().unwrap_or_else(|e| e.into_inner());
+            let starts: Vec<u64> = blurred.iter().copied().take(most).collect();
+            for start in &starts {
+                blurred.remove(start);
+            }
+            starts
+        };
+        if !starts.is_empty() {
+            let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
+            for &start in &starts {
+                waiting.entry(start).or_insert(1);
+            }
+            SHARPENED.fetch_add(starts.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    SHARPENED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Title memory by the placed texture views that describe it: per span of
 /// memory (its start, its end at full size) the title slots holding a
 /// view of a texture that takes exactly that span. A console title need
@@ -2810,6 +2846,17 @@ fn make(view: &View, at: D3D12_CPU_DESCRIPTOR_HANDLE) -> Option<Kept> {
                 if !fits(texture, desc.as_mut().map(|d| &mut d.Format), false) {
                     return None;
                 }
+                // Levels on demand: a texture made level by level with no
+                // level that has memory yet reads zeros, drawn black: a
+                // placeholder of its kind instead ([`placeholder`]), until
+                // a level gets memory and the slot is made again.
+                if crate::resource::host_tiled(resource)
+                    .is_some_and(|t| t.tiled().is_some_and(|t| t.first_shown().is_none()))
+                    && let Some(d) = &desc
+                    && placeholder(d.Format, d.ViewDimension.0 as u32, at, true)
+                {
+                    return Some(Some(texture.clone()));
+                }
                 // Levels on demand (`crate::tiles`): a texture made level by
                 // level is shown from the first level that is the title's
                 // and has memory, if the title's view starts before it (a
@@ -2910,17 +2957,19 @@ fn make(view: &View, at: D3D12_CPU_DESCRIPTOR_HANDLE) -> Option<Kept> {
         }
         View::Sampler(words) => {
             // SAFETY: 13 words in the host's layout.
-            let desc = unsafe {
+            let mut desc = unsafe {
                 std::ptr::from_ref(words)
                     .cast::<D3D12_SAMPLER_DESC>()
                     .read_unaligned()
             };
+            crate::sampler::enhance(&mut desc);
             // SAFETY: a slot of our sampler heap.
             unsafe { device.CreateSampler(&desc, at) };
             Some(None)
         }
         View::ConsoleSampler(words) => {
-            let desc = crate::sampler::console(words);
+            let mut desc = crate::sampler::console(words);
+            crate::sampler::enhance(&mut desc);
             // SAFETY: a slot of our sampler heap.
             unsafe { device.CreateSampler(&desc, at) };
             Some(None)
@@ -3117,9 +3166,21 @@ fn null_for(view: &View, at: D3D12_CPU_DESCRIPTOR_HANDLE) {
         View::Placed(false, resource, _) if resource[0] == 1 => return null_buffer_view(at),
         // Textures: a null view of the title's dimension (1D, arrays, 3D,
         // cubes), not always 2D.
-        View::Shader(_, Some(desc)) => return null_like(desc, at),
+        View::Shader(_, Some(desc)) => {
+            // A texture not there yet (or gone): a placeholder of its kind
+            // ([`placeholder`]), block-compressed formats only (never a
+            // render target, so always one the title fills).
+            if placeholder_like(desc, at, false) {
+                return;
+            }
+            return null_like(desc, at);
+        }
         View::Placed(false, _, desc) => {
-            return null_like(desc[..10].try_into().unwrap_or(&[0; 10]), at);
+            let words: &[u32; 10] = desc[..10].try_into().unwrap_or(&[0; 10]);
+            if placeholder_like(words, at, false) {
+                return;
+            }
+            return null_like(words, at);
         }
         View::Constant(..) => {
             let desc = D3D12_CONSTANT_BUFFER_VIEW_DESC::default();
@@ -3209,6 +3270,163 @@ fn null_buffer_view(at: D3D12_CPU_DESCRIPTOR_HANDLE) {
         host.device
             .CreateShaderResourceView(None::<&ID3D12Resource>, Some(&desc), at)
     };
+}
+
+/// Try 5.8, placeholders (as emulators with asynchronous textures show
+/// one until the real texture is ready): a texture slot whose texture is
+/// not on the card yet (waiting for room, for its memory, for its turn in
+/// the queue) read zeros, so whatever used it drew black: walls, roads
+/// and faces in every report, 22,000 textures waiting. Now it reads a
+/// one-texel texture of what its kind most likely holds, told by its
+/// format:
+/// - colour formats in sRGB (block-compressed or not): a mid grey
+///   (surfaces look unpainted, not black), opaque. Not the ones with an
+///   explicit alpha (BC2, BC3), mostly cut-outs (leaves, fences): those
+///   stay transparent rather than grey squares;
+/// - two-channel normal maps (BC5, unsigned): a flat normal, so light falls
+///   on the surface as on a plain one (zeros tilt it fully sideways);
+/// - one-channel maps (BC4, unsigned: occlusion, roughness, masks): white,
+///   unshadowed and matte (zeros are fully occluded, black).
+///
+/// Anything else reads zeros as before. `VICTORY_PLACEHOLDERS=0`: off.
+/// Writes the view into `at`; false when it does not (the caller makes
+/// its null view).
+/// `any`: uncompressed sRGB formats too (only for textures known to be the
+/// title's to fill: those may also be render targets otherwise).
+fn placeholder(format: DXGI_FORMAT, dimension: u32, at: D3D12_CPU_DESCRIPTOR_HANDLE, any: bool) -> bool {
+    const TEXTURE2D: u32 = 4;
+    const TEXTURE2DARRAY: u32 = 5;
+    if dimension != TEXTURE2D && dimension != TEXTURE2DARRAY {
+        return false;
+    }
+    let kind = match format {
+        DXGI_FORMAT_BC1_UNORM_SRGB | DXGI_FORMAT_BC7_UNORM_SRGB => 0,
+        DXGI_FORMAT_R8G8B8A8_UNORM_SRGB | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB | DXGI_FORMAT_B8G8R8X8_UNORM_SRGB
+            if any =>
+        {
+            0
+        }
+        DXGI_FORMAT_BC5_UNORM => 1,
+        DXGI_FORMAT_BC4_UNORM => 2,
+        _ => return false,
+    };
+    let Some(textures) = placeholders() else {
+        return false;
+    };
+    let Some(host) = host() else {
+        return false;
+    };
+    let desc = if dimension == TEXTURE2D {
+        D3D12_SHADER_RESOURCE_VIEW_DESC {
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
+            Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                Texture2D: D3D12_TEX2D_SRV {
+                    MipLevels: 1,
+                    ..Default::default()
+                },
+            },
+        }
+    } else {
+        D3D12_SHADER_RESOURCE_VIEW_DESC {
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2DARRAY,
+            Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+            Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                Texture2DArray: D3D12_TEX2D_ARRAY_SRV {
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    ..Default::default()
+                },
+            },
+        }
+    };
+    PLACEHOLDERS_SHOWN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // SAFETY: a live texture of ours and a slot of our heap.
+    unsafe { host.device.CreateShaderResourceView(&textures.0[kind], Some(&desc), at) };
+    true
+}
+
+/// [`placeholder`] for a title's view description.
+fn placeholder_like(words: &[u32; 10], at: D3D12_CPU_DESCRIPTOR_HANDLE, any: bool) -> bool {
+    let desc = srv_desc(words);
+    placeholder(desc.Format, desc.ViewDimension.0 as u32, at, any)
+}
+
+/// Slots given a placeholder since the start.
+pub(crate) static PLACEHOLDERS_SHOWN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The three placeholder textures (grey, flat normal, white).
+struct Placeholders([ID3D12Resource; 3]);
+
+// SAFETY: D3D12 resources are free-threaded; these are only read.
+unsafe impl Send for Placeholders {}
+// SAFETY: as above.
+unsafe impl Sync for Placeholders {}
+
+/// The placeholder textures, made once: one texel each, in memory the CPU
+/// writes (a custom heap), filled with `WriteToSubresource`, read by
+/// shaders from the common state.
+fn placeholders() -> Option<&'static Placeholders> {
+    static MADE: std::sync::OnceLock<Option<Placeholders>> = std::sync::OnceLock::new();
+    MADE.get_or_init(|| {
+        if std::env::var_os("VICTORY_PLACEHOLDERS").is_some_and(|v| v == "0") {
+            return None;
+        }
+        let host = host()?;
+        // Linear values (the views read them as UNORM): grey 0.3, a flat
+        // normal, white.
+        let texels: [[u8; 4]; 3] = [[77, 77, 77, 255], [128, 128, 255, 255], [255, 255, 255, 255]];
+        let heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_CUSTOM,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_L0,
+            CreationNodeMask: 0,
+            VisibleNodeMask: 0,
+        };
+        let desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            Width: 1,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+            ..Default::default()
+        };
+        let mut made = Vec::with_capacity(3);
+        for texel in &texels {
+            let mut texture: Option<ID3D12Resource> = None;
+            // SAFETY: plain creation; then the texture is mapped (no
+            // pointer: a texture), written and unmapped, all on our own
+            // data.
+            let done = unsafe {
+                host.device
+                    .CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, None, &mut texture)
+                    .and_then(|()| {
+                        let t = texture.as_ref().ok_or_else(windows::core::Error::empty)?;
+                        t.Map(0, None, None)?;
+                        let written = t.WriteToSubresource(0, None, texel.as_ptr().cast(), 4, 4);
+                        t.Unmap(0, None);
+                        written
+                    })
+            };
+            match (done, texture) {
+                (Ok(()), Some(texture)) => made.push(texture),
+                (Err(e), _) => {
+                    tracing::warn!(error = %e, "no placeholder textures: textures not there yet read zeros (black) as before");
+                    return None;
+                }
+                _ => return None,
+            }
+        }
+        let made: [ID3D12Resource; 3] = made.try_into().ok()?;
+        tracing::info!("placeholder textures made: textures not on the card yet show grey, flat or white instead of black (VICTORY_PLACEHOLDERS=0: off)");
+        Some(Placeholders(made))
+    })
+    .as_ref()
 }
 
 /// A texture view that reads zeros with the dimension (and mip and array

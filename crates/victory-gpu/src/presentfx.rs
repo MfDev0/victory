@@ -6,8 +6,10 @@
 //!   (`crate::dxgi::render_scale`), so it renders every pass at that
 //!   size, and here each frame is scaled up to the screen's size with a
 //!   Catmull-Rom filter, clamped to the four nearest texels as FSR's EASU
-//!   is (no rings), and sharpened a little (`VICTORY_SHARPEN`, percent,
-//!   35 by default).
+//!   is (no rings), and sharpened with FSR's RCAS (contrast-adaptive:
+//!   edges and texture detail get their contrast back, flat areas and
+//!   noise are left alone; `VICTORY_SHARPEN`, percent, 80 by default since
+//!   Try 5.8).
 //! * **Frames in between** (idea 7, after VR's asynchronous spacewarp):
 //!   with `VICTORY_FRAMEGEN=1`, each new frame of the title is compared
 //!   with the one before, block by block (16x16 pixels, a search of ±20
@@ -112,11 +114,12 @@ float2 motionAt(float2 p) {
     return lerp(lerp(m00, m10, f.x), lerp(m01, m11, f.x), f.y);
 }
 
-[RootSignature(RS)]
-[numthreads(8, 8, 1)]
-void resolveMain(uint3 id : SV_DispatchThreadID) {
-    if (id.x >= outSize.x || id.y >= outSize.y) return;
-    float2 p = (float2(id.xy) + 0.5) * float2(inSize) / float2(outSize);
+// The title's frame at output pixel `o` (pixel centres at +0.5): a
+// Catmull-Rom filter clamped to the four nearest texels, as FSR's EASU is
+// (no rings).
+float3 upscaled(int2 o) {
+    o = clamp(o, int2(0, 0), int2(outSize) - 1);
+    float2 p = (float2(o) + 0.5) * float2(inSize) / float2(outSize);
     if (useMotion != 0) p += motionAt(p) * amount;
     float2 q = p - 0.5;
     int2 i = (int2)floor(q);
@@ -139,11 +142,35 @@ void resolveMain(uint3 id : SV_DispatchThreadID) {
     float3 s11 = texelOf(cur, i + int2(1, 1));
     float3 lo = min(min(s00, s10), min(s01, s11));
     float3 hi = max(max(s00, s10), max(s01, s11));
+    return saturate(clamp(c, lo, hi));
+}
+
+// Try 5.8: then sharpened as FSR 1's RCAS does (robust contrast-adaptive
+// sharpening, AMD, MIT licence): each pixel against its four neighbours,
+// as hard as it can be without going past their range (no halos), less
+// where the contrast is high already. The old pass sharpened against a
+// bilinear blur and clamped the result back to the four nearest texels,
+// which took most of it away again.
+[RootSignature(RS)]
+[numthreads(8, 8, 1)]
+void resolveMain(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= outSize.x || id.y >= outSize.y) return;
+    int2 o = int2(id.xy);
+    float3 e = upscaled(o);
     if (sharp > 0) {
-        float3 blur = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-        c += (c - blur) * sharp;
+        float3 b = upscaled(o + int2(0, -1));
+        float3 d = upscaled(o + int2(-1, 0));
+        float3 fr = upscaled(o + int2(1, 0));
+        float3 h = upscaled(o + int2(0, 1));
+        float3 mn4 = min(min(b, d), min(fr, h));
+        float3 mx4 = max(max(b, d), max(fr, h));
+        float3 hitMin = mn4 / (4.0 * mx4 + 1e-5);
+        float3 hitMax = (1.0 - mx4) / (4.0 * mn4 - 4.0 - 1e-5);
+        float3 lobeRGB = max(-hitMin, hitMax);
+        float lobe = max(-0.1875, min(max(lobeRGB.r, max(lobeRGB.g, lobeRGB.b)), 0.0)) * sharp;
+        e = (lobe * (b + d + fr + h) + e) / (4.0 * lobe + 1.0);
     }
-    outTex[id.xy] = float4(clamp(c, lo, hi), 1.0);
+    outTex[id.xy] = float4(saturate(e), 1.0);
 }
 "#;
 
@@ -164,14 +191,15 @@ fn framegen_ms() -> u64 {
     })
 }
 
-/// How much the scaled frame is sharpened, 0 to 1 (`VICTORY_SHARPEN`, percent).
+/// How much the scaled frame is sharpened, 0 to 1 (`VICTORY_SHARPEN`,
+/// percent; 80 by default since 5.8, RCAS's own default strength).
 fn sharpen() -> f32 {
     static SHARP: OnceLock<f32> = OnceLock::new();
     *SHARP.get_or_init(|| {
         std::env::var("VICTORY_SHARPEN")
             .ok()
             .and_then(|v| v.trim().parse::<u32>().ok())
-            .map_or(35, |p| p.min(100)) as f32
+            .map_or(80, |p| p.min(100)) as f32
             / 100.0
     })
 }

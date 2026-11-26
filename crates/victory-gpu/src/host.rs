@@ -7447,6 +7447,14 @@ impl Meter {
                     crate::console::current().name()
                 );
             }
+            {
+                tracing::info!(
+                    "sharper image (5.8): texture levels left out now {}, textures made sharp again {}, slots given a placeholder instead of black {}",
+                    crate::tiles::top_dropped(),
+                    crate::descriptor::host::sharpen(0),
+                    crate::descriptor::host::PLACEHOLDERS_SHOWN.load(Ordering::Relaxed)
+                );
+            }
             #[cfg(feature = "diagnostics")]
             crate::copystat::log(std::mem::take(&mut self.copy_stats_frames) as f64);
             // (every build since 4.8: which programs the dropped draws were)

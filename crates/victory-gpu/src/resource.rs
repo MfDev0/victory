@@ -1334,7 +1334,7 @@ fn hosted(this: This, make: bool) -> Option<Made> {
             && r.desc.sample_count <= 1;
         // (Texture objects too, on a card where texture quality drops the
         // largest levels: `crate::tiles::top_dropped`.)
-        if shape_fits && (r.host.placed.load(Relaxed) || crate::tiles::top_dropped() > 0) && crate::tiles::wanted() {
+        if shape_fits && (r.host.placed.load(Relaxed) || crate::tiles::by_quality()) && crate::tiles::wanted() {
             let bytes = footprint(&r.desc).map_or(0, |f| f.size);
             let start = r.data() as u64;
             // What the upload can read: a console layout, no XOR mode
@@ -1347,7 +1347,7 @@ fn hosted(this: This, make: bool) -> Option<Made> {
             let partly = readable
                 && (SQUEEZING.get()
                     || bytes >= crate::tiles::floor()
-                        && (crate::tiles::top_dropped() > 0
+                        && (crate::tiles::by_quality()
                             || !crate::texture::committed(r.data().cast_const(), bytes as usize)
                             || crate::descriptor::host::next_start(start, start.saturating_add(bytes)).is_some()
                             || crate::descriptor::host::first_viewed(start).is_some_and(|first| first > 0)));
@@ -2285,6 +2285,9 @@ impl OnDemand {
         };
         if changed {
             crate::descriptor::host::levels_changed(memory);
+        }
+        if tiled.blurred() {
+            crate::descriptor::host::blurred(memory);
         }
         if waiting {
             crate::tiles::STATS[9].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
