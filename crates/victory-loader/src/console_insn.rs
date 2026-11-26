@@ -10,7 +10,7 @@ mod decode;
 
 use decode::ConsoleOnly;
 use std::cell::Cell;
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU64, Ordering, Ordering::Relaxed};
 use windows_sys::Win32::System::Diagnostics::Debug::CONTEXT;
 
 const CONTINUE_EXECUTION: i32 = -1;
@@ -226,6 +226,75 @@ fn writable_to(va: usize, end: usize) -> Option<usize> {
     Some(to.min(end))
 }
 
+/// Whether `monitorx` and `mwaitx` are patched where the title has them, so that they take no
+/// exception again: `monitorx` becomes NOPs, `mwaitx` a `pause` (and NOPs). The title waits for
+/// a fence with them, reading the fence's value again after each `mwaitx` (which may end at any
+/// time on the console too), so the wait is the same spin without a trip into Windows and back
+/// at every turn: about 125,000 exceptions a second in the 6.7 report (67 million in nine
+/// minutes, most of them these two). The waits are no longer measured then.
+/// `VICTORY_MWAIT_PATCH=0`: emulated at every turn, as before.
+fn patches_waits() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_MWAIT_PATCH").is_none_or(|v| v != "0"))
+}
+
+/// Instructions patched in place ([`patch`]), and the ones that could not be.
+static PATCHED: AtomicU64 = AtomicU64::new(0);
+static UNPATCHED: AtomicU64 = AtomicU64::new(0);
+
+/// Writes `with` over the `with.len()` bytes of code at `at` in one store that no other thread
+/// can see half done (a compare-and-swap of the aligned eight bytes holding them), so that a
+/// thread running the same code meanwhile meets the old instruction or the new one, never a
+/// mix. If they lie across an eight-byte boundary, the first two bytes become a short jump over
+/// the rest (`jmp $+len`), when those two lie in one such word. Returns whether the code was
+/// patched; it is left as it was otherwise (and emulated again next time).
+///
+/// # Safety
+/// `at` is the start of an instruction of `with.len()` bytes in loaded code.
+unsafe fn patch(at: usize, with: &[u8]) -> bool {
+    use windows_sys::Win32::System::Diagnostics::Debug::FlushInstructionCache;
+    use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let len = with.len();
+    if len == 0 || len > 8 {
+        return false;
+    }
+    let jump = [0xEB, (len as u8).wrapping_sub(2)];
+    let (from, bytes): (usize, &[u8]) = if at / 8 == (at + len - 1) / 8 {
+        (at, with)
+    } else if len >= 2 && at / 8 == (at + 1) / 8 {
+        (at, &jump)
+    } else {
+        UNPATCHED.fetch_add(1, Relaxed);
+        return false;
+    };
+    let word = from & !7;
+    let mut old = 0u32;
+    // SAFETY: the eight bytes around the instruction, in its own page or the next (both
+    // mapped: the instruction's bytes were read, and code pages are whole); made writable
+    // for the patch and given their protection back.
+    unsafe {
+        if VirtualProtect(word as *const _, 8, PAGE_EXECUTE_READWRITE, &mut old) == 0 {
+            UNPATCHED.fetch_add(1, Relaxed);
+            return false;
+        }
+        let w = AtomicU64::from_ptr(word as *mut u64);
+        let before = w.load(Relaxed);
+        let mut after = before.to_le_bytes();
+        let off = from - word;
+        after[off..off + bytes.len()].copy_from_slice(bytes);
+        let done = w.compare_exchange(before, u64::from_le_bytes(after), Ordering::SeqCst, Relaxed).is_ok();
+        VirtualProtect(word as *const _, 8, old, &mut old);
+        FlushInstructionCache(GetCurrentProcess(), word as *const _, 8);
+        if done {
+            PATCHED.fetch_add(1, Relaxed);
+        } else {
+            UNPATCHED.fetch_add(1, Relaxed);
+        }
+        done
+    }
+}
+
 /// The register `r` of `ctx` (CONTEXT order: rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi, r8..r15).
 fn register(ctx: &mut CONTEXT, r: u8) -> &mut u64 {
     match r & 15 {
@@ -368,11 +437,21 @@ pub(crate) unsafe fn emulate(ctx: &mut CONTEXT) -> i32 {
         ConsoleOnly::Monitorx => {
             KINDS[K_MONITORX].fetch_add(1, Relaxed);
             MONITOR.with(|m| m.set((ctx.Rax as usize, ctx.Rsi)));
+            if patches_waits() && len <= 8 {
+                // SAFETY: the faulting instruction, `len` bytes, in the title's code.
+                unsafe { patch(rip, &[0x90; 8][..len]) };
+            }
         }
         ConsoleOnly::Mwaitx => {
             KINDS[K_MWAITX].fetch_add(1, Relaxed);
             wait_step();
-            std::hint::spin_loop()
+            std::hint::spin_loop();
+            if patches_waits() && (2..=8).contains(&len) {
+                let mut with = [0x90u8; 8];
+                with[0] = 0xF3; // pause
+                // SAFETY: as above.
+                unsafe { patch(rip, &with[..len]) };
+            }
         }
         ConsoleOnly::Clzero | ConsoleOnly::ClzeroStep { .. } => {
             // The loop `mov rax, ptr; add ptr, 0x40; clzero; cmp ptr, end; jb` (the title's
@@ -490,7 +569,9 @@ pub(crate) unsafe fn emulate(ctx: &mut CONTEXT) -> i32 {
             emulated,
             asked = ASKED.load(Relaxed),
             zeroed_mb = ZEROED.load(Relaxed) >> 20,
-            "console CPU instructions emulated so far, the times Windows was asked about memory for them, and what clzero loops zeroed"
+            patched = PATCHED.load(Relaxed),
+            unpatched = UNPATCHED.load(Relaxed),
+            "console CPU instructions emulated so far, the times Windows was asked about memory for them, what clzero loops zeroed, and the monitorx / mwaitx patched in place (VICTORY_MWAIT_PATCH=0: none)"
         );
     }
     CONTINUE_EXECUTION
@@ -592,5 +673,30 @@ mod tests {
         let at = base - block.as_ptr() as usize;
         assert!(block[at..at + 64].iter().all(|&b| b == 0));
         assert!(block[at + 64..].iter().all(|&b| b == 0xAA), "one line only");
+    }
+
+    #[test]
+    fn waits_are_patched_in_one_store_or_jumped_over() {
+        #[repr(align(64))]
+        struct Code([u8; 64]);
+        // monitorx inside one aligned word: NOPs
+        let mut code = Code([0xCC; 64]);
+        code.0[9..12].copy_from_slice(&[0x0F, 0x01, 0xFA]);
+        let at = code.0.as_mut_ptr() as usize + 9;
+        // SAFETY: the three bytes stand for an instruction in this writable buffer.
+        assert!(unsafe { patch(at, &[0x90; 3]) });
+        assert_eq!(code.0[8..13], [0xCC, 0x90, 0x90, 0x90, 0xCC]);
+        // mwaitx across a word boundary: a jump over its third byte
+        code.0[22..25].copy_from_slice(&[0x0F, 0x01, 0xFB]);
+        let at = code.0.as_mut_ptr() as usize + 22;
+        // SAFETY: as above.
+        assert!(unsafe { patch(at, &[0xF3, 0x90, 0x90]) });
+        assert_eq!(code.0[21..26], [0xCC, 0xEB, 0x01, 0xFB, 0xCC]);
+        // its first two bytes across one too: left alone
+        code.0[31..34].copy_from_slice(&[0x0F, 0x01, 0xFB]);
+        let at = code.0.as_mut_ptr() as usize + 31;
+        // SAFETY: as above.
+        assert!(!unsafe { patch(at, &[0xF3, 0x90, 0x90]) });
+        assert_eq!(code.0[31..34], [0x0F, 0x01, 0xFB]);
     }
 }

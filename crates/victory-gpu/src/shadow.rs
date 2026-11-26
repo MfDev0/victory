@@ -1684,11 +1684,13 @@ fn workers() -> &'static Workers {
 
 /// How many kept threads [`wide`] work runs on (`VICTORY_WIDE_THREADS`,
 /// 1 to 32). Try 6.0: by default all of the CPU's threads but two (the
-/// submitting thread and the title's), at least 2 and at most 16. It was a
+/// submitting thread and the title's), at least 2 and at most 16 (8 since 6.8). It was a
 /// quarter of them, at most 6: on a 16-thread CPU the copy-back, the
 /// refreshes and the snapshots of a world frame (100-150 MB of compares,
 /// 280 ms of landing in the 2026-11-26 report) ran on 4 threads while
-/// 10 stood idle.
+/// 10 stood idle. Try 6.8: at most 8, as the heap worker, the texture
+/// pass and the parallel refreshes have threads of their own now (and a
+/// 12-thread laptop with an RTX 3050 copied back faster on 8 than on 10).
 pub(crate) fn wide_threads() -> usize {
     static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *N.get_or_init(|| {
@@ -1700,7 +1702,7 @@ pub(crate) fn wide_threads() -> usize {
 fn wide_threads_for(setting: Option<&str>, cores: usize) -> usize {
     match setting.and_then(|v| v.trim().parse::<usize>().ok()) {
         Some(n) => n.clamp(1, 32),
-        None => cores.saturating_sub(2).clamp(2, 16),
+        None => cores.saturating_sub(2).clamp(2, 8),
     }
 }
 
@@ -1729,8 +1731,9 @@ mod wide_thread_tests {
     #[test]
     fn wide_threads_scale_with_the_cpu() {
         assert_eq!(wide_threads_for(None, 4), 2);
-        assert_eq!(wide_threads_for(None, 12), 10);
-        assert_eq!(wide_threads_for(None, 32), 16);
+        assert_eq!(wide_threads_for(None, 12), 8);
+        assert_eq!(wide_threads_for(None, 8), 6);
+        assert_eq!(wide_threads_for(None, 32), 8);
         assert_eq!(wide_threads_for(Some("3"), 32), 3);
         assert_eq!(wide_threads_for(Some("0"), 8), 1);
         assert_eq!(wide_threads_for(Some("x"), 8), 6);
@@ -2175,6 +2178,8 @@ pub(crate) fn merge_unwatched_bytes() -> usize {
             .unwrap_or(64)
             << 20
     })
+}
+
 /// `runs` (in order) with those a gap of `gap` bytes or fewer apart made
 /// one run, the gap's bytes included.
 fn joined_over(runs: Vec<(usize, usize)>, gap: usize) -> Vec<(usize, usize)> {
