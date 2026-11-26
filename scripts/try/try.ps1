@@ -15,17 +15,25 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '5.8'
+$TryVersion = '5.9'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
 # when the fork itself cannot be reached.
 $MirrorUrls = @('https://github.com/MfDev0/CAtez.git', 'https://github.com/MfDev0/CAtez-backup.git')
 $UpstreamUrl = 'https://github.com/Marvisak/VIctory.git'
+# 5.9: the 8 GB NVIDIA engine, soldsawn's build of fxceless/victory-fork (the
+# community's main line): measured on an RTX 4060 Laptop 8 GB at 8-10 fps
+# with clean textures (its README). Its own source and build folders; this
+# fork's source folder stays, so VIctory Try still updates itself from it.
+$Engine8Url = 'https://github.com/soldsawn/victory-nvidia-8gb.git'
+$Engine8Branch = 'main'
 $MinGitUrl = 'https://github.com/git-for-windows/git/releases/download/v2.56.1.windows.1/MinGit-2.56.1-64-bit.zip'
 $TryHome = Join-Path $env:LOCALAPPDATA 'VIctoryTry'
 $Src = Join-Path $TryHome 'victory'
 $Target = Join-Path $TryHome 'target'
+$Src8 = Join-Path $TryHome 'victory-8gb'
+$Target8 = Join-Path $TryHome 'target-8gb'
 $ConfigPath = Join-Path $TryHome 'config.json'
 $LogDir = Join-Path $TryHome 'logs'
 $BackupDir = Join-Path $TryHome 'backup'
@@ -40,11 +48,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -325,7 +333,7 @@ function Update-Source {
     if (-not $fork) { Bad "the source download is broken: delete the victory folder in $TryHome and start again"; return $null }
     $up = (G rev-parse -q --verify refs/remotes/upstream/main) | Select-Object -First 1
     $key = "fork:$fork+$up"
-    if (($key -eq $script:Config.built_key) -and (Test-Path (Victory-Exe))) {
+    if (($key -eq $script:Config.built_key) -and (Test-Path (Ours-Exe))) {
         Say 'no changes since last time'
         return $false
     }
@@ -399,7 +407,12 @@ function Prepare-Source([bool]$withUpstream) {
     $script:Added = $added; return
 }
 
-function Victory-Exe { return Join-Path $Target 'release\victory.exe' }
+# This fork's build; Victory-Exe: the build that runs, of the chosen engine.
+function Ours-Exe { return Join-Path $Target 'release\victory.exe' }
+function Engine8-Exe { return Join-Path $Target8 'release\victory.exe' }
+# 5.9: the 8 GB engine unless N picked this fork's ('ours').
+function Engine8 { return $script:Config.engine -ne 'ours' }
+function Victory-Exe { if (Engine8) { return Engine8-Exe } else { return Ours-Exe } }
 
 function Build {
     Step 'Building VIctory (the first build takes a while; later ones are quicker)'
@@ -423,7 +436,7 @@ function Build {
         & cargo build --release -p victory 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
         $code = $LASTEXITCODE
     } finally { Pop-Location }
-    if ($code -ne 0 -or -not (Test-Path (Victory-Exe))) {
+    if ($code -ne 0 -or -not (Test-Path (Ours-Exe))) {
         Bad "the build failed (code $code). The full output is in $log"
         $lines = @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue)
         $first = -1
@@ -462,6 +475,124 @@ function Build-All {
         if ($added.Count -gt 0) { Say "this build includes $($added.Count) new upstream fix(es)" }
     }
     return $ok
+}
+
+# ------------------------------------------------------------- 8 GB engine
+
+function G8 {
+    $out = @(& $script:Git -C $Src8 -c core.autocrlf=false -c advice.detachedHead=false @args 2>&1 | ForEach-Object { "$_" })
+    $script:GCode = $LASTEXITCODE
+    return $out
+}
+
+# Downloads the 8 GB engine (or its news). $true: new, to be built; $false:
+# built already; $null: nothing to build.
+function Update-Engine8 {
+    Step 'Getting the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb: renders on an RTX 4060 8 GB)'
+    if ((Test-Path $Src8) -and -not (Test-Path (Join-Path $Src8 '.git'))) { Remove-Item -Recurse -Force $Src8 }
+    if (-not (Test-Path $Src8)) {
+        & $script:Git -c core.autocrlf=false clone -q --single-branch --branch $Engine8Branch $Engine8Url $Src8
+        if ($LASTEXITCODE -ne 0) { Bad 'could not download the 8 GB engine: check the internet connection'; return $null }
+    }
+    $null = G8 fetch -q origin "+refs/heads/${Engine8Branch}:refs/remotes/origin/engine"
+    if ($script:GCode -ne 0) { Say 'could not reach the 8 GB engine: using what was downloaded before' }
+    $head = (G8 rev-parse -q --verify refs/remotes/origin/engine) | Select-Object -First 1
+    if (-not $head) { Bad "the 8 GB engine download is broken: delete $Src8 and press U"; return $null }
+    $script:Key8 = "engine8:$head"
+    if (($script:Key8 -eq $script:Config.built8) -and (Test-Path (Engine8-Exe))) { Say 'no changes since last time'; return $false }
+    return $true
+}
+
+function Build-Engine8 {
+    $null = G8 checkout -q -f -B try refs/remotes/origin/engine
+    $null = G8 clean -fdq
+    $line = (G8 log -1 --format='%h %ad %s' --date=short HEAD) | Select-Object -First 1
+    Step 'Building the 8 GB NVIDIA engine (the first build takes a while; later ones are quicker)'
+    Say "engine: $line"
+    $tc = Join-Path $Src8 'rust-toolchain.toml'
+    if (Test-Path $tc) {
+        $m = Select-String -LiteralPath $tc -Pattern '^\s*channel\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if ($m) {
+            $channel = $m.Matches[0].Groups[1].Value
+            Say "Rust $channel"
+            & rustup toolchain install $channel --profile minimal --target x86_64-pc-windows-msvc 2>&1 | ForEach-Object { "$_" } | Out-Host
+        }
+    }
+    $env:CARGO_TARGET_DIR = $Target8
+    $log = Join-Path $LogDir 'build.log'
+    Push-Location $Src8
+    try {
+        & cargo build --release -p victory 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
+        $code = $LASTEXITCODE
+    } finally { Pop-Location; $env:CARGO_TARGET_DIR = $Target }
+    if ($code -ne 0 -or -not (Test-Path (Engine8-Exe))) {
+        Bad "the 8 GB engine did not build (code $code). The full output is in $log"
+        $lines = @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue)
+        $first = -1
+        for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^error') { $first = $i; break } }
+        if ($first -lt 0) { $first = [Math]::Max(0, $lines.Count - 25) }
+        $lines[$first..([Math]::Min($lines.Count - 1, $first + 24))] | ForEach-Object { Write-Host ('    ' + $_) }
+        return $false
+    }
+    $script:Config.built8 = $script:Key8
+    Save-Config
+    Say 'build finished'
+    return $true
+}
+
+# Gets and builds the chosen engine. With the 8 GB engine: if it cannot be
+# had (no download, no build, none built before), this fork's engine runs.
+function Ensure-Engine([bool]$update) {
+    if (-not (Engine8)) {
+        if ($update -or -not (Test-Path (Ours-Exe))) { return (Build-All) }
+        return $true
+    }
+    $new = $true
+    if ($update -or -not (Test-Path (Engine8-Exe))) { $new = Update-Engine8 } else { $new = $false }
+    if ($new) { $null = Build-Engine8 }
+    if (Test-Path (Engine8-Exe)) { return $true }
+    Bad 'no 8 GB engine to run: running this fork''s engine instead (N switches engines)'
+    $script:Config.engine = 'ours'
+    Save-Config
+    if (-not (Test-Path (Ours-Exe))) { return (Build-All) }
+    return $true
+}
+
+# The 8 GB engine's settings: its launcher's (scripts/play-nvidia-8gb.ps1),
+# none of this fork's (their names mean other things there, or nothing),
+# Series S and smaller card budgets on cards under 7 GB. What the user set
+# before VIctory Try started stays.
+function Set-Engine8Env {
+    $c = $script:Config
+    Get-ChildItem Env: | Where-Object { $_.Name -like 'VICTORY_*' } | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" -ErrorAction SilentlyContinue }
+    foreach ($k in $script:UserAll.Keys) { [Environment]::SetEnvironmentVariable($k, $script:UserAll[$k], 'Process') }
+    $card = Card-Vram
+    $small = ($card -gt 0 -and $card -lt 7000) -or ($c.vram -and [int]$c.vram -lt 6000)
+    $set = [ordered]@{
+        VICTORY_GAME_DIR = $c.game_dir
+        VICTORY_CACHE_DIR = (Join-Path $TryHome 'cache-8gb')
+        VICTORY_DUMP_FAILED = (Join-Path $TryHome 'failed-shaders')
+        VICTORY_RESOLUTION = $(if ($c.res -eq '4k') { '3840x2160' } else { '1920x1080' })
+        VICTORY_TEXTURE_DROP_MIPS = '2'
+        VICTORY_COPY_PLAIN = '1'
+        VICTORY_INDIRECT_GATHER = '1'
+        VICTORY_HEAP_WORKER = '1'
+        VICTORY_ALIAS_ONCE = '1'
+        VICTORY_JOIN_PARTS = '1'
+        VICTORY_BACK_OWN_VIEW = '1'
+        VICTORY_INDIRECT_WINDOW_DRAWS = '1'
+        VICTORY_GUARD_HOLES_FRAME = '1'
+        VICTORY_COPY_CHANGED = '1'
+        VICTORY_CARD_WINDOWS_MB = $(if ($small) { '1024' } else { '2048' })
+        VICTORY_CARD_BUFFERS_MB = $(if ($small) { '768' } else { '1024' })
+        VICTORY_CLAMP_WAITS = '0'
+        VICTORY_WIDE_MERGE = '1'
+        VICTORY_RELAY_OWN_QUEUE = '1'
+    }
+    foreach ($k in $set.Keys) { if ($null -eq $script:UserAll[$k]) { [Environment]::SetEnvironmentVariable($k, [string]$set[$k], 'Process') } }
+    Say "engine: 8 GB NVIDIA (soldsawn/victory-nvidia-8gb)   (N switches to this fork's engine)"
+    Say "its settings: textures 2 sizes smaller (VICTORY_TEXTURE_DROP_MIPS=$($env:VICTORY_TEXTURE_DROP_MIPS)), screen $($env:VICTORY_RESOLUTION), texture upload thread, card budgets $($env:VICTORY_CARD_WINDOWS_MB)+$($env:VICTORY_CARD_BUFFERS_MB) MB"
+    Say 'F10 in the game shows its performance overlay.'
 }
 
 # ------------------------------------------------------------- run
@@ -610,7 +741,7 @@ function Set-RunEnv {
     Say "picture: ambient light $(if ($env:VICTORY_AMBIENT -ne 'off') { 'ON' } else { 'off' })   (A switches)   textures level by level $(if ($env:VICTORY_LEVELS_ON_DEMAND -eq '1') { 'ON' } else { 'off' })   (L switches)"
     Say "fps boost: $(if ($c.boost -ne 'off') { 'ON (75% render scale + sharpen, no ray tracing)' } else { 'off' })   frames in between: $(if ($c.between -eq '1') { 'ON' } else { 'off' })   shared small buffers: $(if ($c.hybrid -eq '1') { 'ON' } else { 'off' })"
     # Its own cache: the old base's pipeline library and shaders do not mix.
-    if (-not $env:VICTORY_CACHE_DIR) { $env:VICTORY_CACHE_DIR = Join-Path $TryHome 'cache-gta6' }
+    if (-not $env:VICTORY_CACHE_DIR -or $env:VICTORY_CACHE_DIR -eq (Join-Path $TryHome 'cache-8gb')) { $env:VICTORY_CACHE_DIR = Join-Path $TryHome 'cache-gta6' }
     # Shaders that do not translate are saved here (zip and send this folder).
     if (-not $env:VICTORY_DUMP_FAILED) { $env:VICTORY_DUMP_FAILED = Join-Path $TryHome 'failed-shaders' }
 }
@@ -638,7 +769,7 @@ function Prepare-Shaders([string]$why) {
     $log = Join-Path $LogDir 'prepare.log'
     Push-Location $TryHome
     try {
-        & (Victory-Exe) prepare 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Where-Object { $_ -match '^(prepar|translated)' }
+        & (Ours-Exe) prepare 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Where-Object { $_ -match '^(prepar|translated)' }
         $code = $LASTEXITCODE
     } finally { Pop-Location }
     if ($code -eq 0) { Say 'pipelines prepared' }
@@ -659,6 +790,13 @@ function Run-Game {
     $built = ''
     if ("$($c.built_key)" -match '^fork:([0-9a-f]{7,40})') { $built = $Matches[1] }
     $fetched = (G rev-parse -q --verify refs/remotes/origin/fork) | Select-Object -First 1
+    if (Engine8) {
+        $built = ''
+        if ("$($c.built8)" -match '^engine8:([0-9a-f]{7,40})') {
+            $line = (G8 log -1 --format='%h %ad %s' --date=short $Matches[1]) | Select-Object -First 1
+            Say "VIctory: the 8 GB NVIDIA engine, built from $line"
+        }
+    }
     if ($built) {
         $line = (G log -1 --format='%h %s' $built) | Select-Object -First 1
         Say "VIctory: built from $line"
@@ -678,7 +816,8 @@ function Run-Game {
     Say "command: victory.exe run `"$($c.game_exe)`" --execute --console $($c.console)   (VICTORY_GAME_DIR=$($c.game_dir))"
     Say 'To stop: close the game window.'
     Set-RunEnv
-    if ("$($c.prepared)" -ne "$($c.built_key)") { Prepare-Shaders 'new build' }
+    if (Engine8) { Set-Engine8Env }
+    elseif ("$($c.prepared)" -ne "$($c.built_key)") { Prepare-Shaders 'new build' }
     elseif ("$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from the last run' }
     # The shared pipeline list (keys of pipelines other players met, no
     # game files): the game starts making them while it loads.
@@ -719,7 +858,7 @@ function Run-Game {
     try { Check-Run $log $stamp $crashes } catch { Bad "could not summarize the run: $_" }
     # Everything this run asked for and did not get, compiled now while the
     # game is closed: the next launch shows it from the start.
-    if ("$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from this run' }
+    if (-not (Engine8) -and "$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from this run' }
 }
 
 # The game in a window of its own ('VIctory - game output'), with its output
@@ -995,13 +1134,22 @@ $script:UserLoop = $env:VICTORY_SHADER_LOOP_LIMIT
 $script:UserWaveWide = $env:VICTORY_WAVE_WIDE
 $script:UserDisplay = $env:VICTORY_DISPLAY_MODE
 $script:UserFx = @{}
+# 5.9: every VICTORY_ setting the user made before VIctory Try started (the
+# 8 GB engine starts from these alone).
+$script:UserAll = @{}
+Get-ChildItem Env: | Where-Object { $_.Name -like 'VICTORY_*' -and $_.Name -ne 'VICTORY_TRY_HANDOFF' } | ForEach-Object { $script:UserAll[$_.Name] = $_.Value }
 foreach ($name in @('VICTORY_RENDER_SCALE', 'VICTORY_SKIP_RT', 'VICTORY_FRAMEGEN', 'VICTORY_INPLACE', 'VICTORY_AMBIENT', 'VICTORY_LEVELS_ON_DEMAND', 'VICTORY_POOL_NO_ASSERT', 'VICTORY_SHADER_OPT', 'VICTORY_WAVE_DEEP_SKIPS_NOT', 'VICTORY_GPU_COPIES', 'VICTORY_CARD_REHASH_RUNS', 'VICTORY_INDIRECT_WINDOW', 'VICTORY_JOIN_COPIES', 'VICTORY_CARD_AWAKE')) { $script:UserFx[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 while (-not (Ask-Game $false)) {}
 if (-not (Ensure-Tools)) { exit 1 }
 $changed = Update-Source
 if ($null -eq $changed) { Bad 'no source to build: check the internet connection'; exit 1 }
 Run-Newer
-if ($changed -or -not (Test-Path (Victory-Exe))) { if (-not (Build-All)) { exit 1 } }
+if (-not (Engine8)) {
+    if ($changed -or -not (Test-Path (Ours-Exe))) { if (-not (Build-All)) { exit 1 } }
+} elseif (-not (Ensure-Engine $true)) { exit 1 }
+if (Engine8) {
+    Say '5.9: VIctory Try now runs the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb), the build that renders on RTX 4060 8 GB cards. N goes back to this fork''s engine.'
+}
 
 # Every command of the menu: its key, what it is, whether it is on now, and
 # what it does (4.6).
@@ -1011,6 +1159,7 @@ function Show-Commands {
     $rows = @(
         @('Enter', 'Run again', '', 'start the game again with the settings below'),
         @('U', 'Update', '', 'download the newest VIctory, build it, then run the game'),
+        @('N', 'Engine', $(if (Engine8) { '8GB' } else { 'own' }), '8GB: soldsawn''s 8 GB NVIDIA engine (renders on RTX 4060); own: this fork''s (the other switches are for it)'),
         @('V', 'Version', '', 'show which Try and VIctory version you have'),
         @('G', 'Game paths', '', 'ask again where the game folder and game_scarlett_master.exe are'),
         @('C', 'Console', $(if ($c.console -eq 'series-s') { 'S  ' } else { 'X  ' }), 'Xbox Series S (renders 1280x720 and scales up: faster) or Series X (full size)'),
@@ -1038,7 +1187,7 @@ function Show-Commands {
         Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3])
     }
     Write-Host '  ====================================================================================' -ForegroundColor Cyan
-    Write-Host '  Switches (C, R, F, B, M, H, A, L, O, W, K, Z, D) flip at once and are saved; Enter then runs the game with them.'
+    Write-Host '  Switches (N, C, R, F, B, M, H, A, L, O, W, K, Z, D) flip at once and are saved; Enter then runs the game with them.'
 }
 
 function Show-Version {
@@ -1086,6 +1235,7 @@ while ($true) {
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
             'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.6'; $c.console_user = '1' }
             'D' { Reset-Recommended; $c = $script:Config }
+            'N' { $c.engine = $(if ($c.engine -eq 'ours') { '' } else { 'ours' }); $null = Ensure-Engine $false }
             default { $switched = $false }
         }
         if ($switched) {
@@ -1106,6 +1256,7 @@ while ($true) {
         # 5.7: a newer VIctory Try takes over at once (its own fixes, not
         # only the game's, without closing this window first).
         Save-Config; Run-Newer -FromMenu
-        if ($changed -or -not (Test-Path (Victory-Exe))) { if (-not (Build-All)) { Bad 'the new build FAILED: the game runs on the last working build (older fixes). Send the error above.' } }
+        if (Engine8) { $null = Ensure-Engine $true }
+        elseif ($changed -or -not (Test-Path (Ours-Exe))) { if (-not (Build-All)) { Bad 'the new build FAILED: the game runs on the last working build (older fixes). Send the error above.' } }
     }
 }

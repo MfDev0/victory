@@ -389,6 +389,25 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      they load (`VICTORY_PLACEHOLDERS=0`: off);
    - a log line counts levels left out, textures made sharp again and
      placeholders shown.
+   5.9 (the 2026-11-26 13:36 report: Series S at last, the card under its
+   budget at 3.7-4.1 of 5.2 GB, yet 14,000 textures still waiting: this
+   engine prepares them on the CPU at about 11 MB/s, 4.3 s a frame, with the
+   card 10-21 % busy):
+   - **N: the engine.** By default VIctory Try now builds and runs
+     **soldsawn/victory-nvidia-8gb** (soldsawn's build of
+     fxceless/victory-fork, the community's main line), measured on an
+     RTX 4060 Laptop 8 GB at 8-10 fps with clean textures. It is kept in its
+     own folders (`victory-8gb`, `target-8gb`, `cache-8gb`), so this fork's
+     build stays and N switches back at once; this fork's source is still
+     fetched, so VIctory Try keeps updating itself;
+   - it runs with that build's own launcher settings
+     (`VICTORY_TEXTURE_DROP_MIPS=2`, `VICTORY_RESOLUTION=1920x1080`, the
+     texture upload thread `VICTORY_HEAP_WORKER=1` and the rest), none of
+     this fork's, plus Series S and halved card budgets on cards under 7 GB.
+     Settings made before VIctory Try started are kept;
+   - if it cannot be downloaded or built, this fork's engine runs instead;
+   - the `8 GB engine builds` workflow checks every 6 hours that its newest
+     main still compiles on Windows.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,

@@ -1,0 +1,37 @@
+name: 8 GB engine builds
+
+# VIctory Try 5.9 builds soldsawn/victory-nvidia-8gb on the user's PC (N in
+# its menu). That repository has no CI of its own: this checks that its
+# newest main compiles on Windows before players press U.
+on:
+  push:
+    paths:
+      - 'scripts/try/**'
+      - '.github/workflows/engine8.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: soldsawn/victory-nvidia-8gb
+          ref: main
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check -p victory (release)
+        shell: pwsh
+        run: |
+          git log -1 --format='engine %h %ad %s' --date=short
+          cargo check --release -p victory --message-format=short 2>&1 | Tee-Object -FilePath check.txt
+          $code = $LASTEXITCODE
+          $hits = @(Select-String -CaseSensitive -Path check.txt -Pattern '^error|: error' | Select-Object -First 40 | ForEach-Object { $_.Line.Trim() })
+          if ($code -ne 0 -and $hits.Count -gt 0) { Write-Output ("::error::" + ($hits -join ' %0A ')) }
+          exit $code
