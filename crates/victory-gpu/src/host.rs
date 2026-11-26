@@ -2451,6 +2451,27 @@ fn late_most() -> usize {
     })
 }
 
+/// Set when a table found no free dynamic descriptor slots: lists in the
+/// air hold theirs, so from then on no more than 256 fly (Try 6.7 asks for
+/// 384 to keep the submitting thread off the card's back; the slots are
+/// what bounds it).
+static SLOTS_RAN_OUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A table found no free dynamic descriptor slots ([`late_limit`]).
+pub(crate) fn slots_ran_out() {
+    if !SLOTS_RAN_OUT.swap(true, Ordering::Relaxed) && late_most() > 256 {
+        tracing::warn!(
+            most = late_most(),
+            "dynamic descriptor slots ran out: no more than 256 lists fly from now on (VICTORY_LATE_WAIT_LISTS)"
+        );
+    }
+}
+
+/// [`late_most`], or at most 256 once the slots ran out.
+fn late_limit() -> usize {
+    if SLOTS_RAN_OUT.load(Ordering::Relaxed) { late_most().min(256) } else { late_most() }
+}
+
 /// Whether a submission with bottom-of-pipe writes may fly
 /// (`VICTORY_LATE_WAIT_WRITES=0`: it is settled as soon as it is sent, so
 /// the title is told at once, as before; for telling a title that polls
@@ -5054,7 +5075,7 @@ impl Host {
                 sends,
             }));
             items.extend(sent.writes.into_iter().map(|(at, what, bytes)| Late::Write(at, what, bytes)));
-            *flying >= late_most()
+            *flying >= late_limit()
         };
         LATE_STATS[0].fetch_add(1, Ordering::Relaxed);
         RELAY_MOVED.notify_one();
@@ -5062,7 +5083,7 @@ impl Host {
             self.settle(&mut submitted, WHY_WRITES);
         } else if most && relay_exact() {
             // Until there are fewer, not until there are none.
-            relay_wait(WHY_MOST, |line| line.lists < late_most());
+            relay_wait(WHY_MOST, |line| line.lists < late_limit());
         } else if most {
             self.settle(&mut submitted, WHY_MOST);
         } else {

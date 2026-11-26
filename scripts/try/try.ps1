@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.6'
+$TryVersion = '6.7'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -48,11 +48,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -663,7 +663,9 @@ function Set-RunEnv {
         # 4 MB and more (16 MB and more on 6-12 GB cards before): in the
         # 2026-11-26 report the CPU compared 100-150 MB a frame, 70-99 MB of
         # it in buffers of 1 MB or more, while the card stood 40-74% idle.
-        if ($null -eq $script:UserFx['VICTORY_CARD_BUFFERS_MIN_MB']) { $env:VICTORY_CARD_BUFFERS_MIN_MB = '4' }
+        # 6.7: 2 MB (4 before): the 6.6 report still compared 87.7 MB a
+        # frame on the CPU, 77.6 MB of it in copies of 1 MB or more.
+        if ($null -eq $script:UserFx['VICTORY_CARD_BUFFERS_MIN_MB']) { $env:VICTORY_CARD_BUFFERS_MIN_MB = '2' }
     }
     # 3.6: compute shaders that need 64-lane waves (refused by 32-lane
     # NVIDIA cards) are translated a slower way that works. Off again by
@@ -692,9 +694,32 @@ function Set-RunEnv {
     # inside the same flight, not with a list of its own queued behind newer
     # flights (the 6.5 report: 124-156 ms a frame of that thread waiting for
     # such fetches). Off with the other new additions after a lost card.
+    # 6.7: on a switch of its own. 6.6 tied it to the 3.8 additions, which a
+    # lost card long ago had turned off on some PCs: the 6.6 report shows it
+    # never ran there (no "inside their flights" line). Off again by itself
+    # if a run with it loses the card (see Check-Run).
+    $script:InflightFromTry = ($null -eq $script:UserAll['VICTORY_CARD_FETCH_INFLIGHT']) -and $c.inflight -ne 'off' -and $c.fast -ne '1'
     if ($null -eq $script:UserAll['VICTORY_CARD_FETCH_INFLIGHT']) {
-        [Environment]::SetEnvironmentVariable('VICTORY_CARD_FETCH_INFLIGHT', $(if ($script:NewFromTry -and $c.fast -ne '1') { '1' } else { $null }), 'Process')
+        [Environment]::SetEnvironmentVariable('VICTORY_CARD_FETCH_INFLIGHT', $(if ($script:InflightFromTry) { '1' } else { $null }), 'Process')
     }
+    # 6.7: more lists fly before the submitting thread waits for the card
+    # (384, VICTORY's own 256): in the 6.6 report that wait was 75-100 ms a
+    # frame ("lists in the air") while the card stood idle 65.9 ms a frame
+    # behind that thread. VICTORY goes back to 256 by itself if the
+    # descriptor slots the lists hold run out, and the next run starts at
+    # 256 (see Check-Run).
+    if ($null -eq $script:UserAll['VICTORY_LATE_WAIT_LISTS']) {
+        [Environment]::SetEnvironmentVariable('VICTORY_LATE_WAIT_LISTS', $(if ($c.slots -eq 'out' -or $c.fast -eq '1') { $null } else { '384' }), 'Process')
+    }
+    # 6.7: the upscaler's stand-in accumulates frames (a temporal resolve,
+    # as the console's upscaler does) instead of one plain stretch: hair is
+    # no longer dotted or see-through, and soft shadows stop crawling. T
+    # switches it.
+    if ($null -eq $script:UserAll['VICTORY_UPSCALE_TEMPORAL']) {
+        [Environment]::SetEnvironmentVariable('VICTORY_UPSCALE_TEMPORAL', $(if ($c.temporal -eq 'off') { '0' } else { '1' }), 'Process')
+    }
+    Say "picture: smooth hair and shadows (frames accumulated) $(if ($env:VICTORY_UPSCALE_TEMPORAL -ne '0') { 'ON' } else { 'off' })   (T switches)"
+    Say "speed: card results fetched inside their flights $(if ($env:VICTORY_CARD_FETCH_INFLIGHT -eq '1') { 'ON' } else { 'off' }), lists in the air before a wait: $(if ($env:VICTORY_LATE_WAIT_LISTS) { $env:VICTORY_LATE_WAIT_LISTS } else { '256' })"
     # 4.1: the screen the console says it is plugged into. 1080p by default
     # (a Series X on a 1080p TV): at 4K the game renders 2560x1440 inside and
     # upscales to 3840x2160 every frame, on an 8 GB card that is also
@@ -711,11 +736,11 @@ function Set-RunEnv {
     # runs the game; only the paths, cache folders, screen size and the two
     # skipped programs stay. The lost-card steps then have nothing to undo.
     if ($c.plain -eq '1') {
-        foreach ($k in @('VICTORY_SHADER_LOOP_LIMIT', 'VICTORY_LATE_WAIT', 'VICTORY_WIDE_BACK', 'VICTORY_CARD_BUFFERS_MIN_MB', 'VICTORY_CARD_BUFFERS_MB', 'VICTORY_RELAY', 'VICTORY_WAVE_WIDE', 'VICTORY_LAZY_BACK', 'VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH', 'VICTORY_TRIM_BARRIERS', 'VICTORY_CARD_FETCH_INFLIGHT')) {
+        foreach ($k in @('VICTORY_SHADER_LOOP_LIMIT', 'VICTORY_LATE_WAIT', 'VICTORY_WIDE_BACK', 'VICTORY_CARD_BUFFERS_MIN_MB', 'VICTORY_CARD_BUFFERS_MB', 'VICTORY_RELAY', 'VICTORY_WAVE_WIDE', 'VICTORY_LAZY_BACK', 'VICTORY_STAND_IN', 'VICTORY_GPU_UPLOAD', 'VICTORY_PC_CARD_MB', 'VICTORY_COPY_FETCH', 'VICTORY_TRIM_BARRIERS', 'VICTORY_CARD_FETCH_INFLIGHT', 'VICTORY_LATE_WAIT_LISTS')) {
             [Environment]::SetEnvironmentVariable($k, $null, 'Process')
         }
         $script:LoopFromTry = $false; $script:WideFromTry = $false; $script:WaveWideFromTry = $false
-        $script:NewFromTry = $false; $script:LazyFromTry = $false; $script:RebarFromTry = $false
+        $script:NewFromTry = $false; $script:LazyFromTry = $false; $script:RebarFromTry = $false; $script:InflightFromTry = $false
         Say 'PLAIN mode: VICTORY''s defaults, as ztrx runs the game   (Z switches back to Try''s settings)'
     }
     # 4.2: the frame-rate ideas. B (on by default): the game renders at 75%
@@ -922,8 +947,124 @@ function Undo-Helper {
     $c.igpu_set = ''
 }
 
+# 6.7: the saved game. The game saves by itself where you are in the
+# mission; VIctory keeps that in the title's folder of its data folder:
+# 'saves' (the console's save containers) and 'storage' (its persistent
+# local storage). A new game renames both aside (never deletes them), so the
+# game starts as the first time it was played: from the very beginning,
+# whatever mission the save was at. J brings the last one back.
+function Save-Root {
+    $d = $env:VICTORY_DATA_DIR
+    if (-not $d) { $d = Join-Path $env:LOCALAPPDATA 'victory\data' }
+    return (Join-Path $d '7952987A')
+}
+function Save-Parts {
+    $root = Save-Root
+    return @(@('saves', 'storage') | ForEach-Object { Join-Path $root $_ } | Where-Object { Test-Path -LiteralPath $_ })
+}
+function Save-Backups {
+    $root = Save-Root
+    if (-not (Test-Path -LiteralPath $root)) { return @() }
+    return @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(saves|storage)\.bak-(\d{8}-\d{6})$' } | Sort-Object Name -Descending)
+}
+function Save-When {
+    $parts = Save-Parts
+    if (-not $parts) { return '' }
+    $f = Get-ChildItem -LiteralPath $parts -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($f) { return $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm') }
+    return ''
+}
+# Renames the save aside: the game starts as the first time.
+function Reset-Save {
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $moved = 0
+    foreach ($p in (Save-Parts)) {
+        $name = (Split-Path -Leaf $p) + ".bak-$stamp"
+        try { Rename-Item -LiteralPath $p -NewName $name -ErrorAction Stop; $moved++ }
+        catch { Bad "could not put $p aside (is the game still open?): $_"; return $false }
+    }
+    $script:Config.save_last = "new:$stamp"
+    Save-Config
+    if ($moved -gt 0) {
+        Say "NEW GAME: your save was put aside as *.bak-$stamp in $(Save-Root) (not deleted; J brings it back)."
+    } else {
+        Say 'NEW GAME: there was no save to put aside.'
+    }
+    $n = @(Save-Backups).Count
+    if ($n -gt 4) { Say "($n saves put aside so far; delete old *.bak-* folders in $(Save-Root) yourself if you need the disk space.)" }
+    Say 'The game starts from the very beginning, as the first time you played.'
+    return $true
+}
+# Brings back the save put aside last (the one in use is put aside first).
+function Restore-Save {
+    $last = Save-Backups | Select-Object -First 1
+    if (-not $last) { Bad "no save put aside in $(Save-Root)"; return }
+    $stamp = $last.Name -replace '^.*\.bak-', ''
+    $now = Get-Date -Format 'yyyyMMdd-HHmmss'
+    foreach ($p in (Save-Parts)) {
+        try { Rename-Item -LiteralPath $p -NewName ((Split-Path -Leaf $p) + ".bak-$now") -ErrorAction Stop }
+        catch { Bad "could not put $p aside (is the game still open?): $_"; return }
+    }
+    foreach ($part in @('saves', 'storage')) {
+        $b = Join-Path (Save-Root) "$part.bak-$stamp"
+        if (Test-Path -LiteralPath $b) {
+            try { Rename-Item -LiteralPath $b -NewName $part -ErrorAction Stop }
+            catch { Bad "could not bring back $b`: $_"; return }
+        }
+    }
+    $script:Config.save_last = "restored:$stamp"
+    Save-Config
+    Say "your save from $stamp is back (the one you had is put aside as *.bak-$now)."
+}
+# Asked before every launch (J turns the question off): Enter continues.
+function Choose-Save {
+    $c = $script:Config
+    if ($env:VICTORY_TRY_SAVE -eq 'continue') { return }
+    if ($env:VICTORY_TRY_SAVE -eq 'new') { $null = Reset-Save; return }
+    if ($c.save_ask -eq 'off') { return }
+    Step 'Your saved game'
+    $when = Save-When
+    if (-not $when) {
+        Say 'no saved game yet: the game starts from the beginning.'
+        return
+    }
+    Say "last saved: $when   ($(Save-Root))"
+    Write-Host '  [Enter]  CONTINUE   where you left off (the game''s auto-save)' -ForegroundColor Green
+    Write-Host '  [N]      NEW GAME   from the very beginning, as the first time you played' -ForegroundColor Yellow
+    Say '           (mission 1 even if your save is further on; your save is kept aside, J brings it back)'
+    $a = (Read-Host '  Continue or new game').Trim().ToUpper()
+    if ($a -eq 'N') {
+        $null = Reset-Save
+    } else {
+        $script:Config.save_last = 'continue'
+        Save-Config
+        Say 'continuing your saved game'
+    }
+}
+# J: the saved-game menu.
+function Save-Menu {
+    $c = $script:Config
+    Step 'Saved game'
+    $when = Save-When
+    Say "save folder: $(Save-Root)"
+    Say "last saved: $(if ($when) { $when } else { 'no save yet' })"
+    $b = @(Save-Backups)
+    Say "saves put aside: $(if ($b.Count) { ($b | Select-Object -First 4 | ForEach-Object { $_.Name }) -join ', ' } else { 'none' })"
+    Say "asked before every launch: $(if ($c.save_ask -eq 'off') { 'no' } else { 'yes' })"
+    Say '[N] new game at the next launch (puts the save aside now)   [B] bring back the save put aside last'
+    Say '[A] ask before every launch on / off                          [Enter] back'
+    $a = (Read-Host '  Choice').Trim().ToUpper()
+    switch ($a) {
+        'N' { $null = Reset-Save }
+        'B' { Restore-Save }
+        'A' { $c.save_ask = $(if ($c.save_ask -eq 'off') { '' } else { 'off' }); Save-Config; Say "asked before every launch: $(if ($c.save_ask -eq 'off') { 'no' } else { 'yes' })" }
+        default {}
+    }
+}
+
 function Run-Game {
     $c = $script:Config
+    Choose-Save
     Step 'Running the game with VIctory'
     Say "game: $($c.game_exe)"
     # What victory.exe was built from (not just what was downloaded): a
@@ -1163,12 +1304,21 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
         Bad 'the game crashed on a memory access in this run.'
         Say 'next run: lazy copy-back is off (the card results are copied back before the game hears the card is done).'
     }
+    # 6.7: the descriptor slots ran out with 384 lists in the air: next run 256.
+    if ((& $count 'dynamic descriptor slots ran out|no free dynamic descriptor slots') -gt 0 -and $c.slots -ne 'out') {
+        $c.slots = 'out'
+        Save-Config
+        Say 'next run: 256 lists in the air before a wait (the descriptor slots ran out with 384).'
+    }
     $lost = & $count 'device removed|DEVICE_REMOVED|DEVICE_HUNG'
     if ($lost -gt 0) {
         Bad 'the graphics card was lost (device removed) in this run.'
         if ($c.fast -eq '1') {
             $c.fast = ''
             Say 'next run: back to the stable relay speed mode (F switches again).'
+        } elseif ($script:InflightFromTry) {
+            $c.inflight = 'off'
+            Say 'next run: card results are fetched the old way (6.6 in-flight fetch off).'
         } elseif ($script:RebarFromTry) {
             $c.rebar = 'off'
             Say 'next run: Resizable BAR uploads (6.4) are off.'
@@ -1280,7 +1430,7 @@ $script:Config = Load-Config
 # shadow fix, copies on the card, clean-up off, fps boost), whatever earlier
 # versions or a lost card switched off. D does the same at any time.
 function Reset-Recommended {
-    foreach ($k in @('fast', 'loop', 'wide', 'wavewide', 'new38', 'lazy', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy')) { $script:Config[$k] = '' }
+    foreach ($k in @('fast', 'loop', 'wide', 'wavewide', 'new38', 'lazy', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'temporal')) { $script:Config[$k] = '' }
     $script:Config.defaults = '5.0'
     Save-Config
 }
@@ -1308,6 +1458,7 @@ if (-not (Engine8)) {
 if (Engine8) {
     Say 'engine: the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb). N goes back to this fork''s engine.'
 } else {
+    Say '6.7: before the game loads: continue your save or start a NEW GAME from the very beginning (J: saved game); hair and soft shadows accumulated over frames as the console''s upscaler does (T); more work in flight before waiting for the card, card results fetched inside their flights on their own switch, more buffers compared on the card, the upscaler DLL no longer refused.'
     Say '6.6: this fork''s engine: texture threads no longer queue on one lock, results read one frame late instead of waiting for the card, card copies come back inside their own flights, fill light follows the scene''s brightness; 6.5: streaming gets a fixed share of each frame (as big games do), a texture-pass profiler, steadier texture quality; 6.4: the world waits behind its curtain until its textures are in, small textures first, reused upload buffers, shader cache read ahead, softer light on people; the 6.0 speed fixes (all CPU cores, the card''s queues first, the CPU''s own graphics for other programs). N switches to the 8 GB engine.'
 }
 
@@ -1334,6 +1485,8 @@ function Show-Commands {
         @('W', 'Shadow fix', $(& $on ($c.shadowfix -ne 'off')), 'NVIDIA: keeps the ceiling and lit rooms (14 shadow programs translated safely)'),
         @('I', 'CPU graphics helper', $(& $on ($c.igpu -ne 'off')), 'browsers / Discord / Spotify use the CPU''s own graphics, so the card''s memory is the game''s'),
         @('K', 'Copies on the card', $(& $on ($c.gpucopy -ne 'off')), 'faster: the game''s buffer copies run on the card (no waiting for it); off if things look wrong'),
+        @('T', 'Smooth hair/shadows', $(& $on ($c.temporal -ne 'off')), 'frames accumulated as the console''s upscaler does: no dotted hair, no crawling shadows (Series S)'),
+        @('J', 'Saved game', '', 'continue or new game (from the very beginning), bring a save back, ask before launch on/off'),
         @('D', 'Recommended', '', 'every switch back to the recommended settings (renders the most)'),
         @('Z', 'Plain mode', $(& $on ($c.plain -eq '1')), 'VIctory''s own defaults instead of Try''s settings (for comparing)'),
         @('P', 'Prepare again', '', 'compile all pipelines again with the game closed (done by itself after updates)'),
@@ -1348,7 +1501,7 @@ function Show-Commands {
         Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3])
     }
     Write-Host '  ====================================================================================' -ForegroundColor Cyan
-    Write-Host '  Switches (N, C, R, F, B, M, H, A, L, O, W, K, Z, D) flip at once and are saved; Enter then runs the game with them.'
+    Write-Host '  Switches (N, C, R, F, B, M, H, A, L, O, W, K, T, Z, D) flip at once and are saved; Enter then runs the game with them.'
 }
 
 function Show-Version {
@@ -1378,6 +1531,7 @@ while ($true) {
     while ($true) {
         $k = (Read-Host '  Choice').Trim().ToUpper()
         if ($k -eq 'V') { Show-Version; Show-Commands; continue }
+        if ($k -eq 'J') { Save-Menu; Show-Commands; continue }
         if ($k -eq 'S') { Ask-Reports; Save-Config; Show-Commands; continue }
         if ($k -eq 'E') { try { Start-Process explorer.exe -ArgumentList "`"$(Reports-Dir)`"" } catch { Bad "could not open it: $(Reports-Dir)" }; Show-Commands; continue }
         $c = $script:Config
@@ -1393,6 +1547,7 @@ while ($true) {
             'O' { $c.opt = $(if ($c.opt -eq 'on') { '' } else { 'on' }) }
             'W' { $c.shadowfix = $(if ($c.shadowfix -eq 'off') { '' } else { 'off' }) }
             'K' { $c.gpucopy = $(if ($c.gpucopy -eq 'off') { '' } else { 'off' }) }
+            'T' { $c.temporal = $(if ($c.temporal -eq 'off') { '' } else { 'off' }) }
             'I' { if ($c.igpu -eq 'off') { $c.igpu = '' } else { $c.igpu = 'off'; Undo-Helper } }
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
             'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.6'; $c.console_user = '1' }

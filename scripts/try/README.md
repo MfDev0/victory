@@ -526,6 +526,26 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      `_MIN` 0.35, `_STEEP` 0.35).
    - the world's texture pass: at most `VICTORY_TEXTURE_PASS_MS` (120) and
      a share of the eased frame time.
+   6.7:
+   - **saved game** before every launch: Enter continues the auto-save, N
+     starts a new game from the very beginning (the title's `saves` and
+     `storage` folders under `%LOCALAPPDATA%\victory\data\7952987A` are
+     renamed `*.bak-<time>`, never deleted). J: new game, bring the last
+     save back, ask before launch on/off. `VICTORY_TRY_SAVE=continue|new`
+     skips the question.
+   - **temporal upscale** (T; `VICTORY_UPSCALE_TEMPORAL=0`: the plain
+     stretch): the FidelityFX upscale dispatch is answered by a resolve that
+     takes the jitter off, moves its history by the title's motion vectors
+     (Catmull-Rom), clips it to the 3x3 neighbourhood in YCoCg and blends a
+     tenth of the new frame (`VICTORY_UPSCALE_FEEDBACK`, 10;
+     `VICTORY_UPSCALE_SHARPEN`, 20). Dithered hair and jittered soft
+     shadows are averaged as on the console.
+   - `VICTORY_LATE_WAIT_LISTS=384` from Try (256 again after the dynamic
+     descriptor slots ran out, in the run and the next ones).
+   - the in-flight card fetch on a config switch of its own (`inflight`).
+   - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
+   - a `GetModuleHandle` of a title DLL that another thread is mapping
+     waits for that load instead of being refused.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,

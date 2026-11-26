@@ -148,14 +148,16 @@ pub fn run(
     victory_hle::runtime::use_console_timers();
     #[cfg(feature = "diagnostics")]
     diagnostics(&image, &cfg);
-    let late = LateDlls {
+    let late = Arc::new(LateDlls {
         host: resolver.host.clone(),
         title_dir: title_dir.to_owned(),
         cache_dir: images,
         policy,
         mapped: std::sync::Mutex::new(dlls.clone()),
         lock: LoaderLock::default(),
-    };
+    });
+    let settle = Arc::clone(&late);
+    victory_hle::runtime::set_title_dll_settle(Box::new(move || settle.lock.hold(|| ())));
     victory_hle::runtime::set_title_dll_loader(Box::new(move |file| {
         late.load(file, show).map_err(|e| format!("{e:#}"))
     }));

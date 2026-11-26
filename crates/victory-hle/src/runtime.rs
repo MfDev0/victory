@@ -71,6 +71,35 @@ pub fn load_title_dll(file: &str) -> Result<Option<usize>, String> {
     TITLE_DLL_LOADER.get().map_or(Ok(None), |load| load(file))
 }
 
+static TITLE_DLL_SETTLE: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
+/// Set once, by whoever maps the title's DLLs: waits until no thread is
+/// mapping, binding or initialising one (the loader lock's shape).
+pub fn set_title_dll_settle(settle: Box<dyn Fn() + Send + Sync>) {
+    let _ = TITLE_DLL_SETTLE.set(settle);
+}
+
+/// Waits for a title DLL mapping in progress on another thread (Try 6.7:
+/// a `GetModuleHandle` racing the title's load of its upscaler was refused
+/// as a host DLL).
+pub fn settle_title_dlls() {
+    if let Some(settle) = TITLE_DLL_SETTLE.get() {
+        settle();
+    }
+}
+
+/// The file names of the title images whose names start as `file`'s does,
+/// for the log of a refused name.
+pub fn images_like(file: &str) -> Vec<String> {
+    let stem: String = file.chars().take(8).collect::<String>().to_ascii_lowercase();
+    let paths = IMAGE_PATHS.lock().unwrap_or_else(|e| e.into_inner());
+    paths
+        .iter()
+        .filter_map(|(_, p)| p.file_name()?.to_str().map(str::to_owned))
+        .filter(|n| n.to_ascii_lowercase().starts_with(&stem))
+        .collect()
+}
+
 /// What the title's manifest (`MicrosoftGame.config` beside its executable)
 /// says about it, and where its persistent local storage lives.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

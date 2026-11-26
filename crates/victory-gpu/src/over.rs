@@ -21,6 +21,8 @@ use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
 
+pub(crate) mod temporal;
+
 const SOURCE: &str = r#"
 Texture2D<float4> plane : register(t0);
 SamplerState bilinear : register(s0);
@@ -419,6 +421,9 @@ fn typed(format: DXGI_FORMAT) -> DXGI_FORMAT {
         9 => 10,
         23 => 24,
         27 => 28,
+        // R32G32_TYPELESS and R16G16_TYPELESS: motion vectors.
+        15 => 16,
+        33 => 34,
         f => f,
     })
 }
@@ -522,7 +527,7 @@ mod tests {
     /// typed formats, and formats with no typeless form here, stay.
     #[test]
     fn typeless_formats_get_their_typed_one() {
-        for (typeless, typed_one) in [(1, 2), (9, 10), (23, 24), (27, 28)] {
+        for (typeless, typed_one) in [(1, 2), (9, 10), (23, 24), (27, 28), (15, 16), (33, 34)] {
             assert_eq!(typed(DXGI_FORMAT(typeless)).0, typed_one);
             assert_eq!(typed(DXGI_FORMAT(typed_one)).0, typed_one);
         }

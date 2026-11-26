@@ -1229,6 +1229,8 @@ impl HostHeap {
             }
             static ONCE: std::sync::Once = std::sync::Once::new();
             ONCE.call_once(|| tracing::warn!(n, "no free dynamic descriptor slots: a table is not made"));
+            #[cfg(windows)]
+            crate::host::slots_ran_out();
             #[cfg(feature = "diagnostics")]
             {
                 use crate::copystat::{C, add};

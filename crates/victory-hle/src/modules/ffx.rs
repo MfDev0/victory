@@ -5,9 +5,11 @@
 //! upscaler are the title's own DLLs and run as they are, but the
 //! upscaler's passes are compute pipelines in a container we do not
 //! translate: its output stayed black. `ffxDispatch` alone is taken here:
-//! an upscale dispatch becomes a plain stretch of the colour input
-//! (`victory_gpu::list::upscale_stretch`); anything else, and an upscale we
-//! could not stretch, goes to the title's DLL.
+//! an upscale dispatch becomes a temporal resolve of the colour input
+//! with the jitter, motion, exposure and reset the title passes (Try 6.7,
+//! `victory_gpu::list::upscale_temporal`; a plain stretch before it and
+//! with `VICTORY_UPSCALE_TEMPORAL=0`); anything else, and an upscale we
+//! could not record, goes to the title's DLL.
 //!
 //! The structures are the public FidelityFX API's (`ffx_api.h`,
 //! `ffx_upscale.h`): a header of a type and a next pointer, and resources of
@@ -54,6 +56,17 @@ struct Upscale {
     motion_scale: [f32; 2],
     render: [u32; 2],
     upscale: [u32; 2],
+    // C++ `bool`s, read as bytes.
+    enable_sharpening: u8,
+    sharpness: f32,
+    frame_time_delta: f32,
+    pre_exposure: f32,
+    reset: u8,
+    camera_near: f32,
+    camera_far: f32,
+    camera_fov: f32,
+    meters: f32,
+    flags: u32,
 }
 
 const _: () = assert!(size_of::<Resource>() == 48);
@@ -85,15 +98,37 @@ extern "system" fn dispatch(context: *mut *mut c_void, desc: *const Header) -> u
                     output_size = ?(d.output.description[2], d.output.description[3]),
                     render = ?d.render,
                     upscale = ?d.upscale,
+                    motion = ?d.motion.resource,
+                    depth = ?d.depth.resource,
+                    jitter = ?d.jitter,
+                    motion_scale = ?d.motion_scale,
+                    sharpening = d.enable_sharpening,
+                    sharpness = d.sharpness,
+                    frame_ms = d.frame_time_delta,
+                    pre_exposure = d.pre_exposure,
+                    reset = d.reset,
+                    near = d.camera_near,
+                    far = d.camera_far,
+                    fov = d.camera_fov,
+                    meters = d.meters,
+                    flags = format_args!("{:#x}", d.flags),
                     "upscale dispatch"
                 );
             }
             #[cfg(windows)]
-            if victory_gpu::list::upscale_stretch(
+            if victory_gpu::list::upscale_temporal(
                 d.list,
                 d.colour.resource,
+                d.motion.resource,
                 d.output.resource,
-                d.render,
+                victory_gpu::list::UpscaleFrame {
+                    render: d.render,
+                    jitter: d.jitter,
+                    motion_scale: d.motion_scale,
+                    reset: d.reset != 0,
+                    sharpness: (d.enable_sharpening != 0).then_some(d.sharpness),
+                    pre_exposure: d.pre_exposure,
+                },
             ) {
                 return 0;
             }
@@ -150,6 +185,11 @@ mod tests {
         assert_eq!(offset_of!(Upscale, motion_scale), 0x170);
         assert_eq!(offset_of!(Upscale, render), 0x178);
         assert_eq!(offset_of!(Upscale, upscale), 0x180);
+        assert_eq!(offset_of!(Upscale, enable_sharpening), 0x188);
+        assert_eq!(offset_of!(Upscale, sharpness), 0x18C);
+        assert_eq!(offset_of!(Upscale, pre_exposure), 0x194);
+        assert_eq!(offset_of!(Upscale, reset), 0x198);
+        assert_eq!(offset_of!(Upscale, flags), 0x1AC);
         assert_eq!(offset_of!(Resource, description), 8);
         assert_eq!(offset_of!(Resource, state), 40);
     }

@@ -886,6 +886,95 @@ pub fn upscale_stretch(
     done
 }
 
+/// What an upscale dispatch says besides its textures, for
+/// [`upscale_temporal`].
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UpscaleFrame {
+    /// The rendered top-left part of the colour input.
+    pub render: [u32; 2],
+    /// The projection's jitter this frame, in rendered texels.
+    pub jitter: [f32; 2],
+    /// What the motion input is multiplied by to be in rendered texels.
+    pub motion_scale: [f32; 2],
+    /// The title starts its history again (a camera cut).
+    pub reset: bool,
+    /// The sharpening the title asks for, if it asks.
+    pub sharpness: Option<f32>,
+    /// The exposure the colour input was rendered with.
+    pub pre_exposure: f32,
+}
+
+/// Stands in for the console upscaler's dispatch on title list `this` as
+/// that upscaler does, by accumulating frames ([`crate::over::temporal`]):
+/// `output` gets this frame's `colour` with the jitter taken off, blended
+/// with the history moved by `motion`. Stretches instead when the resolve
+/// is off (`VICTORY_UPSCALE_TEMPORAL=0`) or cannot be recorded. False if
+/// nothing was recorded.
+#[cfg(windows)]
+pub fn upscale_temporal(
+    this: *const std::ffi::c_void,
+    colour: *const std::ffi::c_void,
+    motion: *const std::ffi::c_void,
+    output: *const std::ffi::c_void,
+    frame: UpscaleFrame,
+) -> bool {
+    const SHADER_READ: u32 = 0x40;
+    const UNORDERED: u32 = 0x8;
+    if !crate::over::temporal::enabled() {
+        return upscale_stretch(this, colour, output, frame.render);
+    }
+    let (this, colour, motion, output): (This, This, This, This) =
+        (this.cast(), colour.cast(), motion.cast(), output.cast());
+    if this.is_null() || colour.is_null() || output.is_null() {
+        return false;
+    }
+    let mut done = false;
+    with_state(this, |list, state| {
+        let (Some(to), Some(from), Some(host)) = (
+            crate::resource::host_resource(output),
+            crate::resource::host_resource(colour),
+            crate::host::host(),
+        ) else {
+            return;
+        };
+        // A motion input that is the colour or the output is not one.
+        let moved = if motion.is_null() || motion == colour || motion == output {
+            None
+        } else {
+            crate::resource::host_resource(motion)
+        };
+        ensure_state(list, colour, SHADER_READ);
+        if moved.is_some() {
+            ensure_state(list, motion, SHADER_READ);
+        }
+        ensure_state(list, output, UNORDERED);
+        done = crate::over::temporal::record(
+            &host.device,
+            list,
+            to,
+            from,
+            moved,
+            crate::over::temporal::Frame {
+                render: frame.render,
+                jitter: frame.jitter,
+                motion_scale: frame.motion_scale,
+                reset: frame.reset,
+                sharpness: frame.sharpness,
+                pre_exposure: frame.pre_exposure,
+            },
+        );
+        if !done {
+            done = crate::over::record_stretch(&host.device, &list.list, to, from, frame.render);
+        }
+        if done {
+            crate::texture::host_written(output);
+        }
+        state.replay(list);
+    });
+    done
+}
+
 /// Moves a title texture's host copy to `state` in the list, if needed.
 #[cfg(windows)]
 pub(crate) fn ensure_state(list: &crate::host::HostList, resource: This, state: u32) {

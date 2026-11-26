@@ -295,6 +295,7 @@ fn handle(m: &HleModule) -> *mut c_void {
 /// import binding); others fail. With `load`, a title DLL not mapped yet is
 /// mapped now.
 fn find_module(path: &str, load: bool) -> Option<*mut c_void> {
+    let path = path.trim_end_matches(['\0', ' ']);
     let file = path.rsplit(['\\', '/']).next().unwrap_or(path);
     // As the Windows loader does, a name without extension means a DLL.
     let file = if file.contains('.') {
@@ -330,20 +331,34 @@ fn find_module(path: &str, load: bool) -> Option<*mut c_void> {
     if host_dll {
         return None;
     }
+    // A title DLL another thread is mapping right now has no name yet:
+    // wait for that load, as the Windows loader lock makes a
+    // `GetModuleHandle` wait, and ask again.
+    runtime::settle_title_dlls();
+    if let Some(base) = runtime::image_named(&file) {
+        tracing::info!(dll = file, load, "a title DLL asked for while it was being mapped: found after the load");
+        return Some(base as *mut c_void);
+    }
     // Any other host DLL (wininet, urlmon, ...) is beyond what we guard, and
     // the console does not have it.
-    refuse(&file);
+    refuse(&file, path, load);
     host::set_last_error(ERROR_MOD_NOT_FOUND);
     Some(std::ptr::null_mut())
 }
 
 /// Logs a DLL name the title is refused, once.
-fn refuse(file: &str) {
+fn refuse(file: &str, path: &str, load: bool) {
     static REFUSED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     let file = file.to_ascii_lowercase();
     let mut refused = REFUSED.lock().unwrap_or_else(|e| e.into_inner());
     if !refused.contains(&file) {
-        tracing::warn!(dll = file, "a host DLL outside the host policy: refused");
+        tracing::warn!(
+            dll = file,
+            path,
+            load,
+            similar = ?runtime::images_like(&file),
+            "a host DLL outside the host policy: refused"
+        );
         refused.push(file);
     }
 }
