@@ -343,20 +343,33 @@ pub fn translate(container: &[u8]) -> Result<HostShader, ShaderError> {
     {
         return Ok(shader);
     }
+    out
+}
+
+/// Emits a program whose earlier stages already ran.
+pub fn emit(
+    c: &Container,
+    native: &NativeProgram,
+    p: &ir::Program,
+    st: &structure::Structured,
+    io: &io::Io,
+    res: &resource::Resources,
+) -> Result<HostShader, ShaderError> {
+    let out = emit_forms(c, native, p, st, io, res);
     // A lane mask holding lanes outside EXEC read as data: once more with it
     // read as the ballot of the lanes that reach its block
     // ([`lower::with_masks_elsewhere`]; `VICTORY_MASK_ELSEWHERE=0` refuses).
     if matches!(&out, Err(ShaderError::Unsupported { what, .. }) if *what == lower::MASK_ELSEWHERE)
         && std::env::var_os("VICTORY_MASK_ELSEWHERE").is_none_or(|v| v != "0")
-        && let Ok(shader) = lower::with_masks_elsewhere(|| emit(&c, &native, &p, &st, &io, &res))
+        && let Ok(shader) = lower::with_masks_elsewhere(|| emit_forms(c, native, p, st, io, res))
     {
         return Ok(shader);
     }
     out
 }
 
-/// Emits a program whose earlier stages already ran.
-pub fn emit(
+/// [`emit`] without its last retry.
+fn emit_forms(
     c: &Container,
     native: &NativeProgram,
     p: &ir::Program,

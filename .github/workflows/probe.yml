@@ -4,6 +4,8 @@ name: Shader probe
 # (failed-shaders in the report zips on main) as the user's RTX 4060 does
 # (32-lane waves), with each wave switch, and prints why each stops.
 # Runs when scripts/try/probe.txt changes; the report names are in it.
+# (`translate --list` calls emit::emit: the pixel first-half retries of
+# emit::translate are not in it, so those three fail here only.)
 
 on:
   push:
