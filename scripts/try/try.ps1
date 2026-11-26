@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.7'
+$TryVersion = '6.8'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -48,11 +48,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -698,7 +698,11 @@ function Set-RunEnv {
     # lost card long ago had turned off on some PCs: the 6.6 report shows it
     # never ran there (no "inside their flights" line). Off again by itself
     # if a run with it loses the card (see Check-Run).
-    $script:InflightFromTry = ($null -eq $script:UserAll['VICTORY_CARD_FETCH_INFLIGHT']) -and $c.inflight -ne 'off' -and $c.fast -ne '1'
+    # 6.8: off by default. On a 6 GB RTX 4050 the card's time per frame
+    # went up about threefold with it (the 6.7 report), as on an RTX 5060 Ti
+    # (Linox-IDK: about 100 -> 600 ms). VICTORY_CARD_FETCH_INFLIGHT=1 still
+    # turns it on.
+    $script:InflightFromTry = ($null -eq $script:UserAll['VICTORY_CARD_FETCH_INFLIGHT']) -and $c.inflight -eq 'on' -and $c.fast -ne '1'
     if ($null -eq $script:UserAll['VICTORY_CARD_FETCH_INFLIGHT']) {
         [Environment]::SetEnvironmentVariable('VICTORY_CARD_FETCH_INFLIGHT', $(if ($script:InflightFromTry) { '1' } else { $null }), 'Process')
     }
@@ -808,6 +812,35 @@ function Set-RunEnv {
     # idle 180 ms a frame behind the submitting thread.
     if ($null -eq $script:UserFx['VICTORY_CARD_AWAKE']) { $env:VICTORY_CARD_AWAKE = '1' }
     if ($null -eq $script:UserFx['VICTORY_CARD_REHASH_RUNS']) { [Environment]::SetEnvironmentVariable('VICTORY_CARD_REHASH_RUNS', $(if ($c.gpucopy -eq 'off') { $null } else { '1' }), 'Process') }
+    # 6.8: fxceless's speed set (fxceless/victory-fork, merged whole in
+    # 6.8; 8.2-8.6 world fps on an RTX 4070 there). The heap pass runs on a
+    # thread of its own beside the submitting one (VICTORY_HEAP_WORKER: it
+    # was 62-115 ms a frame, 92 ms in the 6.7 report), texture checks run
+    # side by side with the preparing (VICTORY_PARALLEL_REFRESH), settles
+    # make room in one go (VICTORY_SETTLE_ROOM), found copies are looked up
+    # once per table (VICTORY_LOOKUP_CACHE), the small textures the water
+    # reads come back from the card (VICTORY_TEXTURE_BACK) and 512 MB of
+    # buffer windows live on the card (VICTORY_CARD_WINDOWS_MB: no black
+    # textures). Y switches the set; off by itself if a run loses the card.
+    $script:FxFromTry = ($c.fxspeed -ne 'off') -and ($c.plain -ne '1')
+    foreach ($kv in @(@('VICTORY_HEAP_WORKER', '1'), @('VICTORY_PARALLEL_REFRESH', '1'), @('VICTORY_SETTLE_ROOM', '1'), @('VICTORY_LOOKUP_CACHE', '1'), @('VICTORY_TEXTURE_BACK', '1'), @('VICTORY_CARD_WINDOWS_MB', '512'))) {
+        if ($null -eq $script:UserAll[$kv[0]]) { [Environment]::SetEnvironmentVariable($kv[0], $(if ($script:FxFromTry) { $kv[1] } else { $null }), 'Process') }
+    }
+    # 6.8: the low preset (X) for 6 GB cards (on by itself under 7000 MB):
+    # the game is told a 1280x720 screen (less to scale up and post-process
+    # every frame; the window still fills the screen), and texture copies
+    # stop at 1536 MB of the card (sizes past that wait: blurrier, but the
+    # card no longer runs out: "Critical" all through the 6.7 report).
+    $lowAuto = ($c.vram -and [int]$c.vram -lt 7000)
+    $script:LowFromTry = ($c.low -eq '1' -or ($c.low -ne 'off' -and $lowAuto)) -and ($c.plain -ne '1')
+    if ($script:LowFromTry) {
+        if (-not $script:UserDisplay) { $env:VICTORY_DISPLAY_MODE = '1280x720' }
+        if ($null -eq $script:UserAll['VICTORY_TEXTURE_BUDGET_MB']) { $env:VICTORY_TEXTURE_BUDGET_MB = '1536' }
+    } elseif ($null -eq $script:UserAll['VICTORY_TEXTURE_BUDGET_MB']) {
+        [Environment]::SetEnvironmentVariable('VICTORY_TEXTURE_BUDGET_MB', $null, 'Process')
+    }
+    Say "speed: fxceless's set (heap thread, side-by-side texture checks, settle room, lookup cache) $(if ($script:FxFromTry) { 'ON' } else { 'off' })   (Y switches)"
+    Say "low preset: $(if ($script:LowFromTry) { "ON (game screen $($env:VICTORY_DISPLAY_MODE), textures up to $($env:VICTORY_TEXTURE_BUDGET_MB) MB)" } else { 'off' })   (X switches)"
     Say "speed: copies on the card $(if ($env:VICTORY_GPU_COPIES -ne '0') { 'ON' } else { 'off' }), checks joined $(if ($env:VICTORY_CARD_REHASH_RUNS -eq '1') { 'ON' } else { 'off' })   (K switches)"
     Say "walls: shader clean-up $(if ($env:VICTORY_SHADER_OPT -eq '0') { 'off (walls and roofs kept)' } else { 'ON' })   (O switches)   shadow fix $(if ($env:VICTORY_WAVE_DEEP_SKIPS_NOT -eq 'none') { 'off' } else { 'ON' })   (W switches)"
     Say "picture: ambient light $(if ($env:VICTORY_AMBIENT -ne 'off') { $env:VICTORY_AMBIENT } else { 'off' })   (A: normal 0.45 / low 0.3 / high 0.6 / off)   textures level by level $(if ($env:VICTORY_LEVELS_ON_DEMAND -eq '1') { 'ON' } else { 'off' })   (L switches)"
@@ -1316,6 +1349,9 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
         if ($c.fast -eq '1') {
             $c.fast = ''
             Say 'next run: back to the stable relay speed mode (F switches again).'
+        } elseif ($script:FxFromTry) {
+            $c.fxspeed = 'off'
+            Say 'next run: fxceless''s speed set (6.8) is off (Y switches it again).'
         } elseif ($script:InflightFromTry) {
             $c.inflight = 'off'
             Say 'next run: card results are fetched the old way (6.6 in-flight fetch off).'
@@ -1430,7 +1466,7 @@ $script:Config = Load-Config
 # shadow fix, copies on the card, clean-up off, fps boost), whatever earlier
 # versions or a lost card switched off. D does the same at any time.
 function Reset-Recommended {
-    foreach ($k in @('fast', 'loop', 'wide', 'wavewide', 'new38', 'lazy', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'temporal')) { $script:Config[$k] = '' }
+    foreach ($k in @('fast', 'loop', 'wide', 'wavewide', 'new38', 'lazy', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'temporal', 'fxspeed', 'low')) { $script:Config[$k] = '' }
     $script:Config.defaults = '5.0'
     Save-Config
 }
@@ -1486,6 +1522,8 @@ function Show-Commands {
         @('I', 'CPU graphics helper', $(& $on ($c.igpu -ne 'off')), 'browsers / Discord / Spotify use the CPU''s own graphics, so the card''s memory is the game''s'),
         @('K', 'Copies on the card', $(& $on ($c.gpucopy -ne 'off')), 'faster: the game''s buffer copies run on the card (no waiting for it); off if things look wrong'),
         @('T', 'Smooth hair/shadows', $(& $on ($c.temporal -ne 'off')), 'frames accumulated as the console''s upscaler does: no dotted hair, no crawling shadows (Series S)'),
+        @('Y', 'fxceless speed set', $(& $on ($c.fxspeed -ne 'off')), 'heap work on its own thread, texture checks side by side, settle room (fxceless/victory-fork)'),
+        @('X', 'Low preset', $(& $on $script:LowFromTry), '6 GB cards: game told 1280x720, textures up to 1536 MB (faster, blurrier; on by itself under 7 GB)'),
         @('J', 'Saved game', '', 'continue or new game (from the very beginning), bring a save back, ask before launch on/off'),
         @('D', 'Recommended', '', 'every switch back to the recommended settings (renders the most)'),
         @('Z', 'Plain mode', $(& $on ($c.plain -eq '1')), 'VIctory''s own defaults instead of Try''s settings (for comparing)'),
@@ -1501,7 +1539,7 @@ function Show-Commands {
         Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3])
     }
     Write-Host '  ====================================================================================' -ForegroundColor Cyan
-    Write-Host '  Switches (N, C, R, F, B, M, H, A, L, O, W, K, T, Z, D) flip at once and are saved; Enter then runs the game with them.'
+    Write-Host '  Switches (N, C, R, F, B, M, H, A, L, O, W, K, T, Y, X, Z, D) flip at once and are saved; Enter then runs the game with them.'
 }
 
 function Show-Version {
@@ -1548,6 +1586,8 @@ while ($true) {
             'W' { $c.shadowfix = $(if ($c.shadowfix -eq 'off') { '' } else { 'off' }) }
             'K' { $c.gpucopy = $(if ($c.gpucopy -eq 'off') { '' } else { 'off' }) }
             'T' { $c.temporal = $(if ($c.temporal -eq 'off') { '' } else { 'off' }) }
+            'Y' { $c.fxspeed = $(if ($c.fxspeed -eq 'off') { '' } else { 'off' }) }
+            'X' { $c.low = $(if ($script:LowFromTry) { 'off' } else { '1' }) }
             'I' { if ($c.igpu -eq 'off') { $c.igpu = '' } else { $c.igpu = 'off'; Undo-Helper } }
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
             'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.6'; $c.console_user = '1' }

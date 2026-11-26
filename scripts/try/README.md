@@ -543,6 +543,28 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_LATE_WAIT_LISTS=384` from Try (256 again after the dynamic
      descriptor slots ran out, in the run and the next ones).
    - the in-flight card fetch on a config switch of its own (`inflight`).
+   6.8 ("the breakthrough"):
+   - **fxceless/victory-fork merged whole** (`e4245f3c`): the heap pass on
+     a worker thread (`VICTORY_HEAP_WORKER=1`, with the relay's late
+     waits), texture checks beside the preparing
+     (`VICTORY_PARALLEL_REFRESH=1`), settles that make room at once
+     (`VICTORY_SETTLE_ROOM=1`), a per-table lookup cache
+     (`VICTORY_LOOKUP_CACHE=1`), small textures copied back for the water
+     (`VICTORY_TEXTURE_BACK=1`), 512 MB of buffer windows on the card
+     (`VICTORY_CARD_WINDOWS_MB=512`), half views (mouths), page-write
+     tracking (black faces), the card-hash on several threads. All from Try
+     on **Y** (off by itself after a lost card).
+   - `monitorx` / `mwaitx` are patched in place at their first trap
+     (NOPs, and `pause`), with one compare-and-swap of the aligned word
+     holding them (or a short jump over the rest where they cross one):
+     about 125,000 exceptions a second fewer (`VICTORY_MWAIT_PATCH=0`: as
+     before).
+   - `VICTORY_CARD_FETCH_INFLIGHT` is off by default (it tripled the card's
+     time per frame on an RTX 4050 Laptop).
+   - **low preset** (**X**; on by itself under 7000 MB of card memory):
+     `VICTORY_DISPLAY_MODE=1280x720` and `VICTORY_TEXTURE_BUDGET_MB=1536`.
+   - the wide pool (`VICTORY_WIDE_THREADS`): the CPU's threads less two, at
+     most 8 (16 before).
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.

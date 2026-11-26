@@ -6109,6 +6109,9 @@ impl<'a> Lower<'a> {
                 .find_map(|(s, _)| use_of(*s))
         };
         let use_at = use_of(site).or_else(twin);
+        // Whether the kind came from the descriptor's own dwords
+        // (`unused_descriptor_kind`): its address is then given as well.
+        let mut unused: Option<()> = None;
         let (src, first, uav, props, image, used) = match use_at {
             Some((at, first)) => {
                 let src = Source::Loaded { load: site, first };
@@ -6234,6 +6237,7 @@ impl<'a> Lower<'a> {
                 if let Some((first, props, image, uav, used)) =
                     self.unused_descriptor_kind(inst, site, code, count)
                 {
+                    unused = Some(());
                     (Source::Loaded { load: site, first }, first, uav, props, image, used)
                 } else {
                     // Read as data and never used (undeadhuman37, upstream #1067): the

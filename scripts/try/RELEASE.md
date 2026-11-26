@@ -1,8 +1,9 @@
-VIctory Try 6.7 (new game or continue, smooth hair and shadows, less waiting)
-- Before the game loads you now pick: Enter = continue your save, N = NEW GAME from the very beginning (mission 1, even if your save is further on), the same as the first time you played. Your save is never deleted. It is renamed and kept, and J in the menu brings it back. J also turns the question off
-- Hair and soft shadows: the Xbox upscaler builds each picture from several frames. Until now we stood in for it with a plain one-frame stretch, so hair looked dotted or see-through and shadow edges crawled. The new stand-in does what the real one does. It takes off the camera jitter, moves the frames already built along the game's own motion, rejects what no longer fits, and blends. It also sharpens a little. T switches it off and on
-- Less waiting on the card: up to 384 batches of work can be in flight before the CPU waits (256 before; in 6.6 this wait cost 75-100 ms a frame). It drops back to 256 by itself if the slots run out
-- Card results fetched inside their own flight (6.6) now have their own switch. In the 6.6 report this feature never turned on, because an older lost-card setting was holding it off
-- More buffers are compared on the card instead of the CPU (2 MB and up, was 4)
-- The game's AMD upscaler DLL is no longer refused when it is looked up while it is still being loaded
-- Settings: VICTORY_UPSCALE_TEMPORAL=0, VICTORY_UPSCALE_FEEDBACK (10), VICTORY_UPSCALE_SHARPEN (20), VICTORY_TRY_SAVE=continue|new, VICTORY_LATE_WAIT_LISTS (384 from Try)
+VIctory Try 6.8 "the breakthrough" (fxceless's fork merged whole, fewer CPU traps, low preset)
+- fxceless/victory-fork is merged in whole (8.2-8.6 fps in the world on an RTX 4070 there). The heap pass (92 ms a frame in the 6.7 report) now runs on its own thread beside the one that sends work to the card. Texture checks run side by side with the preparing. Settles make room in one go. Found copies are looked up once per table. Y switches this set, and it turns off by itself if a run loses the card
+- Their picture fixes come too: mouths and faces (half views), the black faces fixed by tracking page writes, water textures read back from the card, and 512 MB of buffer windows on the card (no black textures)
+- Fewer CPU traps: the console's wait instructions (monitorx / mwaitx), about 125,000 traps a second in the 6.7 report, are patched in place the first time they are met. After that they run as a plain spin with no trip into Windows. VICTORY_MWAIT_PATCH=0 goes back to trapping every one
+- Card results fetched inside their flight are OFF by default now. On your RTX 4050 they made the card's time per frame about 3x longer, and others saw the same on an RTX 5060 Ti
+- Low preset (X), on by itself for cards under 7 GB: the game is told a 1280x720 screen and texture copies stop at 1536 MB of the card's memory (blurrier far textures, but the card stops running out: it was "Critical" all through 6.7)
+- The threads that copy back and compare are capped at 8 (they were 10 on your 12-thread CPU) so the new heap and texture threads get cores of their own
+- The shader translator changed, so the first run translates the shaders again (the cache notices this by itself; nothing to delete)
+- Settings: VICTORY_HEAP_WORKER, VICTORY_PARALLEL_REFRESH, VICTORY_SETTLE_ROOM, VICTORY_LOOKUP_CACHE, VICTORY_TEXTURE_BACK, VICTORY_CARD_WINDOWS_MB (512 from Try), VICTORY_TEXTURE_BUDGET_MB (1536 with the low preset), VICTORY_MWAIT_PATCH=0, VICTORY_WIDE_THREADS
