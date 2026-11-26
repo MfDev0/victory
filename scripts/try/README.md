@@ -262,6 +262,26 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      (`VICTORY_BIND_CACHE`), ranges of changed memory joined before the
      texture lookup;
    - the report lists which programs the dropped draws belong to.
+   5.0, every shader the 2026-11-25 16:10 report named fixed in the
+   translator:
+   - **f133e35efed2a48a translates**: a select on a constant lane mask and
+     a lane write are now taken when each 32-lane host wave runs on its own
+     (each thread knows its console lane, so it is exact). The same was all
+     that kept other 64-lane compute programs asking for 64-lane waves, which
+     the RTX 4060 refuses (6 pipelines in every run);
+   - **7f05ddab771799a9 translates**: the loop mask of lanes still looping
+     (`s_andn2 rest, rest, exec`) is read as the ballot of the lanes in its
+     block (`VICTORY_MASK_ELSEWHERE=0`: refused as before);
+   - **ceb5eb68cd99cb07 translates**: a buffer's record count is read from
+     the host view (0 for a view that is not there, which the program tests
+     to skip itself: the "buffer view that is not there" warning);
+   - a texture the game fills itself after its upload is now told as
+     information, not a warning (it was already uploaded again);
+   - **recommended settings by default**: the first 5.0 run puts every switch
+     back to the recommended one (whatever a lost card or an earlier version
+     switched off); **D** does it again any time;
+   - the refused pipelines' console shaders are in the report, for the next
+     round.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,

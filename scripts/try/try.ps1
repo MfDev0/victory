@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '4.9'
+$TryVersion = '5.0'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -40,11 +40,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -874,6 +874,20 @@ function Run-Newer {
 }
 
 $script:Config = Load-Config
+# 5.0: every run starts from the recommended settings once (what renders the
+# most on an 8 GB NVIDIA card: the stable relay, copy-back on several threads,
+# 64-lane programs translated, lazy copy-back, levels on demand, ambient light,
+# shadow fix, copies on the card, clean-up off, fps boost), whatever earlier
+# versions or a lost card switched off. D does the same at any time.
+function Reset-Recommended {
+    foreach ($k in @('fast', 'loop', 'wide', 'wavewide', 'new38', 'lazy', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy')) { $script:Config[$k] = '' }
+    $script:Config.defaults = '5.0'
+    Save-Config
+}
+if ($script:Config.defaults -ne '5.0') {
+    Reset-Recommended
+    Say 'settings: back to the recommended ones for 5.0 (D does this again any time)'
+}
 $script:UserLoop = $env:VICTORY_SHADER_LOOP_LIMIT
 $script:UserWaveWide = $env:VICTORY_WAVE_WIDE
 $script:UserDisplay = $env:VICTORY_DISPLAY_MODE
@@ -907,6 +921,7 @@ function Show-Commands {
         @('O', 'Shader clean-up', $(& $on ($c.opt -eq 'on')), 'off keeps walls, roofs and floors (they went missing with it on)'),
         @('W', 'Shadow fix', $(& $on ($c.shadowfix -ne 'off')), 'NVIDIA: keeps the ceiling and lit rooms (14 shadow programs translated safely)'),
         @('K', 'Copies on the card', $(& $on ($c.gpucopy -ne 'off')), 'faster: the game''s buffer copies run on the card (no waiting for it); off if things look wrong'),
+        @('D', 'Recommended', '', 'every switch back to the recommended settings (renders the most)'),
         @('Z', 'Plain mode', $(& $on ($c.plain -eq '1')), 'VIctory''s own defaults instead of Try''s settings (for comparing)'),
         @('P', 'Prepare again', '', 'compile all pipelines again with the game closed (done by itself after updates)'),
         @('Q', 'Quit', '', 'close VIctory Try')
@@ -918,7 +933,7 @@ function Show-Commands {
         Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3])
     }
     Write-Host '  ====================================================================================' -ForegroundColor Cyan
-    Write-Host '  Switches (C, R, F, B, M, H, A, L, O, W, K, Z) flip at once and are saved; Enter then runs the game with them.'
+    Write-Host '  Switches (C, R, F, B, M, H, A, L, O, W, K, Z, D) flip at once and are saved; Enter then runs the game with them.'
 }
 
 function Show-Version {
@@ -963,6 +978,7 @@ while ($true) {
             'K' { $c.gpucopy = $(if ($c.gpucopy -eq 'off') { '' } else { 'off' }) }
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
             'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }) }
+            'D' { Reset-Recommended; $c = $script:Config }
             default { $switched = $false }
         }
         if ($switched) {
