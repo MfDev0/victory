@@ -1,5 +1,7 @@
-VIctory Try 5.1
-- The 6 compute pipelines the RTX 4060 refused every run (64-lane waves) are now made as two 32-lane halves
-- Halves meet only where every lane runs, so no card freeze; their dispatches are no longer dropped
-- Lane permutes, wave-wide branches, 16-bit wave sums and lane masks handled per half in that form
-- Based on the split-wave fixes from the open VIctory pull requests (#1890, #233)
+VIctory Try 5.2
+- Fixes from codec_d's cool_fox (25 fps on NVIDIA) ported into our fork
+- Transmission prefilter shader 2da4beb3 now translates: no more black squares on eyes, glass and alpha
+- Faces no longer deform: 16-bit data of integer buffer views keeps its bits
+- Draws no longer lose their descriptor tables: slots come back as soon as the GPU is done
+- One bad indirect record no longer blanks every draw after it
+- More 64-lane shaders lowered for 32-lane NVIDIA cards; per-heap buffer refresh every frame

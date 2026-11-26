@@ -293,6 +293,20 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      are dropped (`VICTORY_WAVE_FORCE_SPLIT=0`: refused as before);
    - in that last form also: wave-wide branches, lane permutes, 16-bit wave
      sums and lane masks are taken within each half.
+   5.2, the fixes of codec_d's cool_fox (the build said to reach 25 fps on
+   NVIDIA cards), taken into this fork (not its engine):
+   - **2da4beb386509b77 translates** (transmission prefilter): the lanes an
+     access really runs for are known when join edges are pruned; its buffer
+     stayed empty, so eyes, glass and alpha came out as black squares;
+   - **faces no longer deform**: 16-bit data of integer buffer views keeps
+     its bits (the face network's output was noise), for table views too;
+   - **draws no longer lose their tables**: descriptor slots come back as soon
+     as the card has run a submission, and a draw out of slots waits for them;
+   - **one bad indirect record no longer empties the rest**
+     (`VICTORY_INDIRECT_REST=1`: as before);
+   - more 64-lane programs lowered for 32-lane cards (driver-compiled loops,
+     two scene kernels, lane spills), and each view heap gets its own buffer
+     refresh every frame.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
