@@ -64,6 +64,9 @@ pub(crate) struct Shader {
     /// Its result gets the least indirect light ([`crate::ambient`]).
     #[cfg(windows)]
     pub(crate) resolves_light: bool,
+    /// A pixel program of the title's decoration bake ([`bakes`]).
+    #[cfg(windows)]
+    pub(crate) bakes: bool,
     #[cfg(windows)]
     translated: OnceLock<Option<Translated>>,
     /// Whether its code walks the ray-tracing structures, once looked at
@@ -122,6 +125,8 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
                 resolves_light: bytes
                     .windows(crate::ambient::PROGRAM.len())
                     .any(|w| w == crate::ambient::PROGRAM),
+                #[cfg(windows)]
+                bakes: stage == "pixel" && bakes(bytes),
                 #[cfg(windows)]
                 translated: OnceLock::new(),
                 #[cfg(windows)]
@@ -1257,4 +1262,26 @@ mod tests {
             );
         }
     }
+}
+
+/// Whether a container is a pixel program of the title's decoration bake,
+/// by its name inside (`PS_DecorationBlend_*`, `PS_BakeDecorations_*`: 51
+/// of them). Try 6.13, ported from edsuuu/VI-BR-PORT 10ac68f9
+/// (GPL-3.0-or-later): a list of four hashes (`crate::draw`'s) missed the
+/// one the cutscene's faces are baked with (`PS_DecorationBlend_0011`,
+/// fcee612943c008e0): its sources were not on the card and the face came
+/// out black or flat.
+#[cfg(windows)]
+fn bakes(bytes: &[u8]) -> bool {
+    [&b"PS_DecorationBlend_"[..], b"PS_BakeDecorations_"]
+        .iter()
+        .any(|name| bytes.windows(name.len()).any(|w| w == *name))
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn bake_programs_are_known_by_name() {
+    assert!(bakes(b"..\0PS_DecorationBlend_0011_ff00f5de_Wrapped\0.."));
+    assert!(bakes(b"PS_BakeDecorations_0100_583f45fe_Wrapped"));
+    assert!(!bakes(b"PS_PedSkin_0001"));
 }

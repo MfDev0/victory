@@ -7781,16 +7781,25 @@ impl Host {
         }
         part = prep_part(3, part);
         let card = self.card_before(runs, flown, *submitted);
-        if let Some(check) = card.as_ref().and_then(|c| c.check.clone()) {
-            lists.push(Some(check));
-        }
+        // Try 6.13, from trustno1-coder/VIctory-NVIDIA d1fe0bd0 (Jeremy
+        // Goldberg): the compare goes to the queue on its own, after the
+        // lists. A title list can leave a buffer promoted to COPY_DEST, and
+        // buffers decay to COMMON only between ExecuteCommandLists calls: in
+        // the same call the compare read them in the wrong state (D3D12
+        // error 538, a fault NVIDIA's driver may take the card down for).
+        let check = card.as_ref().and_then(|c| c.check.clone()).map(|list| [Some(list)]);
         prep_part(4, part);
         let prepared = std::time::Instant::now();
         if late {
             *submitted += 1;
             // SAFETY: closed lists; the fence is ours.
             let signalled = unsafe {
-                self.queue.ExecuteCommandLists(&lists);
+                if !lists.is_empty() {
+                    self.queue.ExecuteCommandLists(&lists);
+                }
+                if let Some(check) = &check {
+                    self.queue.ExecuteCommandLists(check);
+                }
                 self.queue.Signal(&self.fence, *submitted)
             };
             self.card_sent();
@@ -7837,7 +7846,14 @@ impl Host {
             let started = std::time::Instant::now();
             // SAFETY: closed lists; the fence and event are ours.
             unsafe {
-                self.queue.ExecuteCommandLists(group);
+                if !group.is_empty() {
+                    self.queue.ExecuteCommandLists(group);
+                }
+                if i + 1 == groups.len()
+                    && let Some(check) = &check
+                {
+                    self.queue.ExecuteCommandLists(check);
+                }
                 self.card_sent();
                 let waited = self
                     .queue

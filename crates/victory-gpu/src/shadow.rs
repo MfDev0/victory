@@ -381,7 +381,9 @@ pub(crate) fn card_stats() -> [u64; 10] {
         }
         carded.iter().filter(|w| w.strong_count() > 0).count() as u64
     };
-    out[8] = CARD_BYTES[0].load(Ordering::Relaxed) + WINDOW_CARD_BYTES.load(Ordering::Relaxed);
+    out[8] = CARD_BYTES[0].load(Ordering::Relaxed)
+        + WINDOW_CARD_BYTES.load(Ordering::Relaxed)
+        + WINDOW_BAR_BYTES.load(Ordering::Relaxed);
     out[9] = CARD_BYTES[1].load(Ordering::Relaxed);
     out
 }
@@ -583,6 +585,9 @@ fn window_upload() -> bool {
 /// [`window_upload`] says so and a window of `size` bytes may go to the
 /// card ([`window_card_room`]).
 fn window_upload_for(size: u64) -> Option<(ID3D12Resource, *mut u8)> {
+    if window_bar_most() > 0 {
+        return window_bar_for(size);
+    }
     if !window_upload() || !host()?.gpu_upload() {
         return None;
     }
@@ -592,6 +597,83 @@ fn window_upload_for(size: u64) -> Option<(ID3D12Resource, *mut u8)> {
     let made = host()?.gpu_upload_buffer(size);
     if made.is_none() {
         WINDOW_CARD_BYTES.fetch_sub(size, Ordering::Relaxed);
+    }
+    made
+}
+
+/// The most bytes of windows outside buffers that go to the card's memory
+/// through a resizable BAR on their own (`VICTORY_WINDOWS_BAR_MB`; 0, the
+/// default, none): one buffer in a GPU upload heap the CPU fills and shaders
+/// read, with no CPU side in the PC's memory, no copy to send and no list of
+/// changes, and without `VICTORY_CARD_WINDOWS_MB` or card copies on.
+///
+/// Try 6.13, ported from trustno1-coder/VIctory-NVIDIA cda4987a and 85a529b6
+/// (Indy2l; GPL-3.0-or-later). Measured there on an RTX 3060 PC with 16 GB of
+/// RAM: the `0x8007000E` out-of-memory and the driver fault about a minute in
+/// went away, the memory shared with the card stayed at 4.4 GB instead of
+/// growing to 7.5, and the frame rate went from 1.6-3 to 10-12. Where the
+/// device has no GPU upload heaps (resizable BAR off in the firmware) nothing
+/// changes. Windows go there while a fifth of the card's budget is free.
+/// Try's script sets 3072 on PCs with less than 24 GB of RAM.
+fn window_bar_most() -> u64 {
+    static MOST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *MOST.get_or_init(|| {
+        let most = std::env::var("VICTORY_WINDOWS_BAR_MB").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
+        // (`VICTORY_GPU_UPLOAD=0`, as after a lost card: none either.)
+        let most = if std::env::var_os("VICTORY_GPU_UPLOAD").is_some_and(|v| v == "0") { 0 } else { most };
+        if most > 0 {
+            tracing::info!(
+                most_mb = most,
+                supported = host().is_some_and(|h| h.gpu_upload()),
+                "windows outside buffers in the card's memory through a resizable BAR (VICTORY_WINDOWS_BAR_MB; nothing changes where GPU upload heaps are not supported)"
+            );
+        }
+        most << 20
+    })
+}
+
+/// Bytes alive of windows in the card's memory through a BAR
+/// ([`window_bar_most`]).
+static WINDOW_BAR_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// A window's buffer of `size` bytes in a GPU upload heap and where it is
+/// mapped, if it is to be there ([`window_bar_most`]).
+fn window_bar_for(size: u64) -> Option<(ID3D12Resource, *mut u8)> {
+    let host = host()?;
+    if !host.gpu_upload() {
+        return None;
+    }
+    static COUNTS: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+    let say = |which: usize, what: &str| {
+        let n = COUNTS[which].fetch_add(1, Ordering::Relaxed) + 1;
+        if n == 1 || n.is_multiple_of(256) {
+            tracing::info!(
+                "windows through the BAR (VICTORY_WINDOWS_BAR_MB={}): {what} one of {} KiB; so far {} there ({} MB), {} turned down for the card's room, {} for the most asked",
+                window_bar_most() >> 20,
+                size >> 10,
+                COUNTS[0].load(Ordering::Relaxed),
+                WINDOW_BAR_BYTES.load(Ordering::Relaxed) >> 20,
+                COUNTS[1].load(Ordering::Relaxed),
+                COUNTS[2].load(Ordering::Relaxed)
+            );
+        }
+    };
+    if let Some([budget, used, ..]) = host.video_memory()
+        && used + size > budget / 10 * 8
+    {
+        say(1, "no room on the card for");
+        return None;
+    }
+    if WINDOW_BAR_BYTES.fetch_add(size, Ordering::Relaxed) + size > window_bar_most() {
+        WINDOW_BAR_BYTES.fetch_sub(size, Ordering::Relaxed);
+        say(2, "the most is reached at");
+        return None;
+    }
+    let made = host.gpu_upload_buffer(size);
+    if made.is_none() {
+        WINDOW_BAR_BYTES.fetch_sub(size, Ordering::Relaxed);
+    } else {
+        say(0, "put");
     }
     made
 }
@@ -2673,7 +2755,12 @@ impl Drop for Shadow {
         }
         let window = self.window;
         if self.uploaded != 0 {
-            WINDOW_CARD_BYTES.fetch_sub(self.uploaded, Ordering::Relaxed);
+            // (Counted where `window_upload_for` counted it.)
+            if window_bar_most() > 0 {
+                WINDOW_BAR_BYTES.fetch_sub(self.uploaded, Ordering::Relaxed);
+            } else {
+                WINDOW_CARD_BYTES.fetch_sub(self.uploaded, Ordering::Relaxed);
+            }
         }
         if let Some(card) = &mut self.card {
             if window {

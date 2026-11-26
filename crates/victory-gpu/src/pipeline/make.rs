@@ -83,6 +83,9 @@ pub(crate) struct Pending {
     /// ([`for_formats`]): a chain from the title's pipeline, one link per
     /// set of formats met, never shortened.
     variant: OnceLock<Arc<Pending>>,
+    /// The first title frame in which a draw or dispatch waited for it
+    /// (`u64::MAX`: none yet; [`wait_once`]).
+    waited_frame: AtomicU64,
 }
 
 // SAFETY: D3D12 objects are free-threaded; the graphics state (whose input
@@ -125,6 +128,7 @@ impl Pending {
             listed: AtomicBool::new(false),
             asks: AtomicU64::new(0),
             handed: AtomicBool::new(false),
+            waited_frame: AtomicU64::new(u64::MAX),
         }
     }
 
@@ -206,6 +210,20 @@ fn wait_budget() -> Duration {
     })
 }
 
+/// Try 6.13, from edsuuu/VI-BR-PORT dc3fa30b and trustno1-coder/VIctory-NVIDIA
+/// 77e13a97 (the problem of fxceless issue #1181): whether a pipeline still
+/// being made is waited for in the first frame that asks for it only. A
+/// pipeline whose make takes longer than the budget (a driver compile of
+/// seconds) otherwise cost the whole budget in every frame it was in view:
+/// the picture stood still, half a second a frame, until the camera turned
+/// away. After that frame its draws get a stand-in or are dropped until it
+/// is made, as past any frame's budget. On by default;
+/// `VICTORY_PIPELINE_WAIT_ONCE=0` waits in every frame as before.
+fn wait_once() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_PIPELINE_WAIT_ONCE").is_none_or(|v| v != "0"))
+}
+
 /// Pipelines queued and not made yet.
 static WAITING: AtomicU64 = AtomicU64::new(0);
 
@@ -227,7 +245,16 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
     if p.made.get().is_none() {
         p.asks.fetch_add(1, Ordering::Relaxed);
         start(p, REQUESTED);
-        wait(p, crate::frame::current());
+        let frame = crate::frame::current();
+        // Waited for in the first frame that asks for it only
+        // ([`wait_once`]); later frames go on without it.
+        let first = match p.waited_frame.compare_exchange(u64::MAX, frame, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => frame,
+            Err(f) => f,
+        };
+        if first == frame || !wait_once() {
+            wait(p, frame);
+        }
         if p.made.get().is_none() {
             return stand_in(p);
         }
@@ -381,9 +408,20 @@ pub(crate) fn now(p: &Arc<Pending>) -> bool {
 }
 
 /// At the title's creation of a pipeline: starts it at once if an earlier
-/// run drew with it (during loading, so the world's first frames find it).
+/// run drew with it (during loading, so the world's first frames find it),
+/// and (Try 6.13, edsuuu/VI-BR-PORT b9d4f96c) every compute pipeline: its
+/// first dispatch waits for it, and a frame that first dispatches hundreds
+/// of them (the world's) waited for each in turn. Most come out of the
+/// pipeline library at once. `VICTORY_PIPELINE_EARLY_COMPUTE=0`: only the
+/// ones an earlier run drew with, as before.
 pub(crate) fn early(p: &Arc<Pending>) {
-    if !p.shaders.is_empty() && super::library::wanted_early(&p.key) {
+    static COMPUTE: OnceLock<bool> = OnceLock::new();
+    // (Only with workers: without them a start is a make on the title's
+    // own thread.)
+    let compute = p.graphics.is_none()
+        && workers()
+        && *COMPUTE.get_or_init(|| std::env::var_os("VICTORY_PIPELINE_EARLY_COMPUTE").is_none_or(|v| v != "0"));
+    if !p.shaders.is_empty() && (compute || super::library::wanted_early(&p.key)) {
         super::library::EARLY.fetch_add(1, Ordering::Relaxed);
         start(p, EARLY);
     }

@@ -568,6 +568,17 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.13 ("NVIDIA fixes"; plan and to-do in `scripts/try/PLAN.md`):
+   - `VICTORY_WINDOWS_BAR_MB` (trustno1-coder/VIctory-NVIDIA, Indy2l):
+     windows outside buffers in a GPU upload heap (Resizable BAR), own cap,
+     refused past 80% of the card; Try sets it under 24 GB of RAM (20% of
+     cards under 8 GB, 30% above, max 3072; MAX 35%; config `barwin`).
+   - `VICTORY_TEXBACK_ASYNC` (on; Indy2l): texture read-backs written by a
+     thread of their own.
+   - `VICTORY_PIPELINE_WAIT_ONCE` (on) and `VICTORY_PIPELINE_EARLY_COMPUTE`
+     (on) (edsuuu/VI-BR-PORT).
+   - Decoration bake programs by name; texture change lists compacted at
+     2^18; card compare on its own `ExecuteCommandLists` (nv d1fe0bd0).
    6.12 ("all-out"; plan and to-do in `scripts/try/PLAN.md`):
    - **MAX: all-out mode** (`VICTORY_TRY_ALL_OUT=1` too): VIctory's caps
      lifted to what the PC has but ~1% (threads-1 for copy-back, detiling

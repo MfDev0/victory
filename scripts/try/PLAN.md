@@ -1,4 +1,4 @@
-# VIctory Try: plan and to-do (6.10, updated for 6.12)
+# VIctory Try: plan and to-do (6.10, updated for 6.13)
 
 Goal: the whole picture rendered, **20+ fps** on the reporter's PC: RTX 4050
 Laptop (5921 MB, budget about 5153 MB), 12 threads, about 16 GB of RAM,
@@ -47,6 +47,61 @@ below are checked again.
       66afb2b4; parser only so far).
 - [x] Logs: `upscaler PC FidelityFX ...` line at start, providers offered
       and chosen, every 600 upscales how many were jittered (both paths).
+
+## Done in 6.13 ("NVIDIA fixes"; deep search of the NVIDIA forks)
+
+Searched: trustno1-coder/VIctory-NVIDIA (`nv/main` 6a31e431), edsuuu/VI-BR-PORT
+(`br/main` 2aa1895d), Itsbatt/victory-unified, TaynanGT/Vice-Tay. Ported:
+
+- [x] **Memory windows through Resizable BAR** (nv cda4987a + 85a529b6,
+      Indy2l): `VICTORY_WINDOWS_BAR_MB` in `shadow.rs` (`window_bar_most`,
+      `window_bar_for`): windows outside buffers are one buffer in a GPU
+      upload heap, no copy in the PC's memory, no list of changes; own
+      counter, not tied to `VICTORY_CARD_WINDOWS_MB`; off with
+      `VICTORY_GPU_UPLOAD=0`; refused past 80% of the card's budget.
+      Measured there: 16 GB RTX 3060 PC, `0x8007000E` and the driver fault
+      gone, shared memory 4.4 GB instead of 7.5, 1.6-3 -> 10-12 fps. Try sets
+      it on PCs under 24 GB of RAM: 20% of the card under 8 GB (about
+      1184 MB on the 4050), 30% above, at most 3072; MAX 35%. A lost card
+      (with the BAR line in the log) turns it off next (config `barwin`).
+      Log: `windows outside buffers in the card's memory through a resizable
+      BAR` (supported=true?) and `windows through the BAR (...)`.
+- [x] **Texture read-backs on their own thread** (nv 2d1dc382, Indy2l):
+      `texback::land` only copies the texels out; the lock wait, tiling and
+      write go to the `texture read-backs` thread, newest copy only. There:
+      124-416 ms landing stalls while the world streamed on 16 GB.
+      `VICTORY_TEXBACK_ASYNC=0` goes back. Log: `texture readback landed`
+      now carries waited_ms / worked_ms / replaced.
+- [x] **A slow pipeline is waited for in one frame only**
+      (`VICTORY_PIPELINE_WAIT_ONCE`, on; br dc3fa30b, nv 77e13a97): no more
+      half-second freezes every frame while a driver compile runs.
+- [x] **Compute pipelines start at creation** (br b9d4f96c;
+      `VICTORY_PIPELINE_EARLY_COMPUTE=0` goes back), only with workers.
+- [x] **Decoration bake found by name** (br 10ac68f9): `PS_DecorationBlend_*`
+      and `PS_BakeDecorations_*` get their sources uploaded first (cutscene
+      faces came out black).
+- [x] **Texture change lists compacted, not cleared** (br 87dc3075 +
+      47fa23c9, myokex): 2^18 ranges, a full list joins neighbours instead
+      of forgetting streamed textures.
+- [x] **Card compare submitted on its own** (nv d1fe0bd0, Jeremy Goldberg):
+      D3D12 error 538 (buffers decay to COMMON between ExecuteCommandLists).
+- [x] (6.12 open question) `$Src` is defined in try.ps1 (line 53), so the
+      rt-off list path resolves.
+
+Looked at and left (and why):
+- br a46bbdc6 + 689be4d2 (wave64 programs take the wave-wide form on
+  32-lane hosts): our wide form lost the card in runs 121-124; needs the
+  295-line barrier fix ported and tested first. Next round.
+- br fd36f4a4 (movie planes per-list upload): intro video steps back only;
+  later.
+- br 44ead3c5 SHOW_AFTER default: our descriptor host has no show-after yet.
+- br 389b9747 (1 MiB / 1 GiB card buffers on 8-12 GB): our 6 GB card was at
+  4822/5153 MB; MAX already raises it. Try after the 6.13 report.
+- br 5c17c8c8 (#1241 alias source): already in our tree.
+- br 72903b29 (64 MB pipeline worker stack): already in our tree.
+- nv c05b44b3 (ambient depth SRV): our ambient pass differs; check if the
+  debug layer shows error 646.
+- nv 12b1d16d (HLE mouse): if the user wants mouse camera.
 
 ## Done in 6.12 ("all-out")
 
@@ -170,7 +225,14 @@ parallel refresh) targets rows 2-3; the 6.11 report will show how much.
 
 ## To do, in order
 
-### 1. Read the 6.11 report (needs the user's zip)
+### 1. Read the 6.13 report (needs the user's zip)
+- [ ] `through a resizable BAR` supported=true? `windows through the BAR`
+      counts and MB; memory pressure and `shared with the card` against 6.7
+      (368 MB free, Critical); any 0x8007000E or device removed.
+- [ ] `texture readback landed` waited_ms against worked_ms; landing line.
+- [ ] Pipeline waits per frame (one frame per slow pipeline now).
+
+### 1b. Read the 6.11 report (needs the user's zip)
 - [ ] `upscaler` line: PC FidelityFX used? `FidelityFX: upscalers the PC
       build offers` (expect 3.1.x on the 4050), `upscaler context on the host`,
       `recorded the title's temporal dispatch` with jitter not 0.

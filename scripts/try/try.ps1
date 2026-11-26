@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.12'
+$TryVersion = '6.13'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -70,11 +70,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -947,6 +947,11 @@ function Set-AllOut {
     foreach ($k in $set.Keys) { if ($null -eq $script:UserAll[$k]) { [Environment]::SetEnvironmentVariable($k, [string]$set[$k], 'Process') } }
     # No cap on textures (the low preset's 1536 MB).
     if ($null -eq $script:UserAll['VICTORY_TEXTURE_BUDGET_MB']) { [Environment]::SetEnvironmentVariable('VICTORY_TEXTURE_BUDGET_MB', $null, 'Process') }
+    # 6.13: memory windows through the BAR up to 3072 MB or 35% of the card
+    # (20-30% normally), where they are on at all (under 24 GB of memory).
+    if ($script:BarWindowsMb -gt 0 -and $null -eq $script:UserAll['VICTORY_WINDOWS_BAR_MB'] -and $vram -gt 0) {
+        $env:VICTORY_WINDOWS_BAR_MB = [string]([Math]::Min(3072, [int]($vram * 0.35)))
+    }
     Say "ALL-OUT: this PC has $threads threads, $ramMb MB of memory ($virtMb MB with the page file), a $vram MB card; the game gets $use threads at high priority, textures up to 99% of the card, no texture cap, memory guard at $ramCrit MB free   (MAX switches)"
     Bad '         all-out runs at the edge of this PC: if it stutters hard, pages to disk or loses the card, press MAX to go back.'
 }
@@ -1022,6 +1027,29 @@ function Set-RunEnv {
     # staging straight into the card's memory while the card has room.
     $script:RebarFromTry = $c.rebar -ne 'off'
     [Environment]::SetEnvironmentVariable('VICTORY_GPU_UPLOAD', $(if ($script:RebarFromTry) { $null } else { '0' }), 'Process')
+    # 6.13: on PCs with less than 24 GB of memory, the game's memory windows
+    # go straight into the card's memory through the BAR (one copy, none in
+    # the PC's memory), from trustno1-coder/VIctory-NVIDIA (Indy2l): on a
+    # 16 GB RTX 3060 PC the out-of-memory 0x8007000E and the driver fault a
+    # minute in went away, shared memory stayed at 4.4 GB instead of 7.5 and
+    # fps went from 1.6-3 to 10-12. Up to 3072 MB, and at most 30% of the
+    # card here (20% on cards under 8 GB: about 1.2 GB of a 6 GB card, whose
+    # textures and screens already filled it in the 6.7 report), so textures
+    # keep their room; past 80% of the card no window goes there anyway.
+    # Nothing changes without Resizable BAR; off with it after a lost card.
+    $script:BarWindowsMb = 0
+    if ($script:RebarFromTry -and $c.barwin -ne 'off') {
+        $ramNow = [int64](Ram-Info)[0]
+        $vramNow = $(if ($c.vram) { [int]$c.vram } else { Card-Vram })
+        if ($ramNow -gt 0 -and $ramNow -lt 24576) {
+            $share = $(if ($vramNow -gt 0 -and $vramNow -lt 8000) { 0.20 } else { 0.30 })
+            $script:BarWindowsMb = $(if ($vramNow -gt 0) { [Math]::Min(3072, [int]($vramNow * $share)) } else { 1024 })
+        }
+    }
+    if ($null -eq $script:UserAll['VICTORY_WINDOWS_BAR_MB']) {
+        [Environment]::SetEnvironmentVariable('VICTORY_WINDOWS_BAR_MB', $(if ($script:BarWindowsMb -gt 0) { [string]$script:BarWindowsMb } else { $null }), 'Process')
+    }
+    Say "memory windows on the card through Resizable BAR: $(if ($env:VICTORY_WINDOWS_BAR_MB) { "up to $($env:VICTORY_WINDOWS_BAR_MB) MB (used only if the card offers it; the log says 'through a resizable BAR')" } else { 'off (24 GB or more of memory, or BAR off after a lost card)' })"
     # 6.6: with the relay, what the card's compares flag comes down to the PC
     # inside the same flight, not with a list of its own queued behind newer
     # flights (the 6.5 report: 124-156 ms a frame of that thread waiting for
@@ -1754,6 +1782,10 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
             # 6.12: all-out mode is the first thing to go back (it fills the card to 99%).
             $c.allout = ''
             Say 'next run: all-out mode is off (the card was filled to its edge; MAX switches it again).'
+        } elseif ($script:BarWindowsMb -gt 0 -and (& $count 'windows through the BAR') -gt 0) {
+            # 6.13: then the memory windows on the card through the BAR.
+            $c.barwin = 'off'
+            Say 'next run: memory windows stay in the PC''s memory (6.13 Resizable BAR windows off).'
         } elseif ($c.fast -eq '1') {
             $c.fast = ''
             Say 'next run: back to the stable relay speed mode (F switches again).'
@@ -1906,6 +1938,7 @@ if (OwnEngine) {
     if ($changed -or -not (Test-Path (Ours-Exe))) { if (-not (Build-All)) { exit 1 } }
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
 if (OwnEngine) {
+    Say '6.13: NVIDIA fixes from the other forks: on PCs under 24 GB of memory the game''s memory windows go straight into the card through Resizable BAR (out-of-memory and the driver crash gone, 1.6-3 -> 10-12 fps on a 16 GB RTX 3060 PC; Indy2l), texture read-backs on their own thread (no more 100-400 ms landing stalls while the world streams), a slow shader is waited for in one frame only (no more freezes while it compiles), compute shaders start compiling as soon as the game makes them, face decorations found by name (no black faces in cutscenes), streamed textures are no longer forgotten when the change list fills, and the card''s buffer compare goes out on its own (D3D12 error 538).'
     Say '6.12: MAX: all-out mode (no caps: every CPU thread but one at high priority, textures up to 99% of the card, the memory guard at 1% free, read from this PC); the ray-tracing light passes that made rooms and reflections white and hazy are left out (fewer pipelines to compile too), and NaN colours no longer spread into black or blocky patches (both from trustno1-coder/VIctory-NVIDIA).'
     Say '6.11: shader stutter: the pipeline library is read into memory ahead on 16 GB PCs too (it was skipped: every pipeline in play waited on the disk), every shader of the game translated once per build with the game closed; joined submissions, copy-back split finer over the cores (lepotane), anisotropic filtering keeps point mips (AvatarManz).'
     Say '6.10: this fork''s engine again (the base stays; the others'' fixes come into it): AMD''s PC FidelityFX upscaler makes the picture (FSR 3.1 on NVIDIA; T switches), sharper own upscaler without blocks on lit surfaces, shaders AMD''s compiler made are read, the game''s debug shaders stored without packing too.'
