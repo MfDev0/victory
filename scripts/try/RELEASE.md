@@ -1,9 +1,7 @@
-VIctory Try 6.9 "AvatarManz engine" (the engine of PortWatch #1 and #2 is now the default)
-- The default engine is AvatarManz's, in Belobug's branch: avatarmanz/VIctory-7900XTX (16-22 fps, 45 ms a frame on Series S on an RX 7900 XTX) plus Belobug's three fixes (#1 on PortWatch, about 22 fps): trees and signs stop flickering, texture sizes follow the card's free memory (what lets a 6 GB card hold it), and PC FSR 4.1.2. N switches back to this fork's engine or the 8 GB one
-- It runs with AvatarManz's own settings: list calls on eight threads, submissions joined, textures on their own copy queue, fills done on the card. Its five renderer patches are on (Y turns them off)
-- No more shaders compiling while you play: with the game closed, every shader of the game is translated once per build, and every pipeline your earlier runs drew with is made. The first time takes a few minutes
-- New switches for this engine: B ray tracing (lit rooms and right reflections, about a third slower), X textures (auto, sharp, low), A ambient light, F above 30 fps, Z safe mode
-- AvatarManz's engine takes 30-46 GB of RAM plus page file for now. VIctory Try shows how much your PC has before each run. If the game closes by itself, set the page file to System managed (or 49152 MB) and restart
-- After a lost card the next run is safer by itself: ray tracing off, then safe mode, then the patches off
-- The report zip now also has settings.txt (every setting, RAM, page file, card) and prepare.log
-- This fork's engine gets AvatarManz's real output size switch (VICTORY_OUTPUT). The game ignored VICTORY_DISPLAY_MODE
+VIctory Try 6.10 "own engine + AMD upscaler" (this fork's engine is the base again; the best fixes of the others come into it)
+- This fork's engine is the default again, for good. AvatarManz's and the 8 GB engine stay on N only for comparing
+- The game's upscale (Series S renders 1280x720 and scales to 1080p) is now made by AMD's real PC FidelityFX upscaler, as on Belobug's engine (PortWatch #1, from DexNom): FSR 3.1 on NVIDIA cards, FSR 4 on new Radeons. Lit and reflecting surfaces should no longer turn into blocks, hair and edges stay sharp. VIctory Try downloads AMD's signed file once (57 MB from AMD's GitHub) and checks its signature every run
+- T switches the upscaler: FSR (default) / own / off. If AMD's upscaler cannot run a frame, VIctory's own makes it (never a black screen)
+- VIctory's own upscaler (T = own) is sharper and no longer draws the low-resolution grid into bright surfaces
+- Shaders AMD's compiler made, and the game's debug shaders stored unpacked, are read now (from AvatarManz)
+- The log says which upscaler ran, which AMD versions your card was offered, and how many frames carried the camera jitter the upscaler needs

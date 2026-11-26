@@ -115,6 +115,26 @@ extern "system" fn dispatch(context: *mut *mut c_void, desc: *const Header) -> u
                     "upscale dispatch"
                 );
             }
+            // Try 6.10: how many upscales carried a jitter, every 600 (a
+            // temporal upscale adds detail only from jittered frames; the
+            // first four of the 6.7 report had none).
+            static JITTERED: AtomicU32 = AtomicU32::new(0);
+            if d.jitter != [0.0, 0.0] {
+                JITTERED.fetch_add(1, Ordering::Relaxed);
+            }
+            let n = SEEN.load(Ordering::Relaxed);
+            if n.is_multiple_of(600) {
+                tracing::info!(
+                    dispatches = n,
+                    jittered = JITTERED.load(Ordering::Relaxed),
+                    jitter = ?d.jitter,
+                    render = ?d.render,
+                    upscale = ?d.upscale,
+                    sharpening = d.enable_sharpening,
+                    reset = d.reset,
+                    "upscale dispatches so far (our temporal resolve)"
+                );
+            }
             #[cfg(windows)]
             if victory_gpu::list::upscale_temporal(
                 d.list,

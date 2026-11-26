@@ -1,113 +1,96 @@
-# VIctory Try: plan and to-do (from 6.9)
+# VIctory Try: plan and to-do (from 6.10)
 
 Goal: the whole picture rendered, **20+ fps** on the reporter's PC: RTX 4050
-Laptop (5921 MB, budget about 5153 MB), 12 threads, about 16 GB of RAM (8 GB
-"shared" in the 6.7 log), Series S profile, game 1.0.2.1.
+Laptop (5921 MB, budget about 5153 MB), 12 threads, about 16 GB of RAM,
+Series S profile, game 1.0.2.1.
 
-How the loop works: each version below ships, the user runs it, sends the
-report zip (now with `settings.txt` and `prepare.log` inside), we read it, fix,
-ship the next one. Every fork's progress is checked each round (PortWatch,
-then the forks below), and what helps is taken with its author named.
+**Base: this fork's own engine, always.** (6.9 made AvatarManz's engine the
+default; the owner turned that down: the base never changes again.) The
+other forks' most important fixes are ported into our engine one at a time,
+each with its author named, each with the log line that shows it working.
+avm/8GB stay selectable with N for comparing only.
+
+How the loop works: a version ships, the user runs it and sends the report
+zip, we read it, fix, ship the next. Every round PortWatch and the forks
+below are checked again.
 
 ## Where everyone stands (2026-11-26, PortWatch + their READMEs)
 
-| Fork | Card | fps | Notes |
+| Fork | Card | fps | What gets them there |
 |---|---|---|---|
-| Belobug/VIctory-Belobug-AMD (`a-publier`) | RX 9070 XT | ~22 | #1. **= avatarmanz c9c932c + 3 commits** (flicker fix, VRAM-aware texture cap, FSR 4.1.2) |
-| avatarmanz/VIctory-7900XTX | RX 7900 XTX | 16-22 (45 ms Series S) | #2. Renderer patches 1-7, THIN lists, copy-queue textures, warm/shaders ahead. 30-46 GB RAM, 10.5 GB VRAM |
-| DexNom/VIctory | RX 7900 XTX | 3-4 | Best picture: ray tracing, cube gradients, sparse textures. Taken by avm already |
-| stellarr-studio/kelvaroq | RTX 5080 | ~10 | Unified memory layer "in testing", not public yet: watch it |
-| fxceless/victory-fork | RTX 4070 | 8-9 | Merged whole in 6.8 (e4245f3); avm started from it (a26859f) and is 556 commits ahead |
-| this fork (own engine) | RTX 4050L | 1.6-3.3 (6.7) | Preparing 84 ms, heap passes 92 ms, relay wait ~225 ms a frame |
+| Belobug (`a-publier`) | RX 9070 XT | ~22 | avm c9c932c + prelude uploads (flicker), VRAM-aware texture cap, **PC FSR via the host DLL** |
+| avatarmanz/VIctory-7900XTX | RX 7900 XTX | 16 (45 ms Series S) | renderer ports 1-7 (CBV -4.7 ms, guard -2, journal -1..-3), THIN list calls on 8 threads, copy-queue textures + show-after, shaders/pipelines made ahead (`warm`) |
+| DexNom/VIctory | RX 7900 XTX | 3-4 | best picture: ray tracing, cube gradients, the PC FSR bridge (ab34a8b2) |
+| kelvaroq | RTX 5080 | ~10 | CPU submission-bound; unified memory layer not public yet |
+| this fork | RTX 4050L | 1.6-3.3 (6.7) | preparing 84 ms, heap passes 92 ms, relay wait ~225 ms a frame |
 
-Conclusion: the gap between our own engine and avm's is 556 commits and
-~87,000 lines on another base. Porting it piece by piece into ours, with no
-compiler here and CI as the only check, would take weeks and break things.
-**6.9 builds and runs avm's engine itself (Belobug's branch of it) as the
-default**, the same way 5.9 ran soldsawn's 8 GB engine, and tunes it for a
-6 GB card. Our engine stays one key away (N) and keeps getting the pieces
-that port cleanly.
+## Done in 6.10
 
-## Done in 6.9
+- [x] Own engine is the default again (one-time switch back; N: own -> avm -> 8GB).
+- [x] **PC FidelityFX upscaler** (Belobug cd8dfc06 from DexNom ab34a8b2):
+      `victory-hle/modules/fidelityfx.rs` serves the title's
+      `amd_fidelityfx_loader_xbox.dll` with AMD's signed
+      `amd_fidelityfx_upscaler_dx12.dll` on the host GPU. Changed for us:
+      any profile (Series S 1280x720 -> 1920x1080 too, not only their 4K
+      patch), provider chosen FSR 4.1.2 -> newest other (FSR 3.1 on NVIDIA),
+      the next provider tried if the card refuses one, and a dispatch the PC
+      DLL cannot record falls back to our temporal resolve (never black).
+      `victory-gpu/external.rs` records it on our plain host list. Try
+      downloads the DLL once (57 MB, AMD's GitHub, signature checked).
+      Expected: no blocky lit/reflecting surfaces, sharp hair, real jitter
+      accumulation. T: FSR / own / off.
+- [x] Own temporal resolve (fallback, T=own): Catmull-Rom colour sample,
+      sharpening against a smooth tent blur (the old 3x3 mean of the nearest
+      rendered texel drew the 720p grid into bright surfaces), sharpen 10 %.
+- [x] avm's native shader reader: shaders stored without XBCH (kind 0x0c,
+      avm e70e031c) and the FSPX/ACCC layout (AMD-compiled shaders, avm
+      66afb2b4; parser only so far).
+- [x] Logs: `upscaler PC FidelityFX ...` line at start, providers offered
+      and chosen, every 600 upscales how many were jittered (both paths).
 
-- [x] AvatarManz engine as the default engine (N: avm -> own -> 8GB). Built
-      with their command (`cargo build --locked --profile diag -p victory
-      --features diagnostics`), CPU-tuned first, plain if that fails; falls
-      back to our engine if it does not build.
-- [x] Their `scripts/play.ps1` settings, all of them (THIN, JOIN_PARTS=8,
-      UPLOAD_AHEAD, RELAY=2, CARD_STEPS=2, SHOW_AFTER, ...).
-- [x] Renderer patches 1, 2, 5, 6, 7 on (`VICTORY_PORT_*`; byte-checked;
-      47.3 -> 44.9 ms there). Y turns them off.
-- [x] **Shaders no longer compiled while playing**: `victory shaders` (every
-      shader of the game translated, once per build) and `victory warm --used`
-      (every pipeline earlier runs drew with, made in separate processes)
-      run with the game closed; `VICTORY_PIPELINE_BOOK=1` records them.
-- [x] Picture switches: B ray tracing (lit rooms, right reflections), X
-      textures (auto by free VRAM / sharp 2048 / low 512), A ambient
-      (0.8 default), F above 30 fps, Z their -Safe set, R output size
-      (Series X, `VICTORY_OUTPUT`).
-- [x] Fallbacks after a lost card: RT off -> Safe -> patches off. Out of
-      memory is detected and the page-file fix is printed.
-- [x] RAM + page file checked before each run (their engine needs 30-46 GB
-      of commit for now; a 16 GB PC needs a big page file).
-- [x] CI: `engine-avm.yml` checks Belobug a-publier and avatarmanz main
-      build on Windows with Try's exact command, every 6 hours too.
-- [x] Our engine: avm's `VICTORY_OUTPUT` / render scale / upscaler patches
-      (victory-loader `resolution.rs`). Note: `VICTORY_DISPLAY_MODE`, which
-      6.8's low preset set, does not change the title's size (avm found the
-      title uses its own mode list).
-- [x] Logs: report zip has `settings.txt` (every VICTORY_ setting, RAM,
-      commit limit, card MB, threads) and `prepare.log`.
+## To do, in order
 
-## To do, in order (each needs a report from the PC to measure)
+### 1. Read the 6.10 report (needs the user's zip)
+- [ ] `upscaler` line: PC FidelityFX used? `FidelityFX: upscalers the PC
+      build offers` (expect 3.1.x on the 4050), `upscaler context on the host`,
+      `recorded the title's temporal dispatch` with jitter not 0.
+- [ ] If `did not record ... our temporal resolve instead`: which resource
+      or state failed (the `index`/`state` warning) and fix `host_state` /
+      `legal_state` for it.
+- [ ] fps lines, `memory pressure`, pipelines "being made" over time.
 
-### 1. Make the avm engine run on 6 GB / 16 GB (6.9 report)
-- [ ] Read the first 6.9 log: did it build, reach the world, fps, card
-      memory (Belobug's HUD lines), private memory, crashes.
-- [ ] If it runs out of RAM: find the switches that cut avm's memory
-      (lists' allocators 9 GB, windows 7 GB, uploads 4 GB per findings.md;
-      `VICTORY_MEMORY_MAP=1` lists it) and set them for 16 GB.
-- [ ] If VRAM overflows (frames > 200 ms, "Critical"): texture cap low,
-      `VICTORY_CARD_WINDOWS_MB`, `VICTORY_TEXTURE_BUDGET_MB`.
-- [ ] Threads: THIN's 8 + JOIN_PARTS 8 on a 6-core/12-thread laptop CPU: try
-      4/6 and compare the submit thread's time.
+### 2. Picture
+- [ ] "PS3 characters": the 6.7 card held only 263 MB of title textures
+      (1.1 of 5.1 GB used): not a VRAM cap. Suspects: the title's streamer
+      starved by 2-3 fps (fixes itself with speed), LEVELS_ON_DEMAND leaving
+      top levels without tiles (check `uploads that left a held level
+      without tiles` in the stats), TEXTURE_BUDGET_MB=1536 of the low preset.
+      Log to add: per-minute count of textures shown below their top level.
+- [ ] "Wrong light reflections": SKIP_RT=1 (boost B) has no ray-traced
+      reflections. Measure B off once on the 4050; port avm's light settle
+      (`9576c45`) and lightprobe/texlate (`b4ba4bb`).
+- [ ] Belobug magenta probe filter (e9428969), Belobug flicker fix
+      (prelude uploads, 5d6bd841).
+- [ ] Rest of the ACCC port (avm 66afb2b4: dot4, pk_fmac, src_scc, raw
+      buffer descriptors, s_bfm samplers) so the title's own console FSR
+      translates when the PC DLL is missing.
 
-### 2. Frame rate to 20+ (RTX 4050L is ~40-50 % of a 7900 XTX)
-- [ ] Series S profile + output 1664x936 (`VICTORY_OUTPUT`) if the card is
-      the wall; stay at 1080p if the submit thread is.
-- [ ] `VICTORY_FRAME_INTERVAL_MS` only after the world is above 30.
-- [ ] Watch avm/Belobug for renderer port 8+ and take each one.
-- [ ] Kelvaroq's unified memory layer when it is public (removes the copy
-      loop that is two thirds of a frame on every fork).
+### 3. Speed to 20+ (largest first)
+- [ ] avm renderer ports into our engine: CBV `0dec5dc` (-4.7 ms), guard
+      `cc761bf` (-2 ms), journal `3406192` (-1..-3 ms), descriptors `f249fe0`.
+- [ ] avm `5a2f8c60` `VICTORY_PIPELINE_LOW_MEMORY` (16 GB PCs).
+- [ ] Belobug `over_cap`/`TEXTURE_MAX`, `release_tables`, by_address fix.
+- [ ] Copy-queue texture uploads + show-after (avm; device-loss fix too).
 
-### 3. Picture
-- [ ] "Characters look like PS3": textures capped by free VRAM (Belobug's
-      cap drops to 512/256 above 92/97 % of the budget). Try X=sharp, and
-      Series S's 720p internal size; FSR 4 (`VICTORY_FSR_4K`) is AMD-only.
-- [ ] "Pixelated light reflections": screen-space reflections at the
-      internal size, without ray tracing. Try B (ray tracing) on a short run;
-      DexNom's cube-gradient fix is in avm already.
-- [ ] "Wrong light reflections / too dark rooms": ray tracing off has no
-      indirect light; avm's ambient stand-in settles by time
-      (`VICTORY_AMBIENT_SETTLE=250,3`, default there). A: ambient level.
-- [ ] Trees/signs flicker far away: Belobug's prelude upload fix is in;
-      `VICTORY_INDIRECT_REST=0` is avm's experiment.
+### 4. No shader/pipeline building while playing
+- [ ] 6.7: ~2800 host pipelines made during the run (stand-ins meanwhile),
+      shader misses 0. Compare our `prepare` (recipes) with avm's pipeline
+      book + `warm --used`; log how many pipelines were made in game that
+      prepare had not made.
 
-### 4. Logs needed for the above
-- [x] settings.txt + prepare.log in the zip.
-- [ ] Belobug's HUD has VRAM by kind: ask for an F3 screenshot in the world.
-- [ ] Count of pipelines made in game vs warmed (to prove no compiling).
-
-### 5. Our own engine (kept, N)
-- [ ] Port avm's light settle (ambient.rs differs too much: rewrite).
-- [ ] Port the copy-queue texture upload + show-after (device loss fix).
-- [ ] Port renderer port 1 (constants heap in place) if the avm engine
-      cannot run on 16 GB.
-
-## Forks to check each round
-- https://portwatch-vi.xyz/
-- avatarmanz/VIctory-7900XTX (main, claude/* branches)
-- Belobug/VIctory-Belobug-AMD (a-publier)
-- DexNom/VIctory, fxceless/victory-fork, stellarr-studio/kelvaroq
-- New on PortWatch, not checked yet: 1R0nim/iR0-fork, bolado-dev/mandy-port,
+### 5. Forks to check each round
+- https://portwatch-vi.xyz/ (chunks 3-5 not read yet)
+- avatarmanz/VIctory-7900XTX (main + claude/* branches), Belobug a-publier,
+  DexNom/VIctory, fxceless/victory-fork, stellarr-studio/kelvaroq
+- Not checked yet: 1R0nim/iR0-fork, bolado-dev/mandy-port,
   lepotane/VIctory-leonida, RandomSkelly/Series0nLinux

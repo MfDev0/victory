@@ -568,6 +568,25 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.10 ("own engine + AMD upscaler"; plan and to-do in `scripts/try/PLAN.md`):
+   - **This fork's engine is the default again and stays the base**; avm
+     and 8GB are on N for comparing only. Fixes of the other forks are
+     ported into it.
+   - **PC FidelityFX upscaler** (Belobug cd8dfc06, ported there from
+     DexNom ab34a8b2): `VICTORY_FIDELITYFX_DIR` names a folder with AMD's
+     signed `amd_fidelityfx_upscaler_dx12.dll` (FidelityFX SDK 2.4.0); the
+     title's FidelityFX loader is then served by it on the host GPU
+     (`victory-hle/src/modules/fidelityfx.rs`, `victory-gpu/src/external.rs`).
+     Here for every profile (Series S too), FSR 3.1 where FSR 4 does not
+     run, `VICTORY_FIDELITYFX_PROVIDER` picks one by name, and a dispatch it
+     cannot record goes to our temporal resolve. Try downloads the DLL once
+     into `%LOCALAPPDATA%\VIctoryTry\fidelityfx` and checks AMD's signature.
+     T: FSR / own / off.
+   - Our temporal resolve: Catmull-Rom colour, sharpening against a tent
+     blur (no rendered-grid blocks), `VICTORY_UPSCALE_SHARPEN` 10 by default.
+   - avm's native shader reader (unpacked kind 0x0c, FSPX/ACCC layout).
+   - Logs: the upscaler in use, the providers offered, jittered upscales
+     every 600.
    6.9 ("AvatarManz engine"; plan and to-do in `scripts/try/PLAN.md`):
    - **The default engine is AvatarManz's** (PortWatch #1 and #2:
      Belobug ~22 fps on an RX 9070 XT, AvatarManz 16 fps / 45 ms on an

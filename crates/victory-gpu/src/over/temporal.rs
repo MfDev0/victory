@@ -30,7 +30,12 @@
 //!
 //! `VICTORY_UPSCALE_TEMPORAL=0` brings back the plain stretch;
 //! `VICTORY_UPSCALE_FEEDBACK` (percent of the new frame, 10) and
-//! `VICTORY_UPSCALE_SHARPEN` (percent, 20) tune it.
+//! `VICTORY_UPSCALE_SHARPEN` (percent, 10) tune it.
+//!
+//! Try 6.10: this frame's colour is taken by Catmull-Rom (one bilinear tap
+//! before), clipped to its neighbourhood, and sharpened against a smooth
+//! tent blur instead of the nearest rendered texel's 3x3 mean, which made
+//! blocks of the rendered grid on bright, lit and reflecting surfaces.
 
 use super::*;
 
@@ -85,6 +90,48 @@ float3 catmull(float2 pos) {
     }
     return max(sum, 0.0);
 }
+// The colour input at `uv` by Catmull-Rom in nine bilinear taps, each
+// kept inside the rendered part: sharper than one bilinear tap, which
+// blurred the 1.5x upscale (Try 6.10).
+float3 source_at(float2 uv) {
+    float2 lo_uv = 0.5 / src_size, hi_uv = (rendered - 0.5) / src_size;
+    float2 pos = uv * src_size;
+    float2 c = floor(pos - 0.5) + 0.5;
+    float2 f = pos - c;
+    float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    float2 w3 = f * f * (-0.5 + 0.5 * f);
+    float2 w12 = w1 + w2;
+    float2 t0 = (c - 1.0) / src_size;
+    float2 t12 = (c + w2 / w12) / src_size;
+    float2 t3 = (c + 2.0) / src_size;
+    float2 xs[3] = { float2(t0.x, w0.x), float2(t12.x, w12.x), float2(t3.x, w3.x) };
+    float2 ys[3] = { float2(t0.y, w0.y), float2(t12.y, w12.y), float2(t3.y, w3.y) };
+    float3 sum = 0.0;
+    [unroll] for (int y = 0; y < 3; y++) {
+        [unroll] for (int x = 0; x < 3; x++) {
+            float2 p = clamp(float2(xs[x].x, ys[y].x), lo_uv, hi_uv);
+            sum += clean(source.SampleLevel(bilinear, p, 0).rgb) * (xs[x].y * ys[y].y);
+        }
+    }
+    return max(sum, 0.0);
+}
+// A tent blur of the colour input around `uv` (four bilinear taps half a
+// texel off): what the sharpening works against. It moves smoothly with
+// the output texel; the 3x3 mean of the nearest rendered texel did not,
+// and sharpening against it drew the rendered grid into bright, lit
+// surfaces as blocks (Try 6.10).
+float3 blur_at(float2 uv) {
+    float2 lo_uv = 0.5 / src_size, hi_uv = (rendered - 0.5) / src_size;
+    float2 h = 0.5 / src_size;
+    float3 sum = 0.0;
+    sum += squash(clean(source.SampleLevel(bilinear, clamp(uv + float2(-h.x, -h.y), lo_uv, hi_uv), 0).rgb));
+    sum += squash(clean(source.SampleLevel(bilinear, clamp(uv + float2(h.x, -h.y), lo_uv, hi_uv), 0).rgb));
+    sum += squash(clean(source.SampleLevel(bilinear, clamp(uv + float2(-h.x, h.y), lo_uv, hi_uv), 0).rgb));
+    sum += squash(clean(source.SampleLevel(bilinear, clamp(uv + float2(h.x, h.y), lo_uv, hi_uv), 0).rgb));
+    return sum * 0.25;
+}
 [numthreads(8, 8, 1)]
 void resolve(uint3 id : SV_DispatchThreadID) {
     // Groups are 8 by 8: the last ones reach past a size that is not a
@@ -118,7 +165,8 @@ void resolve(uint3 id : SV_DispatchThreadID) {
     float2 at = (src_pos + jitter) / src_size;
     at = clamp(at, 0.5 / src_size, (rendered - 0.5) / src_size);
     float4 now = source.SampleLevel(bilinear, at, 0);
-    float3 current = to_ycocg(squash(clean(now.rgb)));
+    // Catmull-Rom's overshoot kept inside what the texels around it hold.
+    float3 current = clamp(to_ycocg(squash(source_at(at))), lo, hi);
     // Motion: the longest of a cross around the texel, so the edges of
     // what moves carry its motion (UV, current to previous).
     float2 mv = 0.0;
@@ -146,7 +194,7 @@ void resolve(uint3 id : SV_DispatchThreadID) {
         result = lerp(h, current, alpha);
     }
     float3 rgb = from_ycocg(result);
-    rgb = max(rgb + sharpen * (rgb - from_ycocg(mean)), 0.0);
+    rgb = max(rgb + sharpen * (rgb - blur_at(at)), 0.0);
     rgb = min(rgb, 0.995);
     float3 linear_rgb = unsquash(rgb);
     after[id.y * width + id.x] = pack(float4(min(linear_rgb, 65000.0), 1.0));
@@ -215,7 +263,8 @@ fn sharpen(title: Option<f32>) -> f32 {
             .and_then(|v| v.trim().parse::<f32>().ok())
             .map(|p| (p / 100.0).clamp(0.0, 1.0))
     });
-    set.or(title.map(|s| (s * 0.5).clamp(0.0, 0.5))).unwrap_or(0.2)
+    // 0.1: the colour is now taken by Catmull-Rom, sharp by itself.
+    set.or(title.map(|s| (s * 0.5).clamp(0.0, 0.5))).unwrap_or(0.1)
 }
 
 /// Colour formats whose two first channels a float view reads as motion.

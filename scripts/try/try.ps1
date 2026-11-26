@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.9'
+$TryVersion = '6.10'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -28,7 +28,8 @@ $UpstreamUrl = 'https://github.com/Marvisak/VIctory.git'
 # fork's source folder stays, so VIctory Try still updates itself from it.
 $Engine8Url = 'https://github.com/soldsawn/victory-nvidia-8gb.git'
 $Engine8Branch = 'main'
-# 6.9: the AvatarManz engine, the default. PortWatch (2026-11-26): Belobug
+# 6.10: this fork's engine is the default again (N still picks this one).
+# 6.9: the AvatarManz engine, an option. PortWatch (2026-11-26): Belobug
 # #1 (about 22 fps on an RX 9070 XT, picture close to the console) and
 # AvatarManz #2 (16 fps on an RX 7900 XTX, 45 ms a frame on Series S) are the
 # same engine: Belobug's a-publier branch is avatarmanz/VIctory-7900XTX
@@ -69,17 +70,18 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
     if ($c.base -ne 'gta6') { $c.console = 'series-x'; $c.base = 'gta6' }
-    # 6.9: the AvatarManz engine once, whatever engine ran before (N goes on).
-    if ($c.engine69 -ne '1') { $c.engine = 'avm'; $c.engine69 = '1' }
+    # 6.10: this fork's engine once, whatever ran before: it stays the base;
+    # the others' fixes are ported into it (N still switches).
+    if ($c.engine610 -ne '1') { $c.engine = 'own'; $c.engine610 = '1'; $c.engine69 = '1' }
     return $c
 }
 function Save-Config { try { ($script:Config | ConvertTo-Json) | Set-Content -Path $ConfigPath -Encoding ASCII } catch {} }
@@ -858,6 +860,43 @@ function Prepare-Avm([string]$why) {
 
 # The settings a run uses, also for Prepare-Shaders (the shader cache keys
 # its translations by some of them: the same ones are needed both times).
+# 6.10: AMD's signed PC upscaler (FidelityFX SDK 2.4.0, MIT), downloaded
+# once from AMD's GitHub (57 MB) into the VIctory Try folder. Its folder,
+# or $null when it cannot be had (the game then uses our own upscaler).
+$FsrUrl = 'https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v2.4.0/Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll'
+$FsrSize = 57664272
+function Ensure-Fsr {
+    $dir = Join-Path $TryHome 'fidelityfx'
+    $dll = Join-Path $dir 'amd_fidelityfx_upscaler_dx12.dll'
+    $ok = { (Test-Path -LiteralPath $dll) -and ((Get-Item -LiteralPath $dll).Length -eq $FsrSize) }
+    if (-not (& $ok)) {
+        if ($script:Config.fsr_dl -eq 'failed' -and -not $script:FsrRetry) { return $null }
+        $script:FsrRetry = $false
+        Step 'Downloading AMD FidelityFX upscaler (57 MB, once)'
+        try { New-Item -ItemType Directory -Force -Path $dir | Out-Null } catch {}
+        $part = "$dll.part"
+        $got = Download $FsrUrl $part
+        if ($got -and (Test-Path -LiteralPath $part) -and ((Get-Item -LiteralPath $part).Length -eq $FsrSize)) {
+            Move-Item -Force -LiteralPath $part -Destination $dll
+        } else {
+            Remove-Item -Force -LiteralPath $part -ErrorAction SilentlyContinue
+            Bad 'could not download AMD''s upscaler: VIctory''s own runs instead (T, or U, tries again)'
+            $script:Config.fsr_dl = 'failed'; Save-Config
+            return $null
+        }
+    }
+    # AMD's signature, checked every run (a damaged or replaced file is not loaded).
+    try {
+        $sig = Get-AuthenticodeSignature -LiteralPath $dll
+        if ($sig.Status -ne 'Valid' -or "$($sig.SignerCertificate.Subject)" -notmatch 'Advanced Micro Devices') {
+            Bad "AMD's upscaler is not signed by AMD ($($sig.Status)): not used"
+            Remove-Item -Force -LiteralPath $dll -ErrorAction SilentlyContinue
+            return $null
+        }
+    } catch { Bad "could not check AMD's upscaler signature: not used ($_)"; return $null }
+    if ($script:Config.fsr_dl -ne 'ok') { $script:Config.fsr_dl = 'ok'; Save-Config }
+    return $dir
+}
 function Set-RunEnv {
     $c = $script:Config
     # 6.1: the game log's first line names this version (victory.exe prints it).
@@ -956,7 +995,17 @@ function Set-RunEnv {
     if ($null -eq $script:UserAll['VICTORY_UPSCALE_TEMPORAL']) {
         [Environment]::SetEnvironmentVariable('VICTORY_UPSCALE_TEMPORAL', $(if ($c.temporal -eq 'off') { '0' } else { '1' }), 'Process')
     }
-    Say "picture: smooth hair and shadows (frames accumulated) $(if ($env:VICTORY_UPSCALE_TEMPORAL -ne '0') { 'ON' } else { 'off' })   (T switches)"
+    # 6.10: AMD's PC FidelityFX upscaler (FSR 3.1 on NVIDIA, FSR 4 on new
+    # Radeons) makes the game's upscale instead of our stand-in, as on
+    # Belobug's engine (PortWatch #1, ported from DexNom): the console's
+    # upscaler is FidelityFX too, so the picture is what the game was made
+    # for (no blocks on lit and reflecting surfaces). T switches.
+    if ($null -eq $script:UserAll['VICTORY_FIDELITYFX_DIR']) {
+        $fsrDir = $(if ($c.temporal -ne 'own' -and $c.temporal -ne 'off' -and $c.plain -ne '1') { Ensure-Fsr } else { $null })
+        [Environment]::SetEnvironmentVariable('VICTORY_FIDELITYFX_DIR', $fsrDir, 'Process')
+    }
+    $upName = $(if ($env:VICTORY_FIDELITYFX_DIR) { 'AMD FidelityFX (PC)' } elseif ($env:VICTORY_UPSCALE_TEMPORAL -ne '0') { 'own (frames accumulated)' } else { 'plain stretch' })
+    Say "picture: upscaler $upName   (T switches FSR / own / off)"
     Say "speed: card results fetched inside their flights $(if ($env:VICTORY_CARD_FETCH_INFLIGHT -eq '1') { 'ON' } else { 'off' }), lists in the air before a wait: $(if ($env:VICTORY_LATE_WAIT_LISTS) { $env:VICTORY_LATE_WAIT_LISTS } else { '256' })"
     # 4.1: the screen the console says it is plugged into. 1080p by default
     # (a Series X on a 1080p TV): at 4K the game renders 2560x1440 inside and
@@ -1757,6 +1806,9 @@ Run-Newer
 if (OwnEngine) {
     if ($changed -or -not (Test-Path (Ours-Exe))) { if (-not (Build-All)) { exit 1 } }
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
+if (OwnEngine) {
+    Say '6.10: this fork''s engine again (the base stays; the others'' fixes come into it): AMD''s PC FidelityFX upscaler makes the picture (FSR 3.1 on NVIDIA; T switches), sharper own upscaler without blocks on lit surfaces, shaders AMD''s compiler made are read, the game''s debug shaders stored without packing too.'
+}
 if (EngineAvm) {
     Say '6.9: the AvatarManz engine (PortWatch #1 and #2, 16-22 fps on their cards): renderer patches, list calls on eight threads, textures on their own queue, every shader translated and every pipeline made with the game closed (no compiling while you play). N switches to this fork''s engine.'
 } elseif (Engine8) {
@@ -1775,7 +1827,7 @@ function Show-Commands {
         $rows = @(
             @('Enter', 'Run again', '', 'start the game again with the settings below'),
             @('U', 'Update', '', 'download the newest engine, build it, then run the game'),
-            @('N', 'Engine', $(Engine-Name), 'avm: AvatarManz/Belobug engine (default, PortWatch #1/#2); own: this fork''s; 8GB: soldsawn''s'),
+            @('N', 'Engine', $(Engine-Name), 'own: this fork''s (default, the others'' fixes ported in); avm: AvatarManz/Belobug''s; 8GB: soldsawn''s'),
             @('V', 'Version', '', 'show which Try and VIctory version you have'),
             @('G', 'Game paths', '', 'ask again where the game folder and game_scarlett_master.exe are'),
             @('C', 'Console', $(if ($c.console -eq 'series-s') { 'S  ' } else { 'X  ' }), 'Series S (renders 1280x720 to 1080p: faster, the one for 6 GB cards) or Series X'),
@@ -1804,7 +1856,7 @@ function Show-Commands {
     $rows = @(
         @('Enter', 'Run again', '', 'start the game again with the settings below'),
         @('U', 'Update', '', 'download the newest VIctory, build it, then run the game'),
-        @('N', 'Engine', $(Engine-Name), 'avm: AvatarManz/Belobug engine (default, PortWatch #1/#2); own: this fork''s; 8GB: soldsawn''s 8 GB NVIDIA engine'),
+        @('N', 'Engine', $(Engine-Name), 'own: this fork''s (default, the others'' fixes ported in); avm: AvatarManz/Belobug''s; 8GB: soldsawn''s'),
         @('V', 'Version', '', 'show which Try and VIctory version you have'),
         @('G', 'Game paths', '', 'ask again where the game folder and game_scarlett_master.exe are'),
         @('C', 'Console', $(if ($c.console -eq 'series-s') { 'S  ' } else { 'X  ' }), 'Xbox Series S (renders 1280x720 and scales up: faster) or Series X (full size)'),
@@ -1819,7 +1871,7 @@ function Show-Commands {
         @('W', 'Shadow fix', $(& $on ($c.shadowfix -ne 'off')), 'NVIDIA: keeps the ceiling and lit rooms (14 shadow programs translated safely)'),
         @('I', 'CPU graphics helper', $(& $on ($c.igpu -ne 'off')), 'browsers / Discord / Spotify use the CPU''s own graphics, so the card''s memory is the game''s'),
         @('K', 'Copies on the card', $(& $on ($c.gpucopy -ne 'off')), 'faster: the game''s buffer copies run on the card (no waiting for it); off if things look wrong'),
-        @('T', 'Smooth hair/shadows', $(& $on ($c.temporal -ne 'off')), 'frames accumulated as the console''s upscaler does: no dotted hair, no crawling shadows (Series S)'),
+        @('T', 'Upscaler', $(switch ($c.temporal) { 'off' { 'off' } 'own' { 'own' } default { 'FSR' } }), 'FSR: AMD''s PC FidelityFX upscaler (sharp, right reflections); own: VIctory''s frame accumulation; off: plain stretch'),
         @('Y', 'fxceless speed set', $(& $on ($c.fxspeed -ne 'off')), 'heap work on its own thread, texture checks side by side, settle room (fxceless/victory-fork)'),
         @('X', 'Low preset', $(& $on $script:LowFromTry), '6 GB cards: game told 1280x720, textures up to 1536 MB (faster, blurrier; on by itself under 7 GB)'),
         @('J', 'Saved game', '', 'continue or new game (from the very beginning), bring a save back, ask before launch on/off'),
@@ -1896,14 +1948,14 @@ while ($true) {
             'O' { $c.opt = $(if ($c.opt -eq 'on') { '' } else { 'on' }) }
             'W' { $c.shadowfix = $(if ($c.shadowfix -eq 'off') { '' } else { 'off' }) }
             'K' { $c.gpucopy = $(if ($c.gpucopy -eq 'off') { '' } else { 'off' }) }
-            'T' { $c.temporal = $(if ($c.temporal -eq 'off') { '' } else { 'off' }) }
+            'T' { $script:FsrRetry = $true; $c.temporal = $(switch ($c.temporal) { 'own' { 'off' } 'off' { '' } default { 'own' } }) }
             'Y' { $c.fxspeed = $(if ($c.fxspeed -eq 'off') { '' } else { 'off' }) }
             'X' { $c.low = $(if ($script:LowFromTry) { 'off' } else { '1' }) }
             'I' { if ($c.igpu -eq 'off') { $c.igpu = '' } else { $c.igpu = 'off'; Undo-Helper } }
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
             'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.6'; $c.console_user = '1' }
             'D' { Reset-Recommended; $c = $script:Config }
-            'N' { $c.engine = $(switch ($c.engine) { 'avm' { 'own' } '8gb' { 'avm' } default { '8gb' } }); $null = Ensure-Engine $false }
+            'N' { $c.engine = $(switch ($c.engine) { 'avm' { '8gb' } '8gb' { 'own' } default { 'avm' } }); $null = Ensure-Engine $false }
             default { $switched = $false }
         }
         if ($switched) {
@@ -1920,6 +1972,7 @@ while ($true) {
     if ($k -eq 'G') { while (-not (Ask-Game $true)) {} }
     if ($k -eq 'P') { $script:Config.prepared = ''; $script:Config.recipes = ''; $script:Config.avm_shaders = ''; $script:Config.avm_warm = '' }
     if ($k -eq 'U') {
+        $script:FsrRetry = $true
         $changed = Update-Source
         # 5.7: a newer VIctory Try takes over at once (its own fixes, not
         # only the game's, without closing this window first).

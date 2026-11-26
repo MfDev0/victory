@@ -19,6 +19,17 @@ pub fn run(
     // A title that relaunched itself: the old process must be gone first.
     victory_hle::modules::lifecycle::wait_for_previous();
     let cfg = victory_core::Config::load()?;
+    // The PC FidelityFX upscaler serves the title's FidelityFX loader when
+    // VICTORY_FIDELITYFX_DIR names a folder with it (Belobug cd8dfc06 from
+    // DexNom ab34a8b2; Try 6.10). Chosen before anything looks up an
+    // import: the table of what we serve is made once.
+    if let Some(dir) = std::env::var_os("VICTORY_FIDELITYFX_DIR").filter(|d| !d.is_empty()) {
+        let dir = std::path::PathBuf::from(dir);
+        match victory_hle::modules::fidelityfx::use_host_dir(&dir) {
+            Ok(()) => println!("upscaler       PC FidelityFX from {} (the title's upscale runs on it)", dir.display()),
+            Err(e) => println!("upscaler       PC FidelityFX not used ({e}; folder {}): our temporal resolve answers", dir.display()),
+        }
+    }
     let original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
     let prepared = victory_loader::prepare(&original)?;
     let hash = prepared.original_hash.to_hex();
@@ -121,7 +132,8 @@ pub fn run(
             dll: &str,
             symbol: &victory_pe::ImportSymbol,
         ) -> victory_loader::Resolution {
-            let ours = dll.eq_ignore_ascii_case(victory_hle::modules::ffx::LOADER)
+            let ours = !victory_hle::modules::fidelityfx::serving()
+                && dll.eq_ignore_ascii_case(victory_hle::modules::ffx::LOADER)
                 && matches!(symbol, victory_pe::ImportSymbol::Name { name, .. } if name == "ffxDispatch");
             if ours {
                 return victory_loader::Resolution::Found {
