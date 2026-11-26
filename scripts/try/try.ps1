@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.8'
+$TryVersion = '6.9'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -28,12 +28,33 @@ $UpstreamUrl = 'https://github.com/Marvisak/VIctory.git'
 # fork's source folder stays, so VIctory Try still updates itself from it.
 $Engine8Url = 'https://github.com/soldsawn/victory-nvidia-8gb.git'
 $Engine8Branch = 'main'
+# 6.9: the AvatarManz engine, the default. PortWatch (2026-11-26): Belobug
+# #1 (about 22 fps on an RX 9070 XT, picture close to the console) and
+# AvatarManz #2 (16 fps on an RX 7900 XTX, 45 ms a frame on Series S) are the
+# same engine: Belobug's a-publier branch is avatarmanz/VIctory-7900XTX
+# c9c932c (renderer ports 1-7, list calls on eight threads, textures on their
+# own copy queue, every shader translated ahead of time) plus Belobug's flicker
+# fix (title textures uploaded in the submission's prelude), a texture cap that
+# follows the card's free memory (what keeps a 6 GB card from overflowing) and
+# PC FSR 4.1.2. VICTORY_TRY_AVM=avatarmanz builds avatarmanz main instead.
+# Built with their own command (diag profile, diagnostics: the build all their
+# measurements are of) and run with their scripts/play.ps1 settings.
+$EngineAvmUrl = 'https://github.com/Belobug/VIctory-Belobug-AMD.git'
+$EngineAvmBranch = 'a-publier'
+$EngineAvmName = 'AvatarManz engine (Belobug/VIctory-Belobug-AMD a-publier = avatarmanz/VIctory-7900XTX + Belobug)'
+if ($env:VICTORY_TRY_AVM -eq 'avatarmanz') {
+    $EngineAvmUrl = 'https://github.com/avatarmanz/VIctory-7900XTX.git'
+    $EngineAvmBranch = 'main'
+    $EngineAvmName = 'AvatarManz engine (avatarmanz/VIctory-7900XTX main)'
+}
 $MinGitUrl = 'https://github.com/git-for-windows/git/releases/download/v2.56.1.windows.1/MinGit-2.56.1-64-bit.zip'
 $TryHome = Join-Path $env:LOCALAPPDATA 'VIctoryTry'
 $Src = Join-Path $TryHome 'victory'
 $Target = Join-Path $TryHome 'target'
 $Src8 = Join-Path $TryHome 'victory-8gb'
 $Target8 = Join-Path $TryHome 'target-8gb'
+$SrcA = Join-Path $TryHome 'victory-avm'
+$TargetA = Join-Path $TryHome 'target-avm'
 $ConfigPath = Join-Path $TryHome 'config.json'
 $LogDir = Join-Path $TryHome 'logs'
 $BackupDir = Join-Path $TryHome 'backup'
@@ -48,15 +69,17 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
     if ($c.base -ne 'gta6') { $c.console = 'series-x'; $c.base = 'gta6' }
+    # 6.9: the AvatarManz engine once, whatever engine ran before (N goes on).
+    if ($c.engine69 -ne '1') { $c.engine = 'avm'; $c.engine69 = '1' }
     return $c
 }
 function Save-Config { try { ($script:Config | ConvertTo-Json) | Set-Content -Path $ConfigPath -Encoding ASCII } catch {} }
@@ -413,7 +436,12 @@ function Engine8-Exe { return Join-Path $Target8 'release\victory.exe' }
 # 6.0: this fork's engine again (5.9 made the 8 GB engine the default and it
 # made no difference); N picks soldsawn's 8 GB engine ('8gb').
 function Engine8 { return $script:Config.engine -eq '8gb' }
-function Victory-Exe { if (Engine8) { return Engine8-Exe } else { return Ours-Exe } }
+function EngineAvm-Exe { return Join-Path $TargetA 'diag\victory.exe' }
+function EngineAvm { return $script:Config.engine -eq 'avm' }
+# This fork's own engine: neither of the others.
+function OwnEngine { return -not (Engine8) -and -not (EngineAvm) }
+function Victory-Exe { if (EngineAvm) { return EngineAvm-Exe } elseif (Engine8) { return Engine8-Exe } else { return Ours-Exe } }
+function Engine-Name { if (EngineAvm) { return 'avm' } elseif (Engine8) { return '8GB' } else { return 'own' } }
 
 function Build {
     Step 'Building VIctory (the first build takes a while; later ones are quicker)'
@@ -568,8 +596,19 @@ function Build-Engine8 {
 # Gets and builds the chosen engine. With the 8 GB engine: if it cannot be
 # had (no download, no build, none built before), this fork's engine runs.
 function Ensure-Engine([bool]$update) {
-    if (-not (Engine8)) {
+    if (OwnEngine) {
         if ($update -or -not (Test-Path (Ours-Exe))) { return (Build-All) }
+        return $true
+    }
+    if (EngineAvm) {
+        $new = $true
+        if ($update -or -not (Test-Path (EngineAvm-Exe))) { $new = Update-EngineAvm } else { $new = $false }
+        if ($new) { $null = Build-EngineAvm }
+        if (Test-Path (EngineAvm-Exe)) { return $true }
+        Bad 'no AvatarManz engine to run: running this fork''s engine instead (N switches engines)'
+        $script:Config.engine = 'own'
+        Save-Config
+        if (-not (Test-Path (Ours-Exe))) { return (Build-All) }
         return $true
     }
     $new = $true
@@ -618,6 +657,196 @@ function Set-Engine8Env {
     Say "engine: 8 GB NVIDIA (soldsawn/victory-nvidia-8gb)   (N switches to this fork's engine)"
     Say "its settings: textures 2 sizes smaller (VICTORY_TEXTURE_DROP_MIPS=$($env:VICTORY_TEXTURE_DROP_MIPS)), screen $($env:VICTORY_RESOLUTION), texture upload thread, card budgets $($env:VICTORY_CARD_WINDOWS_MB)+$($env:VICTORY_CARD_BUFFERS_MB) MB"
     Say 'F10 in the game shows its performance overlay.'
+}
+
+
+# ------------------------------------------------------------- AvatarManz engine (6.9)
+
+function GA {
+    $out = @(& $script:Git -C $SrcA -c core.autocrlf=false -c advice.detachedHead=false @args 2>&1 | ForEach-Object { "$_" })
+    $script:GCode = $LASTEXITCODE
+    return $out
+}
+
+# Downloads the AvatarManz engine (or its news). $true: new, to be built;
+# $false: built already; $null: nothing to build.
+function Update-EngineAvm {
+    Step "Getting the $EngineAvmName"
+    if ((Test-Path $SrcA) -and -not (Test-Path (Join-Path $SrcA '.git'))) { Remove-Item -Recurse -Force $SrcA }
+    if (-not (Test-Path $SrcA)) {
+        & $script:Git -c core.autocrlf=false clone -q --single-branch --branch $EngineAvmBranch $EngineAvmUrl $SrcA
+        if ($LASTEXITCODE -ne 0) { Bad 'could not download the AvatarManz engine: check the internet connection'; return $null }
+    }
+    # (VICTORY_TRY_AVM may have changed which repository it is.)
+    $null = GA remote set-url origin $EngineAvmUrl
+    $null = GA fetch -q origin "+refs/heads/${EngineAvmBranch}:refs/remotes/origin/engine"
+    if ($script:GCode -ne 0) { Say 'could not reach the AvatarManz engine: using what was downloaded before' }
+    $head = (GA rev-parse -q --verify refs/remotes/origin/engine) | Select-Object -First 1
+    if (-not $head) { Bad "the AvatarManz engine download is broken: delete $SrcA and press U"; return $null }
+    $script:KeyA = "engineavm:$head"
+    if (($script:KeyA -eq $script:Config.builta) -and (Test-Path (EngineAvm-Exe))) { Say 'no changes since last time'; return $false }
+    return $true
+}
+
+# Their own build command (README "How to run it"): the diag profile with
+# the diagnostics feature, target\diag\victory.exe. Built for this PC's CPU
+# first (as this fork's engine), plainly if that fails.
+function Build-EngineAvm {
+    $null = GA checkout -q -f -B try refs/remotes/origin/engine
+    $null = GA clean -fdq
+    $line = (GA log -1 --format='%h %ad %s' --date=short HEAD) | Select-Object -First 1
+    Step 'Building the AvatarManz engine (the first build takes a while; later ones are quicker)'
+    Say "engine: $line"
+    $tc = Join-Path $SrcA 'rust-toolchain.toml'
+    if (Test-Path $tc) {
+        $m = Select-String -LiteralPath $tc -Pattern '^\s*channel\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if ($m) {
+            $channel = $m.Matches[0].Groups[1].Value
+            Say "Rust $channel"
+            & rustup toolchain install $channel --profile minimal --target x86_64-pc-windows-msvc 2>&1 | ForEach-Object { "$_" } | Out-Host
+        }
+    }
+    $env:CARGO_TARGET_DIR = $TargetA
+    $log = Join-Path $LogDir 'build.log'
+    $oldFlags = $env:RUSTFLAGS
+    $code = 1
+    Push-Location $SrcA
+    try {
+        foreach ($pass in @($(if ($env:VICTORY_TRY_PLAIN_BUILD -ne '1') { 'tuned' }), 'plain')) {
+            if (-not $pass) { continue }
+            $env:RUSTFLAGS = $(if ($pass -eq 'tuned') { '-C target-cpu=native' } else { $oldFlags })
+            Say "build: $pass"
+            & cargo build --locked --profile diag -p victory --features diagnostics 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
+            $code = $LASTEXITCODE
+            if ($code -eq 0 -and (Test-Path (EngineAvm-Exe))) { break }
+        }
+    } finally { Pop-Location; $env:CARGO_TARGET_DIR = $Target; $env:RUSTFLAGS = $oldFlags }
+    if ($code -ne 0 -or -not (Test-Path (EngineAvm-Exe))) {
+        Bad "the AvatarManz engine did not build (code $code). The full output is in $log"
+        $lines = @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue)
+        $first = -1
+        for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^error') { $first = $i; break } }
+        if ($first -lt 0) { $first = [Math]::Max(0, $lines.Count - 25) }
+        $lines[$first..([Math]::Min($lines.Count - 1, $first + 24))] | ForEach-Object { Write-Host ('    ' + $_) }
+        return $false
+    }
+    $script:Config.builta = $script:KeyA
+    $script:Config.avm_shaders = ''
+    $script:Config.avm_warm = ''
+    Save-Config
+    Say 'the AvatarManz engine is built'
+    return $true
+}
+
+# The PC's memory in MB: [RAM, RAM + page file (the commit limit)], or 0s.
+function Ram-Info {
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        return @([int]($os.TotalVisibleMemorySize / 1024), [int]($os.TotalVirtualMemorySize / 1024))
+    } catch { return @(0, 0) }
+}
+
+# Its settings: AvatarManz's scripts/play.ps1 (the ones its 45 ms frames
+# were measured with), its five renderer patches on (each one compares the
+# title's bytes before it writes; 47.3 -> 44.9 ms together), and this PC's
+# card. None of this fork's settings (their names mean other things there).
+# What the user set before VIctory Try started stays.
+function Set-EngineAvmEnv {
+    $c = $script:Config
+    Get-ChildItem Env: | Where-Object { $_.Name -like 'VICTORY_*' } | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" -ErrorAction SilentlyContinue }
+    foreach ($k in $script:UserAll.Keys) { [Environment]::SetEnvironmentVariable($k, $script:UserAll[$k], 'Process') }
+    $env:RUST_BACKTRACE = '1'
+    $set = [ordered]@{
+        VICTORY_TRY_VERSION = $TryVersion
+        VICTORY_GAME_DIR = $c.game_dir
+        VICTORY_CACHE_DIR = (Join-Path $TryHome 'cache-avm')
+        # play.ps1, all of it:
+        VICTORY_TEXTURE_NO_WAIT = '1'; VICTORY_RELAY = '2'; VICTORY_WIDE_BACK = '1'; VICTORY_CARD_REHASH_RUNS = '1'
+        VICTORY_JOIN_COPIES = '1'; VICTORY_INDIRECT_WINDOW = '1'; VICTORY_RELAY_COPY = '1'; VICTORY_CARD_STEPS = '2'
+        VICTORY_INDIRECT_BATCH = '2'; VICTORY_MAP_THREADS = '1'; VICTORY_TITLE_PRIORITIES = '0'; VICTORY_CARD_AWAKE = '1'
+        VICTORY_SHOW_AFTER = '1'; VICTORY_D3D12_DRED = 'light'
+        # Every pipeline the title creates is written down, so that
+        # "victory warm --used" makes them with the game closed (no more
+        # pipelines compiled while you play after the first run of a place).
+        VICTORY_PIPELINE_BOOK = '1'
+    }
+    # A (ambient): play.ps1's 0.8; low / high / off.
+    $set.VICTORY_AMBIENT = $(switch ($c.ambient) { 'low' { '0.5' } 'high' { '1.1' } 'off' { '0' } default { '0.8' } })
+    # Z: play.ps1 -Safe (without the newest, faster ways) or the fast set.
+    if ($c.safe -eq '1') { $set.VICTORY_UNDER_WIDE = '0'; $set.VICTORY_LAND_ECHO = '0' }
+    else { $set.VICTORY_THIN = '1'; $set.VICTORY_JOIN_PARTS = '8'; $set.VICTORY_UPLOAD_AHEAD = '1' }
+    # Y: renderer patches 1, 2, 5, 6, 7 (README: 47.3 -> 44.9 ms a frame).
+    if ($c.ports -ne 'off') {
+        foreach ($k in @('VICTORY_PORT_CONSTANTS', 'VICTORY_PORT_DESCRIPTORS', 'VICTORY_PORT_CBV', 'VICTORY_PORT_GUARD', 'VICTORY_PORT_JOURNAL')) { $set[$k] = '1' }
+    }
+    # B: the title's ray-traced indirect light (play.ps1 -RayTracing): lit
+    # interiors and right reflections, about a third slower. Off by default.
+    if ($c.rt -eq '1') { $set.VICTORY_BVH_BUILDER = '1' }
+    # F: frames above 30 (menus and videos reach 60; the game's clock stays right).
+    if ($c.unlock -eq '1') { $set.VICTORY_FRAME_INTERVAL_MS = '16.667' }
+    # X: textures. Belobug's default follows the card's free memory (1024,
+    # then 512 from 92 % and 256 from 97 % of its budget): what keeps a 6 GB
+    # card from overflowing, but faces get blurry when it is full. sharp: up to
+    # 2048 whatever the memory; low: 512 always (6 GB cards that stutter).
+    $set.VICTORY_TEXTURE_MAX = $(switch ($c.texcap) { 'sharp' { '2048' } 'low' { '512' } default { $null } })
+    # R on Series X: the title's own output size (VICTORY_OUTPUT; the title
+    # ignores the display mode). Series S outputs 1080p by itself.
+    if ($c.console -eq 'series-x') { $set.VICTORY_OUTPUT = $(if ($c.res -eq '4k') { '3840x2160' } else { '1920x1080' }) }
+    foreach ($k in $set.Keys) {
+        if ($null -eq $script:UserAll[$k] -and $null -ne $set[$k]) { [Environment]::SetEnvironmentVariable($k, [string]$set[$k], 'Process') }
+    }
+    Say "engine: $EngineAvmName   (N switches engines)"
+    Say "its settings: AvatarManz's play.ps1$(if ($c.safe -eq '1') { ' -Safe' }), renderer patches $(if ($c.ports -ne 'off') { 'on' } else { 'off' }) (Y), ray tracing $(if ($c.rt -eq '1') { 'on' } else { 'off' }) (B), textures $(if ($c.texcap) { $c.texcap } else { 'by free card memory' }) (X), ambient $($env:VICTORY_AMBIENT) (A)"
+    Say 'F3 in the game shows its panel of numbers (where a frame goes).'
+    $ram = Ram-Info
+    if ($ram[0] -gt 0) {
+        Say "memory: $([int]($ram[0] / 1024)) GB of RAM, $([int]($ram[1] / 1024)) GB with the page file"
+        if ($ram[1] -lt 40000) {
+            Bad "AvatarManz's engine takes 30-46 GB of memory (RAM + page file) for now. This PC can give $([int]($ram[1] / 1024)) GB:"
+            Bad 'if the game closes by itself, set the page file to "System managed" or 49152 MB on your fastest drive'
+            Bad '(Settings > System > About > Advanced system settings > Performance > Advanced > Virtual memory), restart, run again.'
+        }
+    }
+}
+
+# With the game closed: every shader translated ("victory shaders", once per
+# build: a few minutes) and every pipeline earlier runs drew with made
+# ("victory warm --used", quick when there is nothing new). The game then
+# compiles nothing it has met before while you play.
+function Prepare-Avm([string]$why) {
+    $c = $script:Config
+    $exe = EngineAvm-Exe
+    $pdir = Join-Path $env:VICTORY_CACHE_DIR 'pipelines'
+    $log = Join-Path $LogDir 'prepare.log'
+    $cores = [Environment]::ProcessorCount
+    if ("$($c.avm_shaders)" -ne "$($c.builta)") {
+        Step "Translating every shader of the game with it closed ($why)"
+        Say 'Once per build: a few minutes. Stopping it is fine (the game translates the rest itself).'
+        Push-Location $TryHome
+        try {
+            & $exe shaders --jobs ([Math]::Max(2, $cores - 1)) 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | ForEach-Object { Say $_ }
+            $code = $LASTEXITCODE
+        } finally { Pop-Location }
+        if ($code -eq 0) { Say 'every shader translated' } else { Bad "translating stopped (code $code; output in $log)" }
+        $c.avm_shaders = $c.builta
+        Save-Config
+    }
+    $early = Join-Path $pdir 'early-pipelines.txt'
+    $stamp = "$($c.builta)|$(if (Test-Path -LiteralPath $early) { (Get-Item -LiteralPath $early).Length } else { 0 })"
+    if ((Test-Path -LiteralPath $early) -and "$($c.avm_warm)" -ne $stamp) {
+        Step 'Making the pipelines earlier runs drew with, with the game closed'
+        Say 'Quick when there is nothing new; the first time after a build or driver update takes longer.'
+        # (Each worker is a process with its own compiler: a third of the
+        # threads, so 16 GB PCs keep their memory.)
+        Push-Location $TryHome
+        try {
+            & $exe warm --used --jobs ([Math]::Max(2, [int]($cores / 3))) 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log -Append | ForEach-Object { Say $_ }
+            $code = $LASTEXITCODE
+        } finally { Pop-Location }
+        if ($code -eq 0) { Say 'pipelines made' } else { Bad "making pipelines stopped (code $code; output in $log)" }
+        $c.avm_warm = $stamp
+        Save-Config
+    }
 }
 
 # ------------------------------------------------------------- run
@@ -1105,6 +1334,13 @@ function Run-Game {
     $built = ''
     if ("$($c.built_key)" -match '^fork:([0-9a-f]{7,40})') { $built = $Matches[1] }
     $fetched = (G rev-parse -q --verify refs/remotes/origin/fork) | Select-Object -First 1
+    if (EngineAvm) {
+        $built = ''
+        if ("$($c.builta)" -match '^engineavm:([0-9a-f]{7,40})') {
+            $line = (GA log -1 --format='%h %ad %s' --date=short $Matches[1]) | Select-Object -First 1
+            Say "VIctory: the AvatarManz engine, built from $line"
+        }
+    }
     if (Engine8) {
         $built = ''
         if ("$($c.built8)" -match '^engine8:([0-9a-f]{7,40})') {
@@ -1132,13 +1368,14 @@ function Run-Game {
     Say 'To stop: close the game window.'
     Set-RunEnv
     Tune-PC
-    if (Engine8) { Set-Engine8Env }
+    if (EngineAvm) { Set-EngineAvmEnv; Prepare-Avm 'new build or new pipelines' }
+    elseif (Engine8) { Set-Engine8Env }
     elseif ("$($c.prepared)" -ne "$($c.built_key)") { Prepare-Shaders 'new build' }
     elseif ("$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from the last run' }
     # The shared pipeline list (keys of pipelines other players met, no
     # game files): the game starts making them while it loads.
     $shared = Join-Path $Src 'scripts\try\shared-pipelines.txt'
-    if (Test-Path -LiteralPath $shared) {
+    if ((OwnEngine) -and (Test-Path -LiteralPath $shared)) {
         $pdir = Join-Path $env:VICTORY_CACHE_DIR 'pipelines'
         try {
             New-Item -ItemType Directory -Force -Path $pdir | Out-Null
@@ -1147,8 +1384,10 @@ function Run-Game {
             Say "shared pipeline list: $n pipelines other players met are made while the game loads"
         } catch { Bad "could not copy the shared pipeline list: $_" }
     }
-    Say "failed shaders saved to: $($env:VICTORY_DUMP_FAILED)"
-    Say "shader loop limit: $($env:VICTORY_SHADER_LOOP_LIMIT)   skipped programs: $($env:VICTORY_SKIP_PIPELINES)"
+    if (OwnEngine) {
+        Say "failed shaders saved to: $($env:VICTORY_DUMP_FAILED)"
+        Say "shader loop limit: $($env:VICTORY_SHADER_LOOP_LIMIT)   skipped programs: $($env:VICTORY_SKIP_PIPELINES)"
+    }
     Say 'New places compile their pipelines while you play (things may be missing for a while); after you close the game they are all compiled, and the next launch has them from the start.'
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $log = Join-Path $LogDir "game-$stamp.log"
@@ -1175,7 +1414,8 @@ function Run-Game {
     try { Check-Run $log $stamp $crashes } catch { Bad "could not summarize the run: $_" }
     # Everything this run asked for and did not get, compiled now while the
     # game is closed: the next launch shows it from the start.
-    if (-not (Engine8) -and "$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from this run' }
+    if ((OwnEngine) -and "$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from this run' }
+    if (EngineAvm) { Prepare-Avm 'new pipelines from this run' }
 }
 
 # The game in a window of its own ('VIctory - game output'), with its output
@@ -1330,21 +1570,35 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
     Say "slow submissions (over 250 ms on the card): $(& $count 'slow host submission')"
     # A crash on a memory access (0xc0000005) with lazy copy-back on: the
     # next run copies back first, as before 3.9.
+    # 6.9: the AvatarManz engine's own fallbacks: a lost card first turns on
+    # its -Safe set, then its renderer patches off; memory that ran out is said.
+    if (EngineAvm) {
+        if ((& $count 'out of memory|E_OUTOFMEMORY|0x8007000e|commit limit|paging file is too small') -gt 0) {
+            Bad 'the PC ran out of memory in this run: give Windows a bigger page file (System managed, or 49152 MB) and restart the PC.'
+        }
+        if ((& $count 'device removed|DEVICE_REMOVED|DEVICE_HUNG') -gt 0) {
+            Bad 'the graphics card was lost (device removed) in this run.'
+            if ($c.rt -eq '1') { $c.rt = ''; Say 'next run: ray tracing off (B switches it again).' }
+            elseif ($c.safe -ne '1') { $c.safe = '1'; Say 'next run: Safe mode (Z switches it off again).' }
+            elseif ($c.ports -ne 'off') { $c.ports = 'off'; Say 'next run: renderer patches off (Y switches them on again).' }
+            Save-Config
+        }
+    }
     $faulted = & $count 'VIctory: .*0xc0000005'
-    if ($faulted -gt 0 -and $script:LazyFromTry) {
+    if ((OwnEngine) -and $faulted -gt 0 -and $script:LazyFromTry) {
         $c.lazy = 'off'
         Save-Config
         Bad 'the game crashed on a memory access in this run.'
         Say 'next run: lazy copy-back is off (the card results are copied back before the game hears the card is done).'
     }
     # 6.7: the descriptor slots ran out with 384 lists in the air: next run 256.
-    if ((& $count 'dynamic descriptor slots ran out|no free dynamic descriptor slots') -gt 0 -and $c.slots -ne 'out') {
+    if ((OwnEngine) -and (& $count 'dynamic descriptor slots ran out|no free dynamic descriptor slots') -gt 0 -and $c.slots -ne 'out') {
         $c.slots = 'out'
         Save-Config
         Say 'next run: 256 lists in the air before a wait (the descriptor slots ran out with 384).'
     }
     $lost = & $count 'device removed|DEVICE_REMOVED|DEVICE_HUNG'
-    if ($lost -gt 0) {
+    if ((OwnEngine) -and $lost -gt 0) {
         Bad 'the graphics card was lost (device removed) in this run.'
         if ($c.fast -eq '1') {
             $c.fast = ''
@@ -1380,7 +1634,13 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
     try {
         New-Item -ItemType Directory -Force -Path $stage | Out-Null
         Copy-Item -LiteralPath $log -Destination $stage
-        $engineLine = $(if (Engine8) { "engine: 8 GB ($($c.built8))" } else { "engine: ours ($($c.built_key))" })
+        $engineLine = $(if (EngineAvm) { "engine: AvatarManz ($($c.builta)) $EngineAvmUrl $EngineAvmBranch" } elseif (Engine8) { "engine: 8 GB ($($c.built8))" } else { "engine: ours ($($c.built_key))" })
+        # 6.9: the settings the run had (every VICTORY_ one) and the PC's memory.
+        $ram = Ram-Info
+        $envLines = @(Get-ChildItem Env: | Where-Object { $_.Name -like 'VICTORY_*' } | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" })
+        Set-Content -LiteralPath (Join-Path $stage 'settings.txt') -Value (@("ram_mb=$($ram[0]) commit_limit_mb=$($ram[1]) card_mb=$(Card-Vram) threads=$([Environment]::ProcessorCount)") + $envLines) -Encoding ASCII
+        $prep = Join-Path $LogDir 'prepare.log'
+        if (Test-Path -LiteralPath $prep) { Copy-Item -LiteralPath $prep -Destination $stage }
         Set-Content -LiteralPath (Join-Path $stage 'try-version.txt') -Value @("VIctory Try $TryVersion", $engineLine, "console: $($c.console)") -Encoding ASCII
         if (Test-Path $crashes) { Copy-Item -LiteralPath $crashes -Destination $stage }
         # This PC's pipeline list (keys only), for the shared list.
@@ -1488,10 +1748,12 @@ if (-not (Ensure-Tools)) { exit 1 }
 $changed = Update-Source
 if ($null -eq $changed) { Bad 'no source to build: check the internet connection'; exit 1 }
 Run-Newer
-if (-not (Engine8)) {
+if (OwnEngine) {
     if ($changed -or -not (Test-Path (Ours-Exe))) { if (-not (Build-All)) { exit 1 } }
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
-if (Engine8) {
+if (EngineAvm) {
+    Say '6.9: the AvatarManz engine (PortWatch #1 and #2, 16-22 fps on their cards): renderer patches, list calls on eight threads, textures on their own queue, every shader translated and every pipeline made with the game closed (no compiling while you play). N switches to this fork''s engine.'
+} elseif (Engine8) {
     Say 'engine: the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb). N goes back to this fork''s engine.'
 } else {
     Say '6.7: before the game loads: continue your save or start a NEW GAME from the very beginning (J: saved game); hair and soft shadows accumulated over frames as the console''s upscaler does (T); more work in flight before waiting for the card, card results fetched inside their flights on their own switch, more buffers compared on the card, the upscaler DLL no longer refused.'
@@ -1503,10 +1765,40 @@ if (Engine8) {
 function Show-Commands {
     $c = $script:Config
     $on = { param($b) if ($b) { 'ON ' } else { 'off' } }
+    if (EngineAvm) {
+        $rows = @(
+            @('Enter', 'Run again', '', 'start the game again with the settings below'),
+            @('U', 'Update', '', 'download the newest engine, build it, then run the game'),
+            @('N', 'Engine', $(Engine-Name), 'avm: AvatarManz/Belobug engine (default, PortWatch #1/#2); own: this fork''s; 8GB: soldsawn''s'),
+            @('V', 'Version', '', 'show which Try and VIctory version you have'),
+            @('G', 'Game paths', '', 'ask again where the game folder and game_scarlett_master.exe are'),
+            @('C', 'Console', $(if ($c.console -eq 'series-s') { 'S  ' } else { 'X  ' }), 'Series S (renders 1280x720 to 1080p: faster, the one for 6 GB cards) or Series X'),
+            @('R', 'Output size', $(if ($c.res -eq '4k') { '4K ' } else { '1080' }), 'Series X only: the size the game renders to (1080p or 4K)'),
+            @('Y', 'Renderer patches', $(& $on ($c.ports -ne 'off')), 'AvatarManz''s 5 patches of the game''s renderer (faster; off if something looks wrong)'),
+            @('B', 'Ray tracing', $(& $on ($c.rt -eq '1')), 'the game''s ray-traced light: lit rooms, right reflections; about a third slower'),
+            @('X', 'Textures', $(switch ($c.texcap) { 'sharp' { 'shp' } 'low' { 'low' } default { 'aut' } }), 'auto: sharp while the card has room; sharp: up to 2048 always (faces); low: 512 (6 GB stutter)'),
+            @('A', 'Ambient light', $(switch ($c.ambient) { 'off' { 'off' } 'low' { 'low' } 'high' { 'hi ' } default { 'ON ' } }), 'soft light where the sun does not reach: normal, low, high, off'),
+            @('F', 'Above 30 fps', $(& $on ($c.unlock -eq '1')), 'lets the game go above 30 fps (menus reach 60; the game clock stays right)'),
+            @('Z', 'Safe mode', $(& $on ($c.safe -eq '1')), 'AvatarManz''s -Safe: without the newest, faster ways (first thing to try if it breaks)'),
+            @('I', 'CPU graphics helper', $(& $on ($c.igpu -ne 'off')), 'browsers / Discord / Spotify use the CPU''s own graphics, so the card''s memory is the game''s'),
+            @('J', 'Saved game', '', 'continue or new game (from the very beginning), bring a save back, ask before launch on/off'),
+            @('P', 'Prepare again', '', 'translate every shader and make every pipeline again with the game closed'),
+            @('S', 'Reports folder', '', "where report zips are saved: $(Reports-Dir)"),
+            @('E', 'Open reports', '', 'open the reports folder in Explorer'),
+            @('Q', 'Quit', '', 'close VIctory Try')
+        )
+        Write-Host ''
+        Write-Host '  ================= COMMANDS, AvatarManz engine (type the key, then Enter) =================' -ForegroundColor Cyan
+        Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f 'KEY', 'COMMAND', 'NOW', 'WHAT IT DOES') -ForegroundColor Cyan
+        foreach ($r in $rows) { Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3]) }
+        Write-Host '  ===========================================================================================' -ForegroundColor Cyan
+        Write-Host '  Switches (N, C, R, Y, B, X, A, F, Z, I) flip at once and are saved; Enter then runs the game with them.'
+        return
+    }
     $rows = @(
         @('Enter', 'Run again', '', 'start the game again with the settings below'),
         @('U', 'Update', '', 'download the newest VIctory, build it, then run the game'),
-        @('N', 'Engine', $(if (Engine8) { '8GB' } else { 'own' }), '8GB: soldsawn''s 8 GB NVIDIA engine (renders on RTX 4060); own: this fork''s (the other switches are for it)'),
+        @('N', 'Engine', $(Engine-Name), 'avm: AvatarManz/Belobug engine (default, PortWatch #1/#2); own: this fork''s; 8GB: soldsawn''s 8 GB NVIDIA engine'),
         @('V', 'Version', '', 'show which Try and VIctory version you have'),
         @('G', 'Game paths', '', 'ask again where the game folder and game_scarlett_master.exe are'),
         @('C', 'Console', $(if ($c.console -eq 'series-s') { 'S  ' } else { 'X  ' }), 'Xbox Series S (renders 1280x720 and scales up: faster) or Series X (full size)'),
@@ -1574,6 +1866,19 @@ while ($true) {
         if ($k -eq 'E') { try { Start-Process explorer.exe -ArgumentList "`"$(Reports-Dir)`"" } catch { Bad "could not open it: $(Reports-Dir)" }; Show-Commands; continue }
         $c = $script:Config
         $switched = $true
+        if ((EngineAvm) -and @('F', 'Z', 'B', 'Y', 'X') -contains $k) {
+            switch ($k) {
+                'F' { $c.unlock = $(if ($c.unlock -eq '1') { '' } else { '1' }) }
+                'Z' { $c.safe = $(if ($c.safe -eq '1') { '' } else { '1' }) }
+                'B' { $c.rt = $(if ($c.rt -eq '1') { '' } else { '1' }) }
+                'Y' { $c.ports = $(if ($c.ports -eq 'off') { '' } else { 'off' }) }
+                'X' { $c.texcap = $(switch ($c.texcap) { 'sharp' { 'low' } 'low' { '' } default { 'sharp' } }) }
+            }
+            Save-Config
+            Say "switched ($k). Press another switch, or Enter to run the game."
+            Show-Commands
+            continue
+        }
         switch ($k) {
             'F' { $c.fast = $(if ($c.fast -eq '1') { '' } else { '1' }) }
             'Z' { $c.plain = $(if ($c.plain -eq '1') { '' } else { '1' }) }
@@ -1592,7 +1897,7 @@ while ($true) {
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
             'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.6'; $c.console_user = '1' }
             'D' { Reset-Recommended; $c = $script:Config }
-            'N' { $c.engine = $(if ($c.engine -eq '8gb') { '' } else { '8gb' }); $null = Ensure-Engine $false }
+            'N' { $c.engine = $(switch ($c.engine) { 'avm' { 'own' } '8gb' { 'avm' } default { '8gb' } }); $null = Ensure-Engine $false }
             default { $switched = $false }
         }
         if ($switched) {
@@ -1607,7 +1912,7 @@ while ($true) {
     }
     if ($k -eq 'Q') { exit 0 }
     if ($k -eq 'G') { while (-not (Ask-Game $true)) {} }
-    if ($k -eq 'P') { $script:Config.prepared = ''; $script:Config.recipes = '' }
+    if ($k -eq 'P') { $script:Config.prepared = ''; $script:Config.recipes = ''; $script:Config.avm_shaders = ''; $script:Config.avm_warm = '' }
     if ($k -eq 'U') {
         $changed = Update-Source
         # 5.7: a newer VIctory Try takes over at once (its own fixes, not
@@ -1615,7 +1920,7 @@ while ($true) {
         Save-Config; Run-Newer -FromMenu
         # (Run-Newer did not hand over: this is the newest VIctory Try.)
         Say "VIctory Try $TryVersion is the newest one on the server"
-        if (Engine8) { $null = Ensure-Engine $true }
+        if (-not (OwnEngine)) { $null = Ensure-Engine $true }
         elseif ($changed -or -not (Test-Path (Ours-Exe))) { if (-not (Build-All)) { Bad 'the new build FAILED: the game runs on the last working build (older fixes). Send the error above.' } }
     }
 }

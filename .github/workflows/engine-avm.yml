@@ -1,0 +1,49 @@
+name: AvatarManz engine builds
+
+# VIctory Try 6.9 builds the AvatarManz engine on the user's PC (the default
+# engine, N in its menu): Belobug/VIctory-Belobug-AMD's a-publier branch,
+# which is avatarmanz/VIctory-7900XTX c9c932c plus Belobug's three commits
+# (flicker fix, VRAM-aware texture cap, FSR 4.1.2). avatarmanz main is checked
+# too (VICTORY_TRY_AVM=avatarmanz picks it). Neither has Windows CI of its own
+# that this fork can see: this checks that the newest of both compiles with the
+# exact command VIctory Try runs, before players press U.
+on:
+  push:
+    paths:
+      - 'scripts/try/**'
+      - '.github/workflows/engine-avm.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '30 */6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - repo: Belobug/VIctory-Belobug-AMD
+            ref: a-publier
+          - repo: avatarmanz/VIctory-7900XTX
+            ref: main
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.ref }}
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check (diag profile, diagnostics, as VIctory Try builds it)
+        shell: pwsh
+        run: |
+          git log -1 --format='engine %h %ad %s' --date=short
+          cargo check --locked --profile diag -p victory --features diagnostics --message-format=short 2>&1 | Tee-Object -FilePath check.txt
+          $code = $LASTEXITCODE
+          $hits = @(Select-String -CaseSensitive -Path check.txt -Pattern '^error|: error' | Select-Object -First 40 | ForEach-Object { $_.Line.Trim() })
+          if ($code -ne 0 -and $hits.Count -gt 0) { Write-Output ("::error::" + ($hits -join ' %0A ')) }
+          exit $code
