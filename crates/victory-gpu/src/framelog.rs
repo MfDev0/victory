@@ -438,8 +438,8 @@ fn sample() -> [u64; S] {
         crate::draw::drawn(),
         crate::pipeline::frame_log_counts().0,
         crate::pipeline::frame_log_counts().1,
-        crate::texture::SPARE_STATS[0].load(Relaxed),
-        crate::texture::SPARE_STATS[1].load(Relaxed),
+        crate::host::STAGING_REUSE[0].load(Relaxed),
+        crate::host::STAGING_REUSE[1].load(Relaxed),
         free_mb(),
     ]
 }
