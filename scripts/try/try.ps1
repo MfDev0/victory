@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.0'
+$TryVersion = '6.1'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -626,6 +626,8 @@ function Set-Engine8Env {
 # its translations by some of them: the same ones are needed both times).
 function Set-RunEnv {
     $c = $script:Config
+    # 6.1: the game log's first line names this version (victory.exe prints it).
+    $env:VICTORY_TRY_VERSION = $TryVersion
     $env:VICTORY_GAME_DIR = $c.game_dir
     $env:RUST_BACKTRACE = '1'
     # Long shader loops pass the 2 s driver timeout; 256 turns was the
@@ -996,7 +998,7 @@ function Run-InOwnWindow($c, [string]$log) {
     $lines = @(
         'param([string]$Exe, [string]$Game, [string]$Console, [string]$Log, [string]$CodeFile)',
         'try { $Host.UI.RawUI.WindowTitle = ''VIctory - game output'' } catch {}',
-        'Write-Host ''== VIctory game output (the menu is in the VIctory Try window)'' -ForegroundColor Cyan',
+        "Write-Host '== VIctory Try $TryVersion - game output (the menu is in the VIctory Try window)' -ForegroundColor Cyan",
         'Write-Host ''   This window closes by itself when the game stops.''',
         'Write-Host ''''',
         '& $Exe run $Game --execute --console $Console 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $Log',
@@ -1168,11 +1170,14 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
         Save-Config
     }
     # Everything to send in one file, in the reports folder (S changes it).
-    $zip = Join-Path (Reports-Dir) "VIctory-report-$stamp.zip"
+    # (6.1: the version in the name, and in try-version.txt inside.)
+    $zip = Join-Path (Reports-Dir) "VIctory-report-$TryVersion-$stamp.zip"
     $stage = Join-Path $TryHome "report-$stamp"
     try {
         New-Item -ItemType Directory -Force -Path $stage | Out-Null
         Copy-Item -LiteralPath $log -Destination $stage
+        $engineLine = $(if (Engine8) { "engine: 8 GB ($($c.built8))" } else { "engine: ours ($($c.built_key))" })
+        Set-Content -LiteralPath (Join-Path $stage 'try-version.txt') -Value @("VIctory Try $TryVersion", $engineLine, "console: $($c.console)") -Encoding ASCII
         if (Test-Path $crashes) { Copy-Item -LiteralPath $crashes -Destination $stage }
         # This PC's pipeline list (keys only), for the shared list.
         $early = Join-Path $env:VICTORY_CACHE_DIR 'pipelines\early-pipelines.txt'
@@ -1198,6 +1203,7 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
 
 Write-Host ''
 Write-Host "  VIctory Try $TryVersion" -ForegroundColor Green
+try { $Host.UI.RawUI.WindowTitle = "VIctory Try $TryVersion" } catch {}
 Say 'Builds the newest VIctory from MfDev0/victory, with upstream VIctory''s new'
 Say 'fixes added by themselves, on this PC and runs your game.'
 Say 'Nothing is uploaded or reported anywhere.'
@@ -1231,10 +1237,18 @@ function Run-Newer([switch]$FromMenu) {
     if ($script:GCode -ne 0 -or $text -notmatch "\`$TryVersion = '([0-9.]+)'") { return }
     $theirs = $Matches[1]
     try { if ([version]$theirs -le [version]$TryVersion) { return } } catch { return }
-    Step "Starting VIctory Try $theirs (newer than this $TryVersion)"
+    Step "UPDATING: starting VIctory Try $theirs (this window ran $TryVersion)"
     $newer = Join-Path $TryHome 'try-latest.ps1'
     Set-Content -LiteralPath $newer -Value $text -Encoding ASCII
     $script:Lock.ReleaseMutex()
+    # 6.1: the newer one starts from the settings made before VIctory Try
+    # started, not from the ones this window set for its runs (it took those
+    # for the user's own and kept this version's defaults).
+    if ($script:UserAll) {
+        Get-ChildItem Env: | Where-Object { $_.Name -like 'VICTORY_*' -and -not $script:UserAll.ContainsKey($_.Name) } | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" -ErrorAction SilentlyContinue }
+        foreach ($k in $script:UserAll.Keys) { [Environment]::SetEnvironmentVariable($k, $script:UserAll[$k], 'Process') }
+    }
+    $env:VICTORY_TRY_RUNNING = ''
     $env:VICTORY_TRY_HANDOFF = '1'
     $ps = (Get-Process -Id $PID).Path
     & $ps -NoProfile -ExecutionPolicy Bypass -File $newer
@@ -1276,7 +1290,7 @@ if (-not (Engine8)) {
 if (Engine8) {
     Say 'engine: the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb). N goes back to this fork''s engine.'
 } else {
-    Say '6.0: this fork''s engine, with 19 speed fixes (all CPU cores, the card''s queues first, the CPU''s own graphics for other programs). N switches to the 8 GB engine.'
+    Say '6.1: this fork''s engine, with the 6.0 speed fixes and loading-screen pre-loading (all CPU cores, the card''s queues first, the CPU''s own graphics for other programs). N switches to the 8 GB engine.'
 }
 
 # Every command of the menu: its key, what it is, whether it is on now, and
@@ -1386,6 +1400,8 @@ while ($true) {
         # 5.7: a newer VIctory Try takes over at once (its own fixes, not
         # only the game's, without closing this window first).
         Save-Config; Run-Newer -FromMenu
+        # (Run-Newer did not hand over: this is the newest VIctory Try.)
+        Say "VIctory Try $TryVersion is the newest one on the server"
         if (Engine8) { $null = Ensure-Engine $true }
         elseif ($changed -or -not (Test-Path (Ours-Exe))) { if (-not (Build-All)) { Bad 'the new build FAILED: the game runs on the last working build (older fixes). Send the error above.' } }
     }

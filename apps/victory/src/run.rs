@@ -139,6 +139,12 @@ pub fn run(
     }
     victory_loader::report_crashes();
     victory_loader::log_crashes_to(temp.with_file_name("crashes.log"));
+    // The launcher's version at the top of the log (Try 6.1): a report then
+    // says which VIctory Try ran it (one had run 5.4 for weeks while newer
+    // ones were sent).
+    if let Ok(version) = std::env::var("VICTORY_TRY_VERSION") {
+        println!("VIctory Try {version} started this run");
+    }
     victory_hle::runtime::use_console_timers();
     #[cfg(feature = "diagnostics")]
     diagnostics(&image, &cfg);

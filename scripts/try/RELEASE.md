@@ -1,13 +1,8 @@
-VIctory Try 6.0
-- Back on our own engine (5.9's 8 GB engine made no difference; N still switches to it)
-- Lighting: the game's bounce light comes from ray-traced probes that cannot run here, so shadowed areas were black. We swap that pass's output for a soft constant light (A key), and the shadow-program fix keeps rooms lit on NVIDIA (W key)
-- CPU: copy-back, refresh and compare work now runs on all your CPU threads but two (it was a quarter of them, max 6); texture detiling uses half your threads (it was 4)
-- CPU: the game's descriptor sync (160-230 ms a frame in your last report) now runs on all threads, without one lock per record
-- CPU: the game runs at above-normal priority, Windows is told not to put it on the slow efficiency cores, and our helper threads and copy-back thread run above normal
-- CPU: the build is made for YOUR processor (AVX2/AVX-512) with thin link-time optimisation. The first build after this update takes longer
-- GPU: the game's graphics queue and copy queue ask the card for high priority
-- GPU: the device is made on the high-performance card, picked by Windows' own GPU ranking, and victory.exe is set to "High performance" in Windows graphics settings
-- GPU: the card, which was 40-74 % idle, now checks shader writes in buffers of 4 MB and up (was 16 MB) instead of the CPU comparing 100-150 MB a frame
-- iGPU: if your CPU has its own graphics, browsers, Discord, Spotify and Steam are moved onto it, so the NVIDIA card's 6 GB are left for the game (I key undoes it)
-- RAM: Windows keeps a quarter of your RAM (max 4 GB) for the game first, so its memory is not paged out while RAM is nearly full
-- Power: the High performance power plan while the game runs; your old plan comes back afterwards
+VIctory Try 6.1
+- Update button fixed for good: U now switches to the new version in the same window, with a clear "UPDATING" line, and the new version starts from clean settings (it no longer inherits the old version's)
+- The version is now everywhere: the window title, the game output window, the first line of the game log, the report zip name, and try-version.txt inside the zip
+- Loading screens pre-load the world like the console does: while a loading screen, menu or fade is up, textures get a big upload budget (up to 768 MB and 1.2 s a frame), so the world opens with its textures there instead of popping in over the first minute
+- Less "PS3 look" at the start: textures keep full detail until the card is 85 % full (it was 70 %; your 6 GB card sat at 73 %, so people and buildings started blurred)
+- Blurred textures get their full detail back 4x faster (1,024 a frame, was 256)
+- The game's own file streaming (DirectStorage reads and decompression) runs at above-normal priority, as the console's decompression hardware runs beside its CPU, so high-detail models arrive sooner
+- Everything from 6.0 stays (all CPU threads, high-priority card queues, the CPU graphics helper, the tuned build)

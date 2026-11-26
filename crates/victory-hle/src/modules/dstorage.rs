@@ -443,7 +443,22 @@ fn scheduler() -> Option<&'static Scheduler> {
             .filter(|i| {
                 std::thread::Builder::new()
                     .name(format!("dstorage {i}"))
-                    .spawn(|| work(scheduler))
+                    .spawn(|| {
+                        // Try 6.0: above normal priority, as the console's
+                        // decompression hardware runs beside its CPU: the
+                        // title's streamer waits for these reads (people
+                        // and buildings came in at a low level of detail
+                        // first, the full one late). `VICTORY_WIDE_PRIORITY=0`:
+                        // normal.
+                        if std::env::var_os("VICTORY_WIDE_PRIORITY").is_none_or(|v| v != "0") {
+                            use windows_sys::Win32::System::Threading::{
+                                GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+                            };
+                            // SAFETY: a plain call on our own thread.
+                            unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL) };
+                        }
+                        work(scheduler)
+                    })
                     .is_ok()
             })
             .count();

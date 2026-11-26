@@ -443,6 +443,17 @@ fn heap_recheck() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("VICTORY_HEAP_RECHECK").is_none_or(|v| v != "0"))
 }
+/// Passes over textures picked by index that ran behind a loading screen
+/// with its big budget (`loading_draws`), since the start.
+pub(crate) static HEAP_TEXTURES_LOADING: AtomicU64 = AtomicU64::new(0);
+
+/// A frame with fewer draws than this is a loading screen to the texture
+/// pass (`VICTORY_LOADING_DRAWS`; 400 unless set, 0: none is).
+fn loading_draws() -> u64 {
+    static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *N.get_or_init(|| std::env::var("VICTORY_LOADING_DRAWS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(400))
+}
+
 /// Times a placed texture's slot was passed over because its memory is not
 /// mapped.
 pub(crate) static HEAP_TEXTURES_AWAY: AtomicU64 = AtomicU64::new(0);
@@ -1851,9 +1862,15 @@ impl State {
         }) << 20;
         static FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
         static SPENT: AtomicU64 = AtomicU64::new(0);
+        // The draws of the frame before (`list::DRAWS_EVER` at each new
+        // frame): few of them is a loading screen, a menu or a fade.
+        static DRAWS_AT: AtomicU64 = AtomicU64::new(0);
+        static LAST_DRAWS: AtomicU64 = AtomicU64::new(u64::MAX);
         let frame = crate::frame::current();
         if FRAME.swap(frame, Ordering::Relaxed) != frame {
             SPENT.store(0, Ordering::Relaxed);
+            let ever = crate::list::DRAWS_EVER.load(Ordering::Relaxed);
+            LAST_DRAWS.store(ever.saturating_sub(DRAWS_AT.swap(ever, Ordering::Relaxed)), Ordering::Relaxed);
         }
         // No more of them are made while the card has no room
         // (`resource::room`): by what is alive now, not by what was ever
@@ -1891,7 +1908,9 @@ impl State {
         if room {
             // Texture quality: blurred textures get their largest levels
             // back while the card has memory to spare.
-            crate::descriptor::host::sharpen(256);
+            // (1,024 a pass, Try 6.0: 256 left a blurred backlog of
+            // thousands for a minute after the card had room again.)
+            crate::descriptor::host::sharpen(1024);
             host.texture_slots_waiting(frame);
         }
         let (due, census) = host.texture_slots_due(frame, 4096);
@@ -1943,6 +1962,30 @@ impl State {
         let catchup = catchup && backlog_ok;
         let per_frame = per_frame / 4 * quarters;
         let (per_frame, span) = if catchup && due.len() >= 1024 { (per_frame * 3, span * 3) } else { (per_frame, span) };
+        // Try 6.0, the console's way: what the title streams in behind a
+        // loading screen is uploaded behind it too. A frame after one of
+        // few draws (`VICTORY_LOADING_DRAWS`, 400 unless set; 0: never; the
+        // world draws 2,000-4,600) gives the pass up to 1.2 s and 768 MB
+        // (384 MB when the PC is short of memory): nobody sees a loading
+        // screen take longer, and the world then opens with its textures
+        // there instead of coming in over the first minute.
+        let loading = !due.is_empty() && LAST_DRAWS.load(Ordering::Relaxed) < loading_draws();
+        let (per_frame, span) = if loading {
+            let bytes: u64 = if backlog_ok { 768 << 20 } else { 384 << 20 };
+            let n = HEAP_TEXTURES_LOADING.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == 1 || n.is_multiple_of(200) {
+                tracing::info!(
+                    passes = n,
+                    due = due.len(),
+                    draws_last_frame = LAST_DRAWS.load(Ordering::Relaxed),
+                    mb = bytes >> 20,
+                    "a loading screen: textures picked by index get a big budget behind it (VICTORY_LOADING_DRAWS=0: not)"
+                );
+            }
+            (per_frame.max(bytes), span.max(std::time::Duration::from_millis(1200)))
+        } else {
+            (per_frame, span)
+        };
         // A run made early (`State::early_textures`) has a budget of its
         // own: its bytes on top of what the frame has spent so far.
         // (Not `most`: that is the longest wait between looks, used below.)

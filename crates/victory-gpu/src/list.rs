@@ -1889,7 +1889,12 @@ mod state {
 
 fn count_draw() {
     DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    DRAWS_EVER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
+
+/// Draws recorded since the start (never taken): the texture pass tells a
+/// loading screen (a few draws a frame) from the world by it.
+pub(crate) static DRAWS_EVER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Draws of the kinds the host does not run yet (indirect, mesh), and
 /// dispatches, counted per frame for the log.

@@ -224,10 +224,27 @@ fn adaptive_drop() -> u32 {
     }
     let short = host()
         .and_then(|h| h.video_memory())
-        .is_some_and(|[budget, used, ..]| used >= budget / 100 * 70);
+        .is_some_and(|[budget, used, ..]| used >= budget / 100 * sharp_percent());
     let n = if short { 1 + u32::from(!crate::resource::room_lately()) } else { 0 };
     LAST.store((tenth << 2) | u64::from(n), Ordering::Relaxed);
     n
+}
+
+/// The share of the card's budget, in percent, under which textures keep
+/// every level (`VICTORY_TEXTURE_SHARP_PERCENT`, 50 to 89; Try 6.0: 85, it
+/// was 70). A 6 GB card sat at 73 % of its budget in the world, just past
+/// the old line, so every texture made then lost its largest level and
+/// people and buildings came in blurred first; the card's own line for new
+/// textures (`resource::room`) is at 90 %.
+fn sharp_percent() -> u64 {
+    static P: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *P.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_SHARP_PERCENT")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(85)
+            .clamp(50, 89)
+    })
 }
 
 /// The bytes of the tiles given to textures now: the card's memory they

@@ -448,6 +448,25 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      (fxceless #1117); if that fails, the plain build
      (`VICTORY_TRY_PLAIN_BUILD=1`: plain only). The first build after the
      update rebuilds everything once.
+   6.1 (6.0 ran: much better than 5.4, but people looked low-detail at first
+   and buildings came in late; and U had never moved a window past 5.4):
+   - **U really updates**: the newer version takes over in the same window
+     with an `UPDATING` line, and starts from the settings made before
+     VIctory Try started (it took the old window's run settings for the
+     user's own and kept their old values); after U with nothing newer it
+     says so;
+   - **the version everywhere**: window titles, the first line of the game
+     log (`VICTORY_TRY_VERSION`, printed by victory.exe), the report name
+     (`VIctory-report-<version>-<date>.zip`) and `try-version.txt` in it;
+   - **loading screens pre-load the world** (the console's way): a frame
+     after one of fewer than 400 draws (`VICTORY_LOADING_DRAWS`; 0: off)
+     gives the pass over textures picked by index up to 1.2 s and 768 MB
+     (384 MB when the PC is short of memory);
+   - **full detail until 85 %** of the card's budget
+     (`VICTORY_TEXTURE_SHARP_PERCENT`; 70 before, and a 6 GB card sat at
+     73 %), and 1,024 blurred textures a pass made sharp again (256 before);
+   - **DirectStorage workers above normal priority** (the title's streamer
+     waits for them; `VICTORY_WIDE_PRIORITY=0`: normal).
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,
