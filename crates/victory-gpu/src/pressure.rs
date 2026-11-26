@@ -28,8 +28,8 @@ pub(crate) enum Level {
     Normal = 0,
     /// Getting short: idle memory goes sooner, fewer upload buffers kept.
     Mild = 1,
-    /// Nearly out, or a refusal just now: the texture pass takes half and
-    /// no catch-up, idle memory goes after a second, nothing kept.
+    /// Nearly out, or a refusal just now: no texture catch-up, idle memory
+    /// goes after a second, nothing kept.
     Critical = 2,
 }
 
@@ -181,7 +181,9 @@ pub(crate) fn texture_pass_quarters() -> (u64, bool) {
     match level() {
         Level::Normal => (4, true),
         Level::Mild => (4, true),
-        Level::Critical => (2, false),
+        // (Not halved: on 6 and 8 GB cards the waiting textures were the
+        // black roads, buildings and people; only the catch-up goes.)
+        Level::Critical => (4, false),
     }
 }
 

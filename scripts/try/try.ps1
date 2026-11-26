@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '5.4'
+$TryVersion = '5.5'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -40,11 +40,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -670,6 +670,7 @@ function Run-Game {
     }
     if ($c.added) { Say "plus upstream: $(@($c.added -split "`n").Count) new fix(es) on top" }
     if ($c.console -ne 'series-x') { $c.console = 'series-s' }
+    Auto-Console
     Say "console: Xbox $(if ($c.console -eq 'series-s') { 'Series S' } else { 'Series X' })   (C switches)"
     Say "command: victory.exe run `"$($c.game_exe)`" --execute --console $($c.console)   (VICTORY_GAME_DIR=$($c.game_dir))"
     Say 'To stop: close the game window.'
@@ -761,6 +762,36 @@ function Run-InOwnWindow($c, [string]$log) {
 
 # After a run: a short summary of its log, the safer setting for next time
 # if the card was lost (only then), and one zip with everything to send.
+# The card's memory budget in MB the last game log names (VICTORY's
+# "vram_budget_mb=", coloured), or 0.
+function Log-Vram([string]$log) {
+    if (-not $log -or -not (Test-Path -LiteralPath $log)) { return 0 }
+    $m = Select-String -LiteralPath $log -Pattern 'vram_budget_mb(?:\x1b\[[0-9;]*m|=)*([0-9]+)' -List -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($m -and $m.Matches.Count -gt 0) { return [int]$m.Matches[0].Groups[1].Value }
+    return 0
+}
+# 5.5: cards with less than 8 GB of budget (6 and 8 GB cards) run as Series S
+# once by themselves. Series X's render targets took 2.3 to 3 GB of them, and
+# the textures that no longer fitted waited, drawn black (roads, buildings,
+# people; 17,000 to 27,000 waiting in the 2026-11-25 and 11-26 reports).
+# Series S renders at 1280x720 and asks for less memory. C goes back, and
+# after that the choice stays yours.
+function Auto-Console {
+    $c = $script:Config
+    if ($c.console_auto -eq '5.5') { return }
+    if (-not $c.vram) {
+        $last = Get-ChildItem -LiteralPath $LogDir -Filter 'game-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($last) { $v = Log-Vram $last.FullName; if ($v -gt 0) { $c.vram = [string]$v } }
+    }
+    if (-not $c.vram) { return }
+    $c.console_auto = '5.5'
+    if ([int]$c.vram -lt 8000 -and $c.console -eq 'series-x') {
+        $c.console = 'series-s'
+        Say "your card's memory budget is $($c.vram) MB: switched to Series S (less card memory, so textures load instead of staying black). C goes back to Series X."
+    }
+    Save-Config
+}
+
 function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
     if (-not (Test-Path $log)) { return }
     $c = $script:Config
@@ -776,6 +807,16 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
         Say "speed: $median fps typical at the end (last $($last.Count) reports), $best fps best"
     } else {
         Say 'speed: no frame report in the log (the world was not reached, or the run was short)'
+    }
+    # 5.5: the card's budget (for Auto-Console) and the textures still
+    # waiting for room at the end (drawn black until they load).
+    $v = Log-Vram $log
+    if ($v -gt 0) { $c.vram = [string]$v; Save-Config }
+    $lastWait = @($lines | Where-Object { $_ -match 'picked by index: [0-9]+ uploaded so far \([0-9]+ MB\), ([0-9]+) waiting' }) | Select-Object -Last 1
+    if ($lastWait -and $lastWait -match ', ([0-9]+) waiting') {
+        $w = [int]$Matches[1]
+        if ($w -gt 2000) { Say "textures waiting at the end: $w (black until they load: the card's memory is full$(if ($c.console -eq 'series-x') { '; Series S (C) needs less' }))" }
+        else { Say "textures waiting at the end: $w" }
     }
     # Draws still waiting for their pipelines at the end: what is missing
     # (see-through objects) until the next launches have compiled them.
@@ -1015,7 +1056,7 @@ while ($true) {
             'W' { $c.shadowfix = $(if ($c.shadowfix -eq 'off') { '' } else { 'off' }) }
             'K' { $c.gpucopy = $(if ($c.gpucopy -eq 'off') { '' } else { 'off' }) }
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
-            'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }) }
+            'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.5' }
             'D' { Reset-Recommended; $c = $script:Config }
             default { $switched = $false }
         }

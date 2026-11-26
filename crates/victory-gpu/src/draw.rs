@@ -1934,9 +1934,8 @@ impl State {
         // drains; `VICTORY_TEXTURE_CATCHUP=0` keeps the plain budget.
         static CATCHUP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let catchup = *CATCHUP.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_CATCHUP").is_none_or(|v| v != "0"));
-        // Nearly out of memory (`crate::pressure`): half the bytes and no
-        // catch-up; what is drawn still gets its textures, only the
-        // backlog drains slower.
+        // Nearly out of memory (`crate::pressure`): no catch-up (the share
+        // in quarters is kept for `VICTORY_PRESSURE` levels to come).
         let (quarters, backlog_ok) = crate::pressure::texture_pass_quarters();
         let catchup = catchup && backlog_ok;
         let per_frame = per_frame / 4 * quarters;

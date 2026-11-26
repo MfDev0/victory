@@ -324,6 +324,17 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      buffers were reused.
    5.4: report zips go to a folder of their own, `Downloads\VIctory-reports`
    (no more Desktop); **S** changes the folder, **E** opens it.
+   5.5, black roads, buildings and people (the 2026-11-25 and 11-26 reports:
+   17,000 to 27,000 textures waiting for room on 6 and 8 GB cards):
+   - **cards under 8 GB of budget run as Series S once by themselves**
+     (render targets of 1280x720 take far less of the card); **C** goes
+     back to Series X, and the choice then stays yours;
+   - the room kept for render targets is 1,536 MB on Series S and never more
+     than 35 % of the card (it was 3,072 MB on every card);
+   - a texture that finds no room gets its small levels (blurred, not black)
+     up to the card's budget, not only up to 97 % of it;
+   - the memory guard no longer halves the texture pass when nearly out;
+   - the summary says how many textures still waited at the end.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,

@@ -1452,7 +1452,7 @@ pub(crate) fn room() -> bool {
         // world makes in its first frame ([`targets_room_kept`]) counts as
         // used.
         Some([budget, used, ..]) => {
-            used + crate::shadow::card_room_kept() + targets_room_kept() < budget / 100 * room_percent()
+            used + crate::shadow::card_room_kept() + targets_room_kept(budget) < budget / 100 * room_percent()
         }
         None => filled < WITHOUT_BUDGET,
     }
@@ -1468,7 +1468,11 @@ pub(crate) fn squeeze_room() -> bool {
         return false;
     }
     match crate::host::host().and_then(|h| h.video_memory()) {
-        Some([budget, used, ..]) => used < budget / 100 * 97,
+        // Up to the budget itself (it was 97 %): past 97 % every new
+        // texture stayed black for the rest of the run on 6 and 8 GB cards
+        // (2026-11-25 and 11-26 reports: 17,000 to 27,000 waiting, none
+        // squeezed); its small levels are a few hundred KiB.
+        Some([budget, used, ..]) => used < budget,
         None => false,
     }
 }
@@ -1511,15 +1515,25 @@ pub(crate) fn squeezing<R>(f: impl FnOnce() -> R) -> R {
 /// 238), and the queue was refused from the first world frame on. With
 /// their room kept, the queue stops that much earlier while the world
 /// loads and gets it back as the targets are made.
+///
+/// The 3,072 MB were measured on Series X with a 12 GB card. Unless the
+/// variable says otherwise it is 1,536 MB on Series S (render targets of
+/// 1280x720 and less), and never more than 35 % of the card's `budget`: on a
+/// 6 GB card (budget 5,153 MB, 2026-11-26 report) the 3,072 MB left the
+/// textures some 1,500 MB, and 27,000 of them waited, drawn black.
 #[cfg(windows)]
-pub(crate) fn targets_room_kept() -> u64 {
+pub(crate) fn targets_room_kept(budget: u64) -> u64 {
     use std::sync::atomic::Ordering::Relaxed;
-    static MOST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    let most = *MOST.get_or_init(|| {
+    static MOST: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    let asked = *MOST.get_or_init(|| {
         std::env::var("VICTORY_CARD_ROOM_FOR_TARGETS_MB")
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
-            .map_or(3072 << 20, |mb| mb.min(8192) << 20)
+            .map(|mb| mb.min(8192) << 20)
+    });
+    let most = asked.unwrap_or_else(|| {
+        let console = if crate::console::current() == crate::console::Console::SeriesS { 1536 << 20 } else { 3072 << 20 };
+        console.min(budget / 100 * 35)
     });
     // Every host texture's bytes less those of the copies the title fills.
     let targets = HOST_TEXTURES[1].load(Relaxed).saturating_sub(KINDS[1].load(Relaxed));
