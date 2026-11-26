@@ -282,6 +282,17 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      switched off); **D** does it again any time;
    - the refused pipelines' console shaders are in the report, for the next
      round.
+   5.1, the 6 pipelines the RTX 4060 refused in every run (they asked for
+   64-lane waves, which NVIDIA cards do not have):
+   - **64-lane programs split in two 32-lane halves even around shared
+     memory**: the way the open VIctory pull requests run them (#1890 "split
+     waves", #233), taken further where those still refuse: the halves meet
+     wherever every lane runs, and are not made to meet inside branches
+     only some lanes take (a meeting there would freeze the card). Close
+     results instead of a pipeline that is never made and dispatches that
+     are dropped (`VICTORY_WAVE_FORCE_SPLIT=0`: refused as before);
+   - in that last form also: wave-wide branches, lane permutes, 16-bit wave
+     sums and lane masks are taken within each half.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file on the Desktop,
