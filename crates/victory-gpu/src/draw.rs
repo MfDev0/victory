@@ -1509,8 +1509,7 @@ impl State {
         let host = heap.host()?;
         let gpu = host.strides_gpu()?;
         // (its own key, apart from `heap_buffers`'s)
-        const ONCE: usize = usize::MAX - 0x5f;
-        if list.first_use(ONCE)
+        if list.first_use(gpu as usize | 2)
             && let Some(buffer) = host.strides_buffer()
         {
             list.keep(buffer);
@@ -1527,9 +1526,10 @@ impl State {
             .find(|h| !h.samplers())?;
         let host = heap.host()?;
         let gpu = host.strides_gpu()?;
-        // One key per list, as textures have: no title resource is there.
-        const ONCE: usize = usize::MAX - 0x5e;
-        if !list.first_use(ONCE) {
+        // Once per list and table (a list may bind two view heaps): the
+        // table's aligned address, tagged apart from title resources
+        // (codec_d, cool_fox 18bdf79).
+        if !list.first_use(gpu as usize | 1) {
             return Some(gpu);
         }
         // The list may outlive the title's heap object, which owns the table.
@@ -1541,9 +1541,10 @@ impl State {
         // frame (2026-11-24, run 11).
         // shortcut: what the title writes into such buffers between lists
         // of one frame is seen a frame late.
-        static FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
+        // Per heap: with one stamp for all, a second view heap's buffers
+        // went without their pass for the frame (cool_fox 18bdf79).
         let frame = crate::frame::current();
-        if FRAME.swap(frame, Ordering::Relaxed) == frame {
+        if host.buffer_frame.swap(frame, Ordering::Relaxed) == frame {
             return Some(gpu);
         }
         let started = std::time::Instant::now();
@@ -1554,12 +1555,14 @@ impl State {
         // released resource goes stale without a write, and a slot written
         // before its memory had a host copy is only made then.
         type Ranges = std::collections::HashMap<u32, (std::sync::Arc<crate::shadow::Shadow>, u64, u64)>;
-        static RANGES: std::sync::Mutex<Option<std::collections::HashMap<usize, (u64, Ranges)>>> =
-            std::sync::Mutex::new(None);
+        // (by the heap and its table: a new heap where one was has another
+        // table and none of its ranges; cool_fox 18bdf79)
+        type ByHeap = std::collections::HashMap<(usize, u64), (u64, Ranges)>;
+        static RANGES: std::sync::Mutex<Option<ByHeap>> = std::sync::Mutex::new(None);
         let mut kept = RANGES.lock().unwrap_or_else(|e| e.into_inner());
         let (passes, ranges) = kept
             .get_or_insert_with(Default::default)
-            .entry(std::ptr::from_ref(host) as usize)
+            .entry((std::ptr::from_ref(host) as usize, gpu))
             .or_insert_with(|| (0, Ranges::new()));
         let changed = host.buffer_changes();
         let slots = if *passes % 16 == 0 {

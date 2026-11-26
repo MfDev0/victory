@@ -14,6 +14,10 @@ use super::{VIEW_TAG, View, view_at};
 use crate::host::host;
 
 pub(crate) struct HostHeap {
+    /// The frame of this heap's last pass over its buffer views
+    /// (`draw::State::heap_buffers`): each heap its own, not one for all
+    /// (codec_d, cool_fox 18bdf79).
+    pub(crate) buffer_frame: std::sync::atomic::AtomicU64,
     pub(crate) heap: ID3D12DescriptorHeap,
     cpu: usize,
     step: u32,
@@ -1007,6 +1011,7 @@ impl HostHeap {
             })
             .flatten();
         let h = HostHeap {
+            buffer_frame: std::sync::atomic::AtomicU64::new(u64::MAX),
             heap,
             cpu,
             step,
