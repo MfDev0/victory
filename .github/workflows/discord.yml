@@ -27,9 +27,9 @@ jobs:
         env:
           SECRET_HOOK: ${{ secrets.DISCORD_WEBHOOK }}
           MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
-          # The owner's Discord user ID (numbers only) pings them; without
-          # one the post names sks_a in plain text (Discord pings only by ID).
-          MENTION_ID: ${{ vars.DISCORD_USER_ID }}
+          # The owner's (sks_a) Discord user ID: the post pings them. A
+          # DISCORD_USER_ID repository variable replaces it.
+          MENTION_ID: ${{ vars.DISCORD_USER_ID || '1515414575653060721' }}
         run: |
           hook="$SECRET_HOOK"
           if [ -z "$hook" ]; then

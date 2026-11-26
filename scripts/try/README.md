@@ -322,10 +322,14 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      instead of a burst of failing calls (a stutter);
    - the game log says each report which level it is at, and how many upload
      buffers were reused.
+   5.4: report zips go to a folder of their own, `Downloads\VIctory-reports`
+   (no more Desktop); **S** changes the folder, **E** opens it.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
-   submissions) and puts everything to send in one file on the Desktop,
-   `VIctory-report-<date>.zip` (the game log, crash details, build log and
+   submissions) and puts everything to send in one file,
+   `VIctory-report-<date>.zip`, in its own folder in Downloads,
+   `Downloads\VIctory-reports` (5.4: **S** in the menu picks another folder,
+   **E** opens it) (the game log, crash details, build log and
    the failed shaders). If the graphics card was lost during the run, the
    next run is safer by itself, one step a time: back from F mode to the
    relay, or the 3.8 additions off, or the 64-lane compute shaders left out again (3.6), or copy-back
@@ -337,6 +341,7 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - **G**: change the game paths;
    - **C**: switch between Series S and Series X (remembered);
    - **P**: prepare all pipelines again (done by itself after each update and run);
+   - **S**: choose where report zips are saved, **E**: open that folder;
    - **B**: switch the fps boost (75% render scale, no ray tracing; on by
      default), **M**: frames in between, **H**: shared small buffers (4.2);
    - **F**: switch to the faster speed mode (late waits and card buffers:

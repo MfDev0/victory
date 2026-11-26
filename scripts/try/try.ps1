@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '5.3'
+$TryVersion = '5.4'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -40,11 +40,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -52,6 +52,42 @@ function Load-Config {
     return $c
 }
 function Save-Config { try { ($script:Config | ConvertTo-Json) | Set-Content -Path $ConfigPath -Encoding ASCII } catch {} }
+
+# The user's Downloads folder (wherever Windows has it moved to).
+function Downloads-Dir {
+    $d = ''
+    try {
+        $v = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -ErrorAction Stop).'{374DE290-123F-4565-9164-39C4925E467B}'
+        if ($v) { $d = [Environment]::ExpandEnvironmentVariables([string]$v) }
+    } catch {}
+    if (-not $d -or -not (Test-Path -LiteralPath $d)) { $d = Join-Path $env:USERPROFILE 'Downloads' }
+    return $d
+}
+# Where the report zips go (5.4): the folder chosen with S, else a folder
+# of their own in Downloads, Downloads\VIctory-reports.
+function Reports-Dir {
+    $d = "$($script:Config.reports)"
+    if (-not $d) { $d = Join-Path (Downloads-Dir) 'VIctory-reports' }
+    try { New-Item -ItemType Directory -Force -Path $d -ErrorAction Stop | Out-Null } catch {}
+    if (-not (Test-Path -LiteralPath $d)) {
+        $d = Join-Path $TryHome 'reports'
+        New-Item -ItemType Directory -Force -Path $d -ErrorAction SilentlyContinue | Out-Null
+    }
+    return $d
+}
+function Ask-Reports {
+    Step 'Where reports are saved'
+    Say "now: $(Reports-Dir)"
+    $in = Read-Path '  New folder (Enter: the default, Downloads\VIctory-reports)'
+    if (-not $in) { $script:Config.reports = ''; Say "reports go to $(Reports-Dir)"; return }
+    try {
+        New-Item -ItemType Directory -Force -Path $in -ErrorAction Stop | Out-Null
+        $script:Config.reports = (Resolve-Path -LiteralPath $in).Path
+        Say "reports go to $($script:Config.reports)"
+    } catch {
+        Bad "could not use '$in' ($_): reports stay in $(Reports-Dir)"
+    }
+}
 
 function Refresh-Path {
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -797,10 +833,8 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
         }
         Save-Config
     }
-    # Everything to send in one file on the Desktop.
-    $desk = [Environment]::GetFolderPath('Desktop')
-    if (-not $desk -or -not (Test-Path $desk)) { $desk = $TryHome }
-    $zip = Join-Path $desk "VIctory-report-$stamp.zip"
+    # Everything to send in one file, in the reports folder (S changes it).
+    $zip = Join-Path (Reports-Dir) "VIctory-report-$stamp.zip"
     $stage = Join-Path $TryHome "report-$stamp"
     try {
         New-Item -ItemType Directory -Force -Path $stage | Out-Null
@@ -924,6 +958,8 @@ function Show-Commands {
         @('D', 'Recommended', '', 'every switch back to the recommended settings (renders the most)'),
         @('Z', 'Plain mode', $(& $on ($c.plain -eq '1')), 'VIctory''s own defaults instead of Try''s settings (for comparing)'),
         @('P', 'Prepare again', '', 'compile all pipelines again with the game closed (done by itself after updates)'),
+        @('S', 'Reports folder', '', "where report zips are saved: $(Reports-Dir)"),
+        @('E', 'Open reports', '', 'open the reports folder in Explorer'),
         @('Q', 'Quit', '', 'close VIctory Try')
     )
     Write-Host ''
@@ -963,6 +999,8 @@ while ($true) {
     while ($true) {
         $k = (Read-Host '  Choice').Trim().ToUpper()
         if ($k -eq 'V') { Show-Version; Show-Commands; continue }
+        if ($k -eq 'S') { Ask-Reports; Save-Config; Show-Commands; continue }
+        if ($k -eq 'E') { try { Start-Process explorer.exe -ArgumentList "`"$(Reports-Dir)`"" } catch { Bad "could not open it: $(Reports-Dir)" }; Show-Commands; continue }
         $c = $script:Config
         $switched = $true
         switch ($k) {
