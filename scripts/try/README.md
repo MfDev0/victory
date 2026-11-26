@@ -353,6 +353,21 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      instead of black);
    - the Series S switch reads the card's memory from Windows itself when no
      log tells it (5.5 never found it in the log), and runs once more.
+   5.7 (the 2026-11-26 12:53 report: textures now get their memory, 108 MB
+   to 1,024 levels, but the run was **still Series X** and the card stood at
+   5.8 GB of a 5.2 GB budget with 22,500 textures waiting):
+   - **VIctory itself picks Series S** on a card with 9 GB of its own memory
+     or less when Series X is asked for (the launcher's switch never reached
+     a launcher that had updated itself with U). A Series X picked with
+     **C** stays Series X (`VICTORY_CONSOLE_AUTO=0`);
+   - **U** now hands over to the newer VIctory Try at once, so the
+     launcher's own fixes apply without closing the window;
+   - texture quality now reaches small textures too: textures of 256 KB or
+     more are made level by level on 6 and 8 GB cards (the report's textures
+     were 411 KB on average, nearly all under the old 1 MB line), and their
+     largest level is left out from 256 KB up;
+   - a new log line says where the card's memory goes (render targets,
+     textures, tiles, staging buffers) and which console ran.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,

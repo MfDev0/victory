@@ -7426,6 +7426,27 @@ impl Meter {
                     spare.bytes >> 20
                 );
             }
+            // 5.7: where the card's memory goes, in every build (the
+            // reports said the card stood past its budget, not by what).
+            {
+                use crate::resource::{HOST_TEXTURES, KINDS};
+                let staged = crate::texture::staged_alive();
+                let all = HOST_TEXTURES[1].load(Ordering::Relaxed);
+                let filled = KINDS[1].load(Ordering::Relaxed);
+                tracing::info!(
+                    "card memory by kind: {} host textures {} MB, of them {} the title fills {} MB and the rest (render targets, depth, the card's own writes) {} MB; tiles given to textures made level by level {} MB; staging buffers {} ({} MB); upload buffers made in the card's memory so far {} MB; console {}",
+                    HOST_TEXTURES[0].load(Ordering::Relaxed),
+                    all >> 20,
+                    KINDS[0].load(Ordering::Relaxed),
+                    filled >> 20,
+                    all.saturating_sub(filled) >> 20,
+                    crate::tiles::given_total() >> 20,
+                    staged[0],
+                    staged[1] >> 20,
+                    GPU_UPLOADS[1].load(Ordering::Relaxed) >> 20,
+                    crate::console::current().name()
+                );
+            }
             #[cfg(feature = "diagnostics")]
             crate::copystat::log(std::mem::take(&mut self.copy_stats_frames) as f64);
             // (every build since 4.8: which programs the dropped draws were)

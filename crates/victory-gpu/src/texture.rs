@@ -406,6 +406,13 @@ impl Drop for Staging {
     }
 }
 
+/// Staging buffers alive and their bytes (every build, for the line that
+/// says where the card's memory goes).
+pub(crate) fn staged_alive() -> [u64; 2] {
+    use std::sync::atomic::Ordering::Relaxed;
+    [STAGED[0].load(Relaxed), STAGED[1].load(Relaxed)]
+}
+
 /// For the memory line: staging buffers alive, their bytes, and how many
 /// of them their texture still has (the others wait for a list's reset).
 #[cfg(feature = "diagnostics")]

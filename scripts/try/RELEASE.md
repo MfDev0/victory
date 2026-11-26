@@ -1,7 +1,5 @@
-VIctory Try 5.6
-- Found the main cause of black textures: 1,448 big textures (2.9 GB) never got their memory because the memory step ran before the texture was read. Fixed
-- Texture quality for 6 and 8 GB cards: the largest level of big textures is skipped (like "medium" in PC games), so about 3x more textures fit
-- Every big texture now only takes memory for the levels it actually shows
-- Faster texture memory setup (one call per texture instead of one per level)
-- Textures still load (blurry) when the card is slightly over its budget, instead of black
-- Auto Series S now reads your card's memory from Windows, so it works on the first run
+VIctory Try 5.7
+- Your last run was still Series X, so the card was over its memory limit and 22,500 textures waited (black). VIctory now switches 6/8 GB cards to Series S by itself (press C to keep Series X)
+- Pressing U now starts the new VIctory Try right away, so launcher fixes apply without restarting
+- Lower texture detail now also covers small textures (256 KB and up), where most of the memory went (textures average 411 KB)
+- New log line showing exactly what uses the card's memory, to aim the next fixes

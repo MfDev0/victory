@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '5.6'
+$TryVersion = '5.7'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -40,11 +40,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -671,6 +671,9 @@ function Run-Game {
     if ($c.added) { Say "plus upstream: $(@($c.added -split "`n").Count) new fix(es) on top" }
     if ($c.console -ne 'series-x') { $c.console = 'series-s' }
     Auto-Console
+    # 5.7: VIctory itself runs 6 and 8 GB cards as Series S when Series X is
+    # asked for; a Series X picked with C stays Series X.
+    $env:VICTORY_CONSOLE_AUTO = $(if ($c.console_user -eq '1') { '0' } else { '' })
     Say "console: Xbox $(if ($c.console -eq 'series-s') { 'Series S' } else { 'Series X' })   (C switches)"
     Say "command: victory.exe run `"$($c.game_exe)`" --execute --console $($c.console)   (VICTORY_GAME_DIR=$($c.game_dir))"
     Say 'To stop: close the game window.'
@@ -957,8 +960,8 @@ if (-not $owned) {
 
 # A newer VIctory Try on the branch than this one: run that instead, so its
 # fixes need no new download of VIctoryTry.exe.
-function Run-Newer {
-    if ($handoff) { return }
+function Run-Newer([switch]$FromMenu) {
+    if ($handoff -and -not $FromMenu) { return }
     $text = (G show refs/remotes/origin/fork:scripts/try/try.ps1) -join "`r`n"
     if ($script:GCode -ne 0 -or $text -notmatch "\`$TryVersion = '([0-9.]+)'") { return }
     $theirs = $Matches[1]
@@ -1081,7 +1084,7 @@ while ($true) {
             'W' { $c.shadowfix = $(if ($c.shadowfix -eq 'off') { '' } else { 'off' }) }
             'K' { $c.gpucopy = $(if ($c.gpucopy -eq 'off') { '' } else { 'off' }) }
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }
-            'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.6' }
+            'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.6'; $c.console_user = '1' }
             'D' { Reset-Recommended; $c = $script:Config }
             default { $switched = $false }
         }
@@ -1100,6 +1103,9 @@ while ($true) {
     if ($k -eq 'P') { $script:Config.prepared = ''; $script:Config.recipes = '' }
     if ($k -eq 'U') {
         $changed = Update-Source
+        # 5.7: a newer VIctory Try takes over at once (its own fixes, not
+        # only the game's, without closing this window first).
+        Save-Config; Run-Newer -FromMenu
         if ($changed -or -not (Test-Path (Victory-Exe))) { if (-not (Build-All)) { Bad 'the new build FAILED: the game runs on the last working build (older fixes). Send the error above.' } }
     }
 }

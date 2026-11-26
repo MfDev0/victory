@@ -66,11 +66,17 @@ pub fn run(
     let temp = cfg.data_subdir(&format!("{:08X}/temp", title.id))?;
     victory_hle::modules::files::mount_at('T', &temp);
     victory_hle::runtime::set_title(victory_hle::runtime::Title { storage, ..title });
-    victory_hle::console::set(match console {
+    let (picked, card_mb) = victory_hle::console::auto(match console {
         Console::SeriesX => victory_hle::console::Console::SeriesX,
         Console::SeriesS => victory_hle::console::Console::SeriesS,
     });
+    victory_hle::console::set(picked);
     println!("console        {}", victory_hle::console::current().name());
+    if let Some(mb) = card_mb {
+        println!(
+            "console        Series S chosen for this card ({mb} MB of its own memory): less of it is needed, so textures fit (VICTORY_CONSOLE_AUTO=0 keeps Series X)"
+        );
+    }
     let dlls = victory_loader::load_title_dlls(image.info(), title_dir, &images, &wanted)?;
     for (name, dll) in &dlls {
         if name.eq_ignore_ascii_case(victory_hle::modules::ffx::LOADER)

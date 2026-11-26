@@ -115,9 +115,20 @@ fn parse_floor(value: Option<&str>) -> u64 {
 /// `VICTORY_LEVELS_MIN_KB`. (The accounting of run 189: the levels not
 /// held are 1.9 MB a copy on some 1,600 copies; a 512x512 texture has six
 /// tiles at most, and most of the calls for nothing.)
+/// 5.7: 256 KiB where texture quality drops the largest levels
+/// ([`top_dropped`]): the 2026-11-26 report's textures picked by index
+/// were 411 KB on average (14,659 of them, 6,034 MB), so nearly all of
+/// them were under a megabyte and kept every level's memory.
 pub(crate) fn floor() -> u64 {
-    static BYTES: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *BYTES.get_or_init(|| parse_floor(std::env::var("VICTORY_LEVELS_MIN_KB").ok().as_deref()))
+    static BYTES: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    let set = *BYTES.get_or_init(|| {
+        std::env::var("VICTORY_LEVELS_MIN_KB").ok().map(|v| parse_floor(Some(&v)))
+    });
+    match set {
+        Some(bytes) => bytes,
+        None if top_dropped() > 0 => 256 << 10,
+        None => parse_floor(None),
+    }
 }
 
 /// Tiles (of 64 KiB) a level may have to get them on a card without room
@@ -140,7 +151,7 @@ pub(crate) fn small_tiles() -> u32 {
 /// stayed black), none on larger ones; one more while the card has no room
 /// for whole textures. The largest level is three quarters of a texture's
 /// bytes: PC games' "texture quality: medium" and other emulators'
-/// texture-size caps drop it the same way. Only levels of 16 tiles (1 MiB)
+/// texture-size caps drop it the same way. Only levels of 4 tiles (256 KiB)
 /// or more are dropped, and never down past the fourth level from the
 /// smallest, so small textures keep all their detail.
 pub(crate) fn top_dropped() -> u32 {
@@ -487,7 +498,7 @@ impl Tiled {
         let mut mask = 0;
         for level in 0..n.min(self.levels - 4) {
             match self.standard.get(level as usize) {
-                Some(&tiles) if tiles >= 16 => mask |= 1 << level,
+                Some(&tiles) if tiles >= 4 => mask |= 1 << level,
                 _ => break,
             }
         }
