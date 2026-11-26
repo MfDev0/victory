@@ -1,8 +1,6 @@
-VIctory Try 6.4
-- Load before you join: when a loading screen ends, the world waits behind a "curtain" (up to 10 s) and loads its textures first, the way the Series S keeps its loading screen up until the first shot is streamed. The first seconds run slowly, then the world shows up whole instead of filling in over a minute
-- New priority order: textures whose data just arrived come first, then the queue takes turns between the newest (what the game streams for where you look) and the oldest waiting (first come, first served, so nothing waits forever), with 3 small textures for every big one: a small texture is cheap and colours a whole surface
-- Faster texture uploads: buffers are reused from a pool instead of being created for every texture (59,000 of them were created in your last 10 minutes)
-- Shader cache read into memory at startup while the PC has RAM to spare, so the loading screen doesn't wait on the disk (pipelines took 2.6-4.5 s there before)
-- Resizable BAR uploads back on (they were switched off together with other things after a lost card long ago). Turns itself off again if the card is lost
-- People less bright: ambient light 0.45 instead of 0.6. A cycles normal / low (0.3) / high (0.6) / off
-- Settings: VICTORY_JOIN_HOLD_MS (10000, 0 off), VICTORY_TEXTURE_PRIORITY=0, VICTORY_STAGING_POOL_MB, VICTORY_LIBRARY_PREFETCH=0, VICTORY_GPU_UPLOAD=0
+VIctory Try 6.5 (tricks from big games)
+- Streaming budget per frame: big games give texture streaming a fixed slice of every frame. Now the world's texture loading takes at most 35% of a frame. In your 6.2 log one pass took 750 ms of a 900 ms frame while catching up. Loading screens and the 6.4 curtain still load at full speed
+- Steadier texture quality: quality now switches with a gap (blur from 85% card use, sharp again under 80%), like games switch detail levels, instead of flipping back and forth every tenth of a second and loading the same textures again
+- Built-in profiler: the log now shows where the texture loading time goes (checks, memory queries, making textures, recording uploads). That tells us exactly what to move to other CPU cores next
+- Everything from 6.4: the world curtain, the priority order, reused upload buffers, shader cache read ahead, people less bright (A: normal / low / high / off)
+- Settings: VICTORY_TEXTURE_FRAME_SHARE (35, 0 off)

@@ -506,6 +506,13 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      and 4 GB more free.
    - Resizable BAR uploads on their own config switch (`rebar`), off again
      after a lost card; ambient light 0.45 (A: normal / low / high / off).
+   6.5:
+   - the world's texture pass takes at most `VICTORY_TEXTURE_FRAME_SHARE`
+     (35) percent of the frame before, never under 60 ms (not behind a
+     loading screen or the curtain).
+   - adaptive texture quality with a band: short from the sharp line,
+     sharp again 5 points under it.
+   - a line every 100 passes: where the texture pass's time goes.
 5. When the game stops (3.2), it prints a short summary (typical and best
    fps, shaders that did not translate, pipelines the card refused, slow
    submissions) and puts everything to send in one file,

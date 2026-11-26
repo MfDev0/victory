@@ -266,9 +266,17 @@ fn adaptive_drop() -> u32 {
     if last >> 2 == tenth {
         return (last & 3) as u32;
     }
+    // Try 6.5: with a band, as engines switch quality levels (hysteresis):
+    // short from the sharp line up, sharp again only 5 points under it. A
+    // card that sat on the line went short and sharp every tenth of a
+    // second, and each turn made textures blurred and then whole again.
+    static SHORT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let was = SHORT.load(Ordering::Relaxed);
+    let line = if was { sharp_percent().saturating_sub(5) } else { sharp_percent() };
     let short = host()
         .and_then(|h| h.video_memory())
-        .is_some_and(|[budget, used, ..]| used >= budget / 100 * sharp_percent());
+        .is_some_and(|[budget, used, ..]| used >= budget / 100 * line);
+    SHORT.store(short, Ordering::Relaxed);
     let n = if short { 1 + u32::from(!crate::resource::room_lately()) } else { 0 };
     LAST.store((tenth << 2) | u64::from(n), Ordering::Relaxed);
     n

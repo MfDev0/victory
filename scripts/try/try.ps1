@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.4'
+$TryVersion = '6.5'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live (renamed to CAtez, or a backup copy), tried
@@ -1301,7 +1301,7 @@ if (-not (Engine8)) {
 if (Engine8) {
     Say 'engine: the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb). N goes back to this fork''s engine.'
 } else {
-    Say '6.4: this fork''s engine: the world waits behind its curtain until its textures are in, small textures first, reused upload buffers, shader cache read ahead, softer light on people; the 6.0 speed fixes (all CPU cores, the card''s queues first, the CPU''s own graphics for other programs). N switches to the 8 GB engine.'
+    Say '6.5: this fork''s engine: streaming gets a fixed share of each frame (as big games do), a texture-pass profiler, steadier texture quality; 6.4: the world waits behind its curtain until its textures are in, small textures first, reused upload buffers, shader cache read ahead, softer light on people; the 6.0 speed fixes (all CPU cores, the card''s queues first, the CPU''s own graphics for other programs). N switches to the 8 GB engine.'
 }
 
 # Every command of the menu: its key, what it is, whether it is on now, and

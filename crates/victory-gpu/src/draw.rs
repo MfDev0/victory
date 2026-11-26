@@ -504,6 +504,57 @@ fn join_hold_ms() -> u64 {
     *N.get_or_init(|| std::env::var("VICTORY_JOIN_HOLD_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(10_000))
 }
 
+/// Try 6.5, the streaming budget of big games: the texture pass of the
+/// world takes at most this share, in percent, of the frame before
+/// (`VICTORY_TEXTURE_FRAME_SHARE`, 35 unless set; 0: its own budget alone),
+/// never under 60 ms. Engines stream within a fixed slice of each frame;
+/// here the catch-up budget let one pass take 750 ms of a 900 ms frame in
+/// the 6.2 report. Not behind a loading screen or the world's curtain.
+fn frame_share() -> u64 {
+    static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_FRAME_SHARE").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(35).min(100)
+    })
+}
+
+/// When the texture pass last saw a new frame (`crate::host::now_ms`), and
+/// how long the frame before took by it.
+static FRAME_AT: AtomicU64 = AtomicU64::new(0);
+static LAST_FRAME_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Try 6.5, a profiler's view of the texture pass (big games are made fast
+/// by measuring first): microseconds since the start in each part of it —
+/// the looks at uploaded textures, the memory queries, making host
+/// textures, recording their uploads, the rest — and the passes measured.
+pub(crate) static PASS_PARTS_US: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+pub(crate) static PASS_PARTS_PASSES: AtomicU64 = AtomicU64::new(0);
+
+/// Adds the time since the last mark to the part being timed
+/// ([`PASS_PARTS_US`]); the last part when dropped.
+struct PassParts {
+    at: std::time::Instant,
+    part: usize,
+}
+
+impl PassParts {
+    fn new() -> Self {
+        PassParts { at: std::time::Instant::now(), part: 0 }
+    }
+
+    fn mark(&mut self, part: usize) {
+        let now = std::time::Instant::now();
+        PASS_PARTS_US[self.part].fetch_add(now.duration_since(self.at).as_micros() as u64, Ordering::Relaxed);
+        self.at = now;
+        self.part = part;
+    }
+}
+
+impl Drop for PassParts {
+    fn drop(&mut self) {
+        PASS_PARTS_US[self.part].fetch_add(self.at.elapsed().as_micros() as u64, Ordering::Relaxed);
+    }
+}
+
 /// Whether the last frame the texture pass saw was behind a loading screen
 /// ([`loading_now`]), and when the last loading screen went
 /// (`crate::host::now_ms`, never 0; 0: the curtain is not up).
@@ -2009,6 +2060,9 @@ impl State {
             SPENT.store(0, Ordering::Relaxed);
             let ever = crate::list::DRAWS_EVER.load(Ordering::Relaxed);
             let last = ever.saturating_sub(DRAWS_AT.swap(ever, Ordering::Relaxed));
+            let at = crate::host::now_ms();
+            let before = FRAME_AT.swap(at, Ordering::Relaxed);
+            LAST_FRAME_MS.store(if before == 0 { 0 } else { at.saturating_sub(before) }, Ordering::Relaxed);
             LAST_DRAWS.store(last, Ordering::Relaxed);
             if last < loading_draws() {
                 LOW_DRAW_FRAMES.fetch_add(1, Ordering::Relaxed);
@@ -2133,7 +2187,15 @@ impl State {
         let loading = !due.is_empty() && loading_now();
         // The world's curtain (`join_hold_ms`): the world's own pass, right
         // after a loading screen, with a loading screen's bytes and 1.5 s.
-        let (per_frame, span) = if PASS_BUDGET.get().is_none() && join_hold(due.len()) {
+        let holding = PASS_BUDGET.get().is_none() && join_hold(due.len());
+        // The world's pass in its share of the frame (`frame_share`).
+        let frame_ms = LAST_FRAME_MS.load(Ordering::Relaxed);
+        let span = if !holding && !loading && frame_share() > 0 && frame_ms > 0 {
+            span.min(std::time::Duration::from_millis((frame_ms * frame_share() / 100).max(60)))
+        } else {
+            span
+        };
+        let (per_frame, span) = if holding {
             JOIN_HOLD_PASSES.fetch_add(1, Ordering::Relaxed);
             let bytes: u64 = if backlog_ok { 768 << 20 } else { 384 << 20 };
             (per_frame.max(bytes), span.max(std::time::Duration::from_millis(1500)))
@@ -2168,10 +2230,24 @@ impl State {
             None => (span, per_frame),
         };
         let began = std::time::Instant::now();
+        let measured = PASS_PARTS_PASSES.fetch_add(1, Ordering::Relaxed) + 1;
+        if measured.is_multiple_of(100) {
+            let ms = |part: usize| PASS_PARTS_US[part].load(Ordering::Relaxed) as f64 / 1000.0 / measured as f64;
+            tracing::info!(
+                "texture pass, where its time goes (ms a pass, over {measured} passes): looks at uploaded textures {:.1}, memory queries {:.1}, host textures made {:.1}, uploads recorded {:.1}, the rest {:.1}; frame before {frame_ms} ms, the pass's share at most {}%",
+                ms(0),
+                ms(1),
+                ms(2),
+                ms(3),
+                ms(4),
+                frame_share()
+            );
+        }
         for (index, write) in due {
             if SPENT.load(Ordering::Relaxed) >= bytes_at_most || began.elapsed() > span {
                 break;
             }
+            let mut parts = PassParts::new();
             // A placed texture whose memory is not mapped (not streamed in
             // yet, or streamed out again: the heap keeps tens of thousands
             // of such views) gets no host texture; looked at again soon (a
@@ -2217,6 +2293,7 @@ impl State {
                     );
                 }
             }
+            parts.mark(1);
             let mut partly = None;
             if let Some(View::Placed(false, resource, desc)) = heap.handle(index).and_then(crate::descriptor::view) {
                 let address = u64::from(desc[10]) | u64::from(desc[11]) << 32;
@@ -2313,6 +2390,7 @@ impl State {
                     );
                 }
             }
+            parts.mark(2);
             let (view, placed, made) = if squeeze {
                 // (The host copy is made here, in the squeeze, not later on
                 // first use.)
@@ -2353,9 +2431,11 @@ impl State {
             // through a table: they upload it, and check it at every
             // submission that samples it.
             let tabled = crate::texture::is_staged(resource);
+            parts.mark(3);
             if let Some(view) = &view {
                 readable(list, sampled.kind, view);
             }
+            parts.mark(4);
             // A texture view the host refuses removes the device: name it.
             static GONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             if !GONE.load(Ordering::Relaxed)
