@@ -65,8 +65,12 @@ below are checked again.
 - [x] leonida c6c9da9f, first part: `WIDE_JOB` 256 KiB.
 - [x] avm 011735ff: anisotropic point-mip samplers (static, console and
       host-layout samplers, through `sampler::enhance`).
-- [x] CI: xtask policy failed on `host.rs` (587 KB) and `lower.rs` (545 KB)
-      over the 512 KiB limit; Rust sources may be 1 MiB now.
+- [x] CI is green for the first time on this branch. The xtask policy test
+      had failed on every run: CI checks the pull request merged onto
+      `main`, where the owner's `VIctory-report-*.zip` uploads sit (now let
+      through, top level only), and on `host.rs` (587 KB) / `lower.rs`
+      (545 KB) over 512 KiB (Rust sources may be 1 MiB). CI's step outputs
+      moved out of the checkout; policy violations show in the annotations.
 - [x] try.ps1: the 8 GB engine's fallback wrote `engine = 'ours'` (no such
       name): `own`.
 
