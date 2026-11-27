@@ -1,4 +1,4 @@
-# VIctory Try: plan and to-do (6.10, updated for 6.18)
+# VIctory Try: plan and to-do (6.10, updated for 6.23)
 
 Goal: the whole picture rendered, **20+ fps** on the reporter's PC: RTX 4050
 Laptop (5921 MB, budget about 5153 MB), 12 threads, about 16 GB of RAM,
@@ -48,6 +48,28 @@ below are checked again.
       66afb2b4; parser only so far).
 - [x] Logs: `upscaler PC FidelityFX ...` line at start, providers offered
       and chosen, every 600 upscales how many were jittered (both paths).
+
+## Done in 6.23 ("every shader": the ~234 of prepare's "do not translate")
+
+- [x] ACCC containers (driver-compiled FidelityFX) go through the translator
+      at all six DXIL-only sites (they all stopped at "no DXIL part").
+- [x] cool_fox 66afb2b (shader half), 389db9e (counter texture store),
+      26a801e (immediate samplers by comparison mode), caec503 (LOD query),
+      13e600d (f16 inline constants in whole-wave sums).
+- [x] Unknown stride through a root table's view: the stride from the
+      host's table at run time (new; test).
+- [x] Scan: carrier bounded to the container (sp #114); links, real paths,
+      packs first (sp #134); sp's tests.
+- [x] prepare: reasons by count with an example hash, non-programs apart,
+      failed shaders dumped as prepare-<hash>.dxbc; recipes not made by why.
+- [ ] Read the 6.23 prepare.log: the "translate failed" lines, the count
+      against ScarlettPort's 26,084, and the failed-shaders folder.
+- [ ] Still refused, no fork has them: "an address from a phi"
+      (982f3cccd5c04294, d9978c76c746d809), unknown stride through root
+      views (ad1cf51b8a6c7096, 0b3d156291158496, dffafa6052629c85 if not
+      tables).
+- Not taken: cool_fox b558934 (RT builder only, the builder stays off),
+  SCC branch series #66/#80, 776b73e (view addresses), 87ed9d3 (WARP only).
 
 ## Done in 6.18 ("nothing let go that comes back")
 
@@ -452,9 +474,9 @@ parallel refresh) targets rows 2-3; the 6.11 report will show how much.
       (`9576c45`) and lightprobe/texlate (`b4ba4bb`).
 - [ ] Belobug flicker fix (prelude uploads, 5d6bd841) if the 6.11 report
       or the user shows flicker.
-- [ ] Rest of the ACCC port (avm 66afb2b4: dot4, pk_fmac, src_scc, raw
+- [x] Rest of the ACCC port (avm 66afb2b4: dot4, pk_fmac, src_scc, raw
       buffer descriptors, s_bfm samplers) so the title's own console FSR
-      translates when the PC DLL is missing.
+      translates when the PC DLL is missing. (6.23, via cool_fox 66afb2b.)
 
 ### 3. Speed to 20+ (largest first)
 - [ ] avm renderer ports into our engine: CBV `0dec5dc` (-4.7 ms), guard

@@ -357,15 +357,16 @@ pub fn warm(container: &[u8]) -> Result<bool, String> {
 /// Fills the cache ahead of a run (`victory prepare`): the container's
 /// translation as this executable makes it in a run on this PC (the host's
 /// wave width and view heap limit, found as a run finds them), taken from
-/// the cache or made and stored now. Whether it translates.
+/// the cache or made and stored now. Why it does not translate, if not
+/// (Try 6.23: `victory prepare` lists the reasons by count).
 ///
 /// A rebuilt VIctory keys its translations afresh, so the first world
 /// visit after every update translated each shader again while the title
 /// waited for it (draws dropped, objects see-through); prepared, a run
 /// finds them all.
-pub fn prepare(container: &[u8]) -> bool {
+pub fn prepare(container: &[u8]) -> Result<(), String> {
     crate::descriptor::host::probe_view_limit();
-    host_shader(container).is_ok()
+    host_shader(container).map(|_| ())
 }
 
 /// Translations found in the cache and made, since the start.

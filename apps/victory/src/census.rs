@@ -32,7 +32,9 @@ pub fn run(paths: Vec<PathBuf>, strict: bool, list_missing: bool) -> Result<()> 
     let mut missing: BTreeMap<(String, String), BTreeSet<PathBuf>> = BTreeMap::new();
 
     for root in &paths {
+        // ScarlettPort #134: through symbolic links too.
         for entry in walkdir::WalkDir::new(root)
+            .follow_links(true)
             .into_iter()
             .filter_map(Result::ok)
         {

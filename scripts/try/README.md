@@ -568,6 +568,26 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.23 ("every shader"; the "do not translate" count of prepare):
+   - ACCC containers (driver-compiled FidelityFX) translate: DXIL-or-ACCC in
+     `emit::translate_plain`, `pipeline::translate`, the spilled path,
+     `container_walks`, and the app's survey and translate (avm 66afb2b4).
+   - cool_fox 66afb2b (shader half: src_scc, v_dot4, fmac_f16, a16 atomics,
+     made-raw descriptors, s_bfm sampler words, s_mov_b64), 389db9e (counter
+     texture store), 26a801e (immediate samplers by comparison mode),
+     caec503 (LOD query coordinate undef), 13e600d (f16 inline constants in
+     `wave::simulate`).
+   - Structured access of unknown stride through a table view: stride from
+     `SLOT_TABLE_STRIDES` (`slot_word(src, true)`), raw at index*stride+off;
+     emitted only where it was refused, so other translations are unchanged.
+   - App scan: carriers bounded to the container's size (sp #114), links
+     followed, real paths once, packs/exes first (sp #134); sp's scan tests.
+   - prepare: reasons tallied (`translate failed` / `translate skipped`, top
+     25, the rest to stderr), `$VICTORY_DUMP_FAILED/prepare-<hash16>.dxbc`
+     (400 at most); `shader_cache::prepare` and `d3d12x::prepare_shader`
+     return `Result<(), String>`. `Prepared` counts recipes not made by why.
+   - Not taken: cool_fox b558934 (RT builder only), cb1468d/9a4aa8d/bd8b4f5/
+     d2f2397 (SCC branch series), 776b73e (view addresses), 87ed9d3 (WARP).
    6.22 ("from ScarlettPort"; ZigZagBoi1/ScarlettPort up to 0.5.3, ported
    onto our base by hand where it did not apply; messages name the commit):
    - Defaults (each with its way back): `VICTORY_WAVE_PAIRS_ONLY` = the two

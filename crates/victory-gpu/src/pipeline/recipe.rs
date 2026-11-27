@@ -236,6 +236,12 @@ pub struct Prepared {
     /// Recipes kept, and those whose containers were all kept.
     pub recipes: usize,
     pub usable: usize,
+    /// Try 6.23: why the others are not made: a shader container no run
+    /// kept, a program a run never builds (skipped, denied, rays only), a
+    /// graphics state that does not decode.
+    pub no_container: usize,
+    pub left_out: usize,
+    pub bad_state: usize,
     /// Host pipelines that were in the library already, made now, and
     /// that could not be made (a shader that does not translate, a
     /// pipeline the host refused).
@@ -278,6 +284,7 @@ pub fn prepare(threads: usize, progress: &(dyn Fn(&Prepared, bool) + Sync)) -> P
         .map(|h| h.trim().to_ascii_lowercase())
         .filter(|h| !h.is_empty())
         .collect();
+    let (mut no_container, mut left_out, mut bad_state) = (0, 0, 0);
     let jobs: Vec<Job> = recipes
         .iter()
         .filter_map(|r| {
@@ -286,19 +293,28 @@ pub fn prepare(threads: usize, progress: &(dyn Fn(&Prepared, bool) + Sync)) -> P
                 .iter()
                 .map(|&(stage, hash)| containers.get(&hash).map(|c| super::shader(stage, c)))
                 .collect();
-            let shaders = shaders?;
+            let Some(shaders) = shaders else {
+                no_container += 1;
+                return None;
+            };
             if shaders.iter().any(|s| skipped.contains(&s.hash)) {
+                left_out += 1;
                 return None;
             }
             // Try 6.12: nor those a run never builds (`VICTORY_DENY_PIPELINES`,
             // and the passes that only serve rays with every ray a miss).
             if super::make::denied(&shaders).is_some() || super::make::water_light_left_out(&shaders) || super::never_built(&shaders) {
+                left_out += 1;
                 return None;
             }
             let graphics = if r.graphics.is_empty() {
                 None
             } else {
-                Some(GraphicsState::decode(&r.graphics)?)
+                let Some(g) = GraphicsState::decode(&r.graphics) else {
+                    bad_state += 1;
+                    return None;
+                };
+                Some(g)
             };
             let heavy = shaders.iter().any(|s| s.size() > super::make::HEAVY_BYTES);
             Some(Job { shaders, graphics, heavy })
@@ -306,7 +322,16 @@ pub fn prepare(threads: usize, progress: &(dyn Fn(&Prepared, bool) + Sync)) -> P
         .collect();
     drop(containers);
     out.usable = jobs.len();
-    tracing::info!(recipes = out.recipes, usable = out.usable, threads, "preparing host pipelines");
+    (out.no_container, out.left_out, out.bad_state) = (no_container, left_out, bad_state);
+    tracing::info!(
+        recipes = out.recipes,
+        usable = out.usable,
+        no_container,
+        left_out,
+        bad_state,
+        threads,
+        "preparing host pipelines"
+    );
     let (loaded0, made0) = (
         super::library::LOADED.load(Ordering::Relaxed),
         super::library::MADE.load(Ordering::Relaxed),

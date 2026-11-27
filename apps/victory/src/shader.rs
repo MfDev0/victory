@@ -1,8 +1,9 @@
 //! Survey shader containers: bitcode, console additions and native code.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashSet};
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use victory_game::sgd5;
@@ -42,14 +43,179 @@ pub(crate) fn sources(data: &[u8]) -> Vec<Source<'_>> {
     if sgd5::is_sgd5(data) {
         out.extend(sgd5::records(data).map(Source::Packed));
     }
-    let raw = memchr::memmem::find_iter(data, b"DXBC")
-        .filter(|&offset| Container::parse(&data[offset..]).is_ok())
-        .map(|offset| Source::Raw {
-            offset,
-            data: &data[offset..],
-        });
+    // Try 6.23 (ScarlettPort #114): a container ends at its own size, not
+    // at the end of the file it was found in. The rest of the file made its
+    // hash (the shader cache's key, the `seen` set, the log's `hash=`) one
+    // no run ever asks for: each of these translations was made again in
+    // game, a failing one counted once per file it sat in, and every hit
+    // hashed the file's whole tail.
+    let raw = memchr::memmem::find_iter(data, b"DXBC").filter_map(|offset| {
+        let tail = &data[offset..];
+        let size = u32::from_le_bytes(tail.get(0x18..0x1c)?.try_into().ok()?) as usize;
+        let data = tail.get(..size)?;
+        Container::parse(data).ok()?;
+        Some(Source::Raw { offset, data })
+    });
     out.extend(raw);
     out
+}
+
+/// Extensions of files that hold textures, media, metadata or OS images,
+/// never shaders (ScarlettPort #134).
+const NON_SHADER_EXTS: &[&str] = &[
+    "ttpf",
+    "xvd",
+    "png",
+    "jpg",
+    "jpeg",
+    "dds",
+    "xml",
+    "json",
+    "txt",
+    "log",
+    "pri",
+    "alignmentchunk",
+    "pdb",
+    "bik",
+    "bk2",
+];
+
+fn is_non_shader_ext(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| NON_SHADER_EXTS.iter().any(|n| ext.eq_ignore_ascii_case(n)))
+}
+
+fn has_shader_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().contains("shader"))
+}
+
+/// Shader packs first, then executables, then the rest; smaller first.
+fn scan_priority(path: &Path, len: u64) -> (u8, u64) {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let tier = if has_shader_name(path) || matches!(ext.as_str(), "cdxil" | "dxbc" | "sgd5") {
+        0
+    } else if matches!(ext.as_str(), "exe" | "dll") {
+        1
+    } else {
+        2
+    };
+    (tier, len)
+}
+
+/// The files a shader scan reads (ScarlettPort #134): symbolic links
+/// followed (a game folder whose large files are linked to another drive
+/// is scanned whole, and a linked `shaders.rpf` given directly is found),
+/// each real file once, files that never hold shaders skipped when walking
+/// a folder, shader packs and then executables first so the count starts
+/// at once.
+pub(crate) fn shader_files(paths: &[PathBuf], report_large: bool) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut candidates: Vec<(u8, u64, PathBuf)> = Vec::new();
+    for root in paths {
+        for entry in walkdir::WalkDir::new(root)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            if entry.depth() > 0 && is_non_shader_ext(path) {
+                continue;
+            }
+            let len = entry.metadata().map_or(0, |m| m.len());
+            if len == 0 {
+                continue;
+            }
+            if len > MAX_FILE {
+                if report_large {
+                    eprintln!("skipping large file {}", path.display());
+                }
+                continue;
+            }
+            let identity = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            if !seen.insert(identity) {
+                continue;
+            }
+            let (tier, size) = scan_priority(path, len);
+            candidates.push((tier, size, path.to_path_buf()));
+        }
+    }
+    candidates.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    candidates.into_iter().map(|(_, _, p)| p).collect()
+}
+
+/// Whether `buf` holds SGD5 data or a plausible container header.
+fn window_has_shader_magic(buf: &[u8]) -> bool {
+    if memchr::memmem::find(buf, sgd5::MAGIC).is_some() {
+        return true;
+    }
+    for offset in memchr::memmem::find_iter(buf, b"DXBC") {
+        let Some(hdr) = buf.get(offset..offset + 0x20) else {
+            continue;
+        };
+        let ver_major = u16::from_le_bytes([hdr[0x14], hdr[0x15]]);
+        let total = u32::from_le_bytes([hdr[0x18], hdr[0x19], hdr[0x1a], hdr[0x1b]]);
+        let count = u32::from_le_bytes([hdr[0x1c], hdr[0x1d], hdr[0x1e], hdr[0x1f]]);
+        if ver_major <= 1 && (0x20..=(64 << 20)).contains(&total) && count <= 256 {
+            return true;
+        }
+    }
+    false
+}
+
+/// `path` read whole when it can hold shaders (ScarlettPort #134): texture
+/// databases (`RDS5`) are skipped, and a large archive without "shader" in
+/// its name is first sniffed in chunks for shader magic, so the asset packs
+/// are not read into memory for nothing.
+pub(crate) fn read_shader_carrier(path: &Path) -> Option<Vec<u8>> {
+    const STREAM_THRESHOLD: u64 = 32 << 20;
+    const CHUNK: usize = 8 << 20;
+    const OVERLAP: usize = 0x20;
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    if !(0x20..=MAX_FILE).contains(&len) {
+        return None;
+    }
+    let mut head = [0u8; 4];
+    if file.read_exact(&mut head).is_ok() && &head == b"RDS5" {
+        return None;
+    }
+    drop(file);
+
+    if len <= STREAM_THRESHOLD || has_shader_name(path) {
+        return std::fs::read(path).ok();
+    }
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; CHUNK + OVERLAP];
+    let mut carry = 0usize;
+    loop {
+        let n = file.read(&mut buf[carry..]).ok()?;
+        if n == 0 {
+            return None;
+        }
+        let valid = carry + n;
+        if window_has_shader_magic(&buf[..valid]) {
+            drop(file);
+            return std::fs::read(path).ok();
+        }
+        if valid > OVERLAP {
+            buf.copy_within(valid - OVERLAP..valid, 0);
+            carry = OVERLAP;
+        } else {
+            carry = valid;
+        }
+    }
 }
 
 #[derive(Default)]
@@ -74,20 +240,10 @@ struct Totals {
 pub fn run(paths: Vec<PathBuf>, verbose: bool, disasm: bool) -> Result<()> {
     let paths = crate::default_paths(paths)?;
     let mut t = Totals::default();
-    for root in &paths {
-        for entry in walkdir::WalkDir::new(root)
-            .into_iter()
-            .filter_map(Result::ok)
+    for path in shader_files(&paths, true) {
+        let path = path.as_path();
         {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let path = entry.path();
-            if entry.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE {
-                eprintln!("skipping large file {}", path.display());
-                continue;
-            }
-            let Ok(data) = std::fs::read(path) else {
+            let Some(data) = read_shader_carrier(path) else {
                 continue;
             };
             let mut found_here = 0;
@@ -101,7 +257,7 @@ pub fn run(paths: Vec<PathBuf>, verbose: bool, disasm: bool) -> Result<()> {
                 };
                 found_here += 1;
                 t.containers += 1;
-                let dxil = container.part(FourCC::DXIL);
+                let dxil = container.part(FourCC::DXIL).or(container.part(FourCC::ACCC));
                 t.with_dxil_part += usize::from(dxil.is_some());
                 let program = dxil.and_then(|p| DxilProgram::parse(p.data).ok());
                 let mut listing = Vec::new();
@@ -224,4 +380,79 @@ fn format_instruction(i: &Instruction, wave64: bool) -> String {
         None => format!("<{:?} {:#x}>", i.encoding, i.opcode),
     };
     format!("    {:06x}: {:<44} {text}", i.offset, words.join(" "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_shader_carrier, shader_files, sources};
+
+    /// ScarlettPort #114 and #134 (Try 6.23).
+    #[test]
+    fn embedded_containers_keep_runtime_hashes() {
+        // A 32-byte DXBC with no parts; the scan should not add carrier bytes.
+        let shader = b"DXBC\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0\x20\0\0\0\0\0\0\0";
+        let first = [b"MZ".as_slice(), shader, b"first suffix"].concat();
+        let second = [b"PE header".as_slice(), shader, b"other suffix", b"DXBC"].concat();
+        let runtime_hash = blake3::hash(shader);
+        for (carrier, label) in [(&first, "@0x2"), (&second, "@0x9")] {
+            let entries = sources(carrier);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].label(), label);
+            assert_eq!(blake3::hash(&entries[0].bytes().unwrap()), runtime_hash);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn walkdir_follows_symlink_files() {
+        let base = std::env::temp_dir().join(format!("victory-symlink-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let ssd = base.join("ssd");
+        let game = base.join("game");
+        std::fs::create_dir_all(&ssd).unwrap();
+        std::fs::create_dir_all(&game).unwrap();
+        let target = ssd.join("shaders.rpf");
+        let link = game.join("shaders.rpf");
+        std::fs::write(&target, b"DXBC\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0\x20\0\0\0\0\0\0\0").unwrap();
+        if std::os::windows::fs::symlink_file(&target, &link).is_ok() {
+            let found: Vec<_> = walkdir::WalkDir::new(&link)
+                .follow_links(true)
+                .into_iter()
+                .filter_map(Result::ok)
+                .filter(|e| e.file_type().is_file())
+                .collect();
+            assert_eq!(found.len(), 1, "direct symlink to file should be discovered");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn shader_files_prioritizes_shaders_and_skips_non_shader_assets() {
+        let base = std::env::temp_dir().join(format!("victory-scan-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("data")).unwrap();
+        std::fs::write(base.join("data").join("textures.ttpf"), b"RDS5\0\0\0\0").unwrap();
+        std::fs::write(base.join("other.rpf"), vec![0u8; 64]).unwrap();
+        std::fs::write(base.join("app.exe"), vec![0u8; 64]).unwrap();
+        std::fs::write(base.join("shaders.rpf"), vec![0u8; 128]).unwrap();
+
+        let files = shader_files(&[base.clone()], false);
+        let names: Vec<_> = files
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["shaders.rpf", "app.exe", "other.rpf"]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn read_shader_carrier_skips_rds5_texture_databases() {
+        let base = std::env::temp_dir().join(format!("victory-rds5-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let db = base.join("renamed.bin");
+        std::fs::write(&db, [b"RDS5".as_slice(), &[0u8; 64]].concat()).unwrap();
+        assert!(read_shader_carrier(&db).is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

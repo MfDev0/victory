@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.22'
+$TryVersion = '6.23'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live, tried when the fork itself cannot be
@@ -2192,6 +2192,7 @@ if (OwnEngine) {
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
 Tidy-Disk ([bool]$changed)
 if (OwnEngine) {
+    Say '6.23: every shader: AMD''s own FidelityFX programs (stored compiled by the console''s driver, most of the shaders that did not translate) now translate, with the console instructions they use; shaders inside bigger files are found by their real hash (ScarlettPort #114); prepare lists why any shader still does not translate and saves those in failed-shaders for the report.'
     Say '6.22: from ScarlettPort (the VIctory port that runs 7-22 fps on cards like yours): no frame stands still for a new shader any more (objects come in a frame or two later instead), the game''s small buffers go to the card''s memory, the upscaler''s network stays on the card, fewer descriptor heap re-sets, cheaper write tracking, two shader clean-ups that are exact (on), and saves no longer wait. The water''s light shaders in their exact form are on by default now (no blocks, VICTORY_WAVE_PAIRS_ONLY=none goes back). AMD: mesh pipelines made one at a time (RX 6000 lost the card in the intro).'
     Say '6.21: from fxceless''s fork (RTX 4070): about 30 of his fixes, among them a dispatch now waits for its compute shader instead of being dropped, mesh draws started by the card, busy memory pages patched on the card instead of waited for, and the water''s light shaders in an exact form (opt-in). Kept off here: his ray-traced shadows (0.2 to 3 fps even on his 4070); our fill light stays, so shadows are not black. Five ray-tracing shaders now translate with default settings.'
     Say '6.20: a clean log: on 6 GB cards MAX leaves about 650 MB more of the card to textures (it stood past its budget, so textures found no room and Windows moved memory to the PC), five ray-tracing compute shaders that were dropped translate, constant buffers and raw views the game places off the PC''s alignment are no longer read as zeros, a false alarm no longer makes every later frame wait, and what is on purpose no longer shows as a warning.'\r\n    Say '6.19: the picture: the light the game''s compute shaders write into memory it placed itself is kept (it went nowhere: probes and bounced light read memory nothing wrote), open water without dark blocks (its tiled light left out on NVIDIA), textures that come back into view are kept (no more white or grey people), screen copies the game gave up are let go, a third texture level goes while the card is past its memory, 1.5 s after a loading screen at most; the log says more.'

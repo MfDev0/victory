@@ -63,17 +63,17 @@ pub fn use_shader_cache(dir: std::path::PathBuf) {
 }
 
 /// `victory prepare`: the container's translation put in the shader cache
-/// [`use_shader_cache`] opened, as a run on this PC makes it. Whether it
-/// translates.
+/// [`use_shader_cache`] opened, as a run on this PC makes it. Why it does
+/// not translate, if not.
 #[cfg(windows)]
-pub fn prepare_shader(container: &[u8]) -> bool {
+pub fn prepare_shader(container: &[u8]) -> Result<(), String> {
     victory_gpu::shader_cache::prepare(container)
 }
 
 /// Off Windows nothing runs: no translation is kept.
 #[cfg(not(windows))]
-pub fn prepare_shader(_container: &[u8]) -> bool {
-    false
+pub fn prepare_shader(_container: &[u8]) -> Result<(), String> {
+    Err("no host on this system".into())
 }
 
 /// `victory prepare`: makes the host pipeline of every recipe earlier runs
@@ -92,6 +92,17 @@ pub fn prepare_pipelines(threads: usize, say: &(dyn Fn(String) + Sync)) -> bool 
             p.made,
             p.failed
         ));
+        // Try 6.23: the recipes not made, by why (none of them is a pipeline
+        // a run would make: those are all above).
+        if last && p.recipes > p.usable {
+            say(format!(
+                "prepared     {} recipes not made: {} with a shader no run kept, {} of programs a run leaves out (rays only, denied, skipped), {} with a graphics state that does not read",
+                p.recipes - p.usable,
+                p.no_container,
+                p.left_out,
+                p.bad_state
+            ));
+        }
     };
     victory_gpu::pipeline::prepare_recipes(threads, &line).recipes > 0
 }
