@@ -909,3 +909,59 @@ fn a_first_lane_read_of_a_uniform_shared_memory_read_lowers_on_wave32() {
     let err = lower_wave64_on_32(&make(0), 128).err().expect("per-lane ds_read_b32 must be refused").to_string();
     assert!(err.contains("a first-lane read where not every lane runs"), "got: {err}");
 }
+
+#[test]
+fn the_builders_prefix_sum_lowers_and_validates_as_a_spilled_dispatch_x_program() {
+    // As the builder has it: a spilled user-data table (s[0:1], user data 16), so a
+    // `DispatchX` may count threads and the threads past the count stay for the barrier and
+    // the halves' exchange (`partial_active`). They skip the loop's shared-memory read, so
+    // the running sum's first-lane read must take the first lane within the count.
+    let words = prefix_sum_words(8);
+    let native = NativeProgram {
+        stage: HwStage::Cs,
+        wave64: true,
+        vgprs: 256,
+        layout: vec![RootParam {
+            root: RootType::Constants,
+            table_offset_dwords: 0,
+            sgprs: 1,
+            base_register: 0,
+            user_data: 16,
+            slot: 0,
+        }],
+        used: vec![],
+        io: StageIo::Cs(ComputeIo {
+            rsrc2: 2 << 1 | 5 << 15, // s[0:1]: the spilled table's pointer; 2560 bytes LDS
+            threads: [256, 1, 1],
+        }),
+        code: words.iter().flat_map(|w| w.to_le_bytes()).collect(),
+    };
+    assert!(crate::spill::is_spilled(&native));
+    let p = crate::spill::build(&native).expect("spill::build");
+    let st = structure::structure(&p).expect("structure");
+    let res = resource::track(&p, &native.layout, native.stage, Some(&st)).expect("resource::track");
+    let io = io::raise(&p, &native).expect("io::raise");
+    let prev = super::TEST_HOST_WAVE.replace(Some(32));
+    let out = lower(&Parts {
+        native: &native,
+        p: &p,
+        st: &st,
+        io: &io,
+        res: &res,
+        inputs: vec![],
+        outputs: vec![],
+        prims: vec![],
+        mesh_stride: 0,
+    });
+    super::TEST_HOST_WAVE.set(prev);
+    let out = out.unwrap_or_else(|e| panic!("the spilled prefix sum must lower on 32-lane waves, got: {e}"));
+    let counts = RootType::Other(super::super::USER_DISPATCH_THREADS);
+    assert!(
+        out.user_data.iter().any(|u| u.root == counts && u.dword == 0),
+        "the program does not take the DispatchX thread count of x"
+    );
+    if let Ok(mut v) = super::super::validator::Validator::load(super::super::validator::Validator::default_path().as_deref()) {
+        let mut copy = out.dxil.clone();
+        v.validate(&mut copy).unwrap_or_else(|e| panic!("DXIL validation failed: {e}"));
+    }
+}
