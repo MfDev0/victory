@@ -1696,6 +1696,13 @@ function Set-RunEnv {
                 $fgSay = $(if ($times -eq '0') { 'ready (the F1 menu in the game turns it on)' } else { "ON, $($times)x" + $(if ($gen -lt 50 -and [int]$times -gt 2) { ' (an RTX 40 makes 2x: the layer gives what the card does)' } else { '' }) })
                 Say "picture: DLSS Frame Generation $fgSay, textures up to $($env:VICTORY_TEXTURE_ROOM_PERCENT)% of the card   (FG switches)"
             } else {
+                # Our own frames in between (M, VICTORY_FRAMEGEN=1 alone) stay
+                # off with DLSS: with VICTORY_DLSS=1 the same switch asks
+                # Streamline for its frame generation, which is not ready here.
+                if ($null -eq $script:UserFx['VICTORY_FRAMEGEN'] -and $env:VICTORY_FRAMEGEN -eq '1') {
+                    $env:VICTORY_FRAMEGEN = $null
+                    Say 'picture: our own frames in between (M) stay off while DLSS runs'
+                }
                 Say "picture: DLSS Frame Generation off: $fgWhy   (FG switches)"
             }
             Say "picture: NVIDIA DLSS $mode makes the upscale$(if ($env:VICTORY_OUTPUT) { ', game output ' + $env:VICTORY_OUTPUT })   (DL switches; it replaces T's upscaler)"

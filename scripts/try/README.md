@@ -579,6 +579,9 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      Windows 11) and `VICTORY_ASYNC_SUBMIT=1`: `VICTORY_FRAMEGEN=1`,
      `VICTORY_FRAMEGEN_X` 0 (ready; the F1 menu switches it live) or 2-4;
      `VICTORY_TEXTURE_ROOM_PERCENT` at most 86 (80 when on).
+     Otherwise, with DLSS, M's `VICTORY_FRAMEGEN=1` is cleared: in the engine
+     `VICTORY_FRAMEGEN=1` alone is our frames in between, and with
+     `VICTORY_DLSS=1` or `VICTORY_FRAMEGEN_X` it is DLSS Frame Generation.
    - **FPS**: `VICTORY_FRAME_INTERVAL_MS` 16.667 (default), 8.333, 1 (none),
      unset (30, the game's own). `VICTORY_TITLE_FPS=<n>|off` overrides the
      game's rate.

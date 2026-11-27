@@ -108,7 +108,8 @@ fn first(var: impl Fn(&str) -> Option<String>) -> State {
     } else {
         DLSS.len() - 1
     };
-    let times = if on("VICTORY_FRAMEGEN") {
+    // (`VICTORY_FRAMEGEN=1` alone is our own frames in between, not DLSS's.)
+    let times = if on("VICTORY_FRAMEGEN") && (on("VICTORY_DLSS") || var("VICTORY_FRAMEGEN_X").is_some_and(|v| !v.trim().is_empty())) {
         var("VICTORY_FRAMEGEN_X").and_then(|v| v.trim().parse::<u32>().ok()).map_or(2, |n| if n == 0 { 0 } else { n.clamp(2, 6) })
     } else {
         0
@@ -393,6 +394,11 @@ mod tests {
         assert_eq!((DLSS[s.dlss].0, FRAMEGEN[s.framegen]), ("quality", 0));
         let s = first(vars(&[]));
         assert_eq!((DLSS[s.dlss].0, FRAMEGEN[s.framegen]), ("off", 0));
+        // Our own frames in between (VIctory Try's M) are not DLSS's.
+        let s = first(vars(&[("VICTORY_FRAMEGEN", "1")]));
+        assert_eq!((DLSS[s.dlss].0, FRAMEGEN[s.framegen]), ("off", 0));
+        let s = first(vars(&[("VICTORY_DLSS", "1"), ("VICTORY_FRAMEGEN", "1")]));
+        assert_eq!(FRAMEGEN[s.framegen], 2);
         assert_eq!(s.toggles, [false; 3]);
         let s = first(vars(&[("VICTORY_MOUSE_CAPTURE", "1")]));
         assert_eq!(s.toggles, [false, true, false]);

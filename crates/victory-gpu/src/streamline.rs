@@ -94,7 +94,10 @@ impl Asked {
     pub fn from_env() -> Result<Self, String> {
         let var = |name: &str| std::env::var(name).ok();
         let on = |name: &str| var(name).is_some_and(|v| v.trim() == "1");
-        let framegen = on("VICTORY_FRAMEGEN");
+        // `VICTORY_FRAMEGEN=1` on its own is this fork's frames in between
+        // (presentfx, VIctory Try's M): DLSS Frame Generation is asked for
+        // with `VICTORY_DLSS=1` or with its amount, `VICTORY_FRAMEGEN_X`.
+        let framegen = framegen_asked(&var);
         let mode = match var("VICTORY_DLSS_MODE") {
             Some(name) => Mode::from_name(&name).ok_or_else(|| {
                 format!("VICTORY_DLSS_MODE={name}: not one of dlaa, quality, balanced, performance, ultraperformance")
@@ -126,6 +129,13 @@ impl Asked {
     pub fn any(&self) -> bool {
         self.dlss || self.framegen
     }
+}
+
+/// Whether the switches ask for DLSS Frame Generation (not for this fork's
+/// own frames in between, which `VICTORY_FRAMEGEN=1` alone names).
+pub fn framegen_asked(var: &impl Fn(&str) -> Option<String>) -> bool {
+    let on = |name: &str| var(name).is_some_and(|v| v.trim() == "1");
+    on("VICTORY_FRAMEGEN") && (on("VICTORY_DLSS") || var("VICTORY_FRAMEGEN_X").is_some_and(|v| !v.trim().is_empty()))
 }
 
 /// What [`init`] made available: the upscaling (the title's renderer may be

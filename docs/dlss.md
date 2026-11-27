@@ -23,9 +23,12 @@ says so below ("In this fork"). -->
 > - Upscalings DLSS does not take (none, normally) go to this fork's own
 >   temporal stand-in, not to the plain copy; `VICTORY_FIDELITYFX_DIR` (AMD's
 >   PC FidelityFX, VIctory Try's T) is used only without DLSS.
-> - `VICTORY_FRAMEGEN=1` without Streamline is this fork's own frames in
->   between (VIctory Try's M); they stay off while DLSS Frame Generation runs
->   and whenever `VICTORY_FRAMEGEN_X` is set.
+> - `VICTORY_FRAMEGEN=1` on its own is this fork's own frames in between
+>   (VIctory Try's M). DLSS Frame Generation is asked for by
+>   `VICTORY_FRAMEGEN=1` together with `VICTORY_DLSS=1` or with
+>   `VICTORY_FRAMEGEN_X` (nv: `VICTORY_FRAMEGEN=1` alone). Ours stay off while
+>   DLSS Frame Generation runs and whenever `VICTORY_FRAMEGEN_X` is set;
+>   VIctory Try turns M off while DLSS runs.
 > - The F1 settings menu is this fork's (`crates/victory-gpu/src/menu.rs`):
 >   frame generation live, the DLSS mode, fullscreen, mouse capture and the
 >   English keyboard for the next start, saved to `VICTORY_MENU_FILE`. F3
@@ -91,7 +94,7 @@ later), hardware-accelerated GPU scheduling on (frame generation needs it).
 | Variable | Values | Default | What |
 |---|---|---|---|
 | `VICTORY_DLSS` | `1` | off | DLSS in place of the title's FidelityFX upscaling |
-| `VICTORY_FRAMEGEN` | `1` | off | DLSS Frame Generation on our present; needs `VICTORY_ASYNC_SUBMIT=1` (the line of submissions; nv: or `VICTORY_THIN=1`) |
+| `VICTORY_FRAMEGEN` | `1` | off | DLSS Frame Generation on our present (in this fork: with `VICTORY_DLSS=1` or `VICTORY_FRAMEGEN_X`; alone it is our own frames in between); needs `VICTORY_ASYNC_SUBMIT=1` (the line of submissions; nv: or `VICTORY_THIN=1`) |
 | `VICTORY_DLSS_MODE` | `dlaa`, `quality`, `balanced`, `performance`, `ultraperformance` | `quality` (`dlaa` with frame generation alone) | the scene's size: 1, 2/3, 0.58, 1/2, 1/3 of the output; the DLSS mode follows the sizes the title then passes |
 | `VICTORY_DLSS_PRESET` | `default`, `j`, `k`, `l`, `m` (`e`, `f` deprecated) | `default` | the DLSS model, for every mode |
 | `VICTORY_STREAMLINE_DIR` | a folder | see above | where `sl.interposer.dll` and the rest are |
@@ -200,7 +203,7 @@ generation off across such a change. When the presented size or format
 changes, frame generation is switched off before the swap chain's buffers are
 made again, and on again at the next present with an upscaling.
 
-**Frame generation alone** (`VICTORY_FRAMEGEN=1` without `VICTORY_DLSS=1`)
+**Frame generation alone** (`VICTORY_FRAMEGEN=1` without `VICTORY_DLSS=1`; in this fork with `VICTORY_FRAMEGEN_X` too)
 leaves the upscaling to the title's own FidelityFX, which is made for the
 Series S sizes only (1280x720 or 1920x1080 in, 1920x1080 out): at a 1440p
 output its upscaler is not made (an error in the log says so) and the title
