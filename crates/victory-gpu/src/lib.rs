@@ -30,6 +30,14 @@ mod shot;
 pub mod console;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod copystat;
+#[cfg(windows)]
+pub mod oom;
+// The process's allocator, which says so when memory runs out (`oom`); in
+// diagnostics builds `copystat`'s, which counts blocks too and allocates
+// through it.
+#[cfg(all(windows, not(feature = "diagnostics")))]
+#[global_allocator]
+static HEAP: oom::Reporting = oom::Reporting;
 pub mod descriptor;
 pub mod device;
 #[cfg(windows)]
