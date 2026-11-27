@@ -1,3 +1,12 @@
+VIctory Try 6.27 "twelve modes" (every DLSS setting for Series X and Series S)
+- The menu now has 12 modes: every DLSS setting for both consoles. 1-6 are Series X, 7-12 Series S, each with DLAA, DLSS Quality, Balanced, Performance, Ultra Performance and DLSS off
+- A ">" marks the mode you are on now
+- Frame generation (F: ready, 2x, 3x, 4x, off), the fps cap (C: 60, 120, none, 30) and EXTREME (X) are switched beside the modes, and they stay as they are when you pick a mode. So Series S + DLSS Ultra Performance + frame gen 3x + EXTREME is two keys and a number away
+- Type the number (or letter) and press Enter. Enter alone plays with the same settings, as before. At start, the game still starts by itself after 8 seconds with no key; once you start typing, it waits
+- R sets the recommended settings (the console is kept) and shows the menu again; A opens the full list of switches (it was 8); U, P and Q are as before
+- Series X plays at 1440p (sharper); Series S is lighter, for cards with 8 GB or less. DLSS needs a GeForce RTX 20 or newer; frame generation an RTX 40/50 (3x-4x an RTX 50). Other cards play the same mode without them
+- Not measured here: no Windows here to run it on
+
 VIctory Try 6.26 "found, not fetched" (NVIDIA Streamline already on the PC is used, not downloaded again)
 - Before downloading NVIDIA's DLSS files, VIctory Try now looks for a Streamline already on this PC: a folder set in VICTORY_STREAMLINE_DIR, the one used last time, its own, the one Get-NVIDIA-DLSS.cmd makes (nvidia-sdk, in the source and in other VIctory folders such as VIctory-NVIDIA's), unpacked streamline-sdk-* folders, the folders beside the game, your user folder, Downloads, Desktop, Documents and the top of every drive
 - A copy counts when all eight files are there, NVIDIA's signature checks out, and it is version 2.14.16 or newer (read from sl.interposer.dll's file version). It is then used where it is: nothing is downloaded or copied, and the log says "NVIDIA Streamline 2.14.16 found in ...: used from there"

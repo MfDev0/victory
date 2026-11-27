@@ -596,6 +596,11 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      `VICTORY_DUALSENSE` (unset auto, 0 off, 1 both), `VICTORY_RAW_VIEW_CLAMP`
      (=0 off), `VICTORY_HELPER_PRIORITY` (=0 off). `VICTORY_KEYS` and
      `VICTORY_KEYS_FILE` in every build; `VICTORY_WINDOW_MAX=WxH`.
+   6.27 ("twelve modes"): `Quick-Menu` lists `$ModeDlss` x 2 consoles
+   (1-6 Series X, 7-12 Series S; `Set-Mode` sets console + dlss only);
+   F/C/X cycle fg, fps and allout in place and redraw; R resets and
+   redraws; A is the full list. `Read-Choice` reads a typed choice + Enter
+   (the 8 s start timeout stops once a key is typed); '' plays.
    6.26 ("found, not fetched"): `Ensure-Dlss` looks first in `Sl-Known`
    (`VICTORY_STREAMLINE_DIR` set before Try, config `sl_dir`, Try's own),
    then, when none is new enough, in `Sl-Places` (nvidia-sdk in `$Src`,

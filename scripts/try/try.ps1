@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.26'
+$TryVersion = '6.27'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live, tried when the fork itself cannot be
@@ -2707,97 +2707,148 @@ function Show-Version {
 }
 
 # 6.25: after a run, a short menu in the style of trustno1-coder/
-# VIctory-NVIDIA's PLAY_FRAMEGEN.cmd: a few ready-made modes, one key each
-# (no Enter needed), plain cmd-style lines; 8 opens the full list of
-# switches as before. Each mode is saved like the switches it sets.
-function Read-Key([string]$Allowed, [int]$TimeoutS = 0) {
-    $until = (Get-Date).AddSeconds($TimeoutS)
+# VIctory-NVIDIA's PLAY_FRAMEGEN.cmd, plain cmd-style lines. 6.27: twelve
+# modes, every DLSS setting for both consoles (1-6 Series X, 7-12 Series
+# S); frame generation, the fps cap and EXTREME are switched beside them
+# (F, C, X) and kept when a mode is picked. A mode starts the game; A opens
+# the full list of switches as before. Each choice is saved like the
+# switches it sets.
+$ModeDlss = @('dlaa', '', 'balanced', 'performance', 'ultraperformance', 'off')
+$ModeName = @('DLAA (sharpest)', 'DLSS Quality', 'DLSS Balanced', 'DLSS Performance', 'DLSS Ultra Perf.', 'DLSS off')
+# A choice typed and Enter (1-12 need two keys); Enter alone plays. With a
+# timeout, no key in that time plays too; typing stops the clock.
+function Read-Choice([string[]]$Allowed, [int]$TimeoutS = 0) {
     while ($true) {
-        $ch = ''
+        $line = ''
         try {
             if ([Console]::IsInputRedirected) {
-                if ($TimeoutS -gt 0) { Write-Host '1'; return '1' }
+                if ($TimeoutS -gt 0) { Write-Host ''; return '' }
                 throw 'no console keys'
             }
-            if ($TimeoutS -gt 0) {
-                while (-not [Console]::KeyAvailable) {
-                    if ((Get-Date) -gt $until) { Write-Host '1'; return '1' }
-                    Start-Sleep -Milliseconds 100
+            $until = (Get-Date).AddSeconds($TimeoutS)
+            while ($true) {
+                if ($TimeoutS -gt 0 -and $line -eq '') {
+                    while (-not [Console]::KeyAvailable) {
+                        if ((Get-Date) -gt $until) { Write-Host ''; return '' }
+                        Start-Sleep -Milliseconds 100
+                    }
                 }
+                $key = [Console]::ReadKey($true)
+                if ($key.Key -eq [ConsoleKey]::Enter) { Write-Host ''; break }
+                if ($key.Key -eq [ConsoleKey]::Backspace) {
+                    if ($line.Length) { $line = $line.Substring(0, $line.Length - 1); Write-Host -NoNewline "`b `b" }
+                    continue
+                }
+                $ch = ([string]$key.KeyChar).ToUpper()
+                if ($ch -match '^[0-9A-Z]$' -and $line.Length -lt 3) { $line += $ch; Write-Host -NoNewline $ch }
             }
-            $key = [Console]::ReadKey($true)
-            $ch = $(if ($key.Key -eq [ConsoleKey]::Enter) { '1' } else { ([string]$key.KeyChar).ToUpper() })
         } catch {
-            $ch = (Read-Host '  Choice').Trim().ToUpper()
-            if ($ch -eq '') { $ch = '1' }
+            $line = Read-Host '  Choice'
         }
-        if ($ch.Length -eq 1 -and $Allowed.Contains($ch)) { Write-Host $ch; return $ch }
+        $line = "$line".Trim().ToUpper()
+        if ($line -eq '' -or $Allowed -contains $line) { return $line }
+        Write-Host -NoNewline "  $line is not one of them. Choose again: "
+        $TimeoutS = 0
     }
+}
+function Fg-Name {
+    switch ($script:Config.fg) { 'none' { 'off' } '' { 'ready (F1)' } default { "$($script:Config.fg)x" } }
+}
+function Fps-Name {
+    switch ($script:Config.fps) { '120' { '120' } 'max' { 'none' } '30' { '30' } default { '60' } }
+}
+function Mode-Now {
+    $c = $script:Config
+    $i = [array]::IndexOf($ModeDlss, [string]$c.dlss)
+    if ($i -lt 0) { $i = 1 }
+    return $(if ($c.console -eq 'series-s') { $i + 7 } else { $i + 1 })
 }
 function Mode-Line {
     $c = $script:Config
-    $console = $(if ($c.console -eq 'series-s') { 'Series S' } else { 'Series X' })
-    $dlss = $(switch ($c.dlss) { 'off' { 'DLSS off' } 'balanced' { 'DLSS Balanced' } 'performance' { 'DLSS Performance' } 'ultraperformance' { 'DLSS Ultra Perf.' } 'dlaa' { 'DLAA' } default { 'DLSS Quality' } })
-    $fg = $(switch ($c.fg) { 'none' { 'no frame gen' } '' { 'frame gen ready (F1)' } default { "frame gen $($c.fg)x" } })
-    $fps = $(switch ($c.fps) { '120' { '120 fps cap' } 'max' { 'no fps cap' } '30' { '30 fps cap' } default { '60 fps cap' } })
-    "$console, $dlss, $fg, $fps$(if (AllOut) { ', EXTREME' })"
+    $n = Mode-Now
+    $console = $(if ($n -ge 7) { 'Series S' } else { 'Series X' })
+    "$console, $($ModeName[($n - 1) % 6] -replace ' \(sharpest\)', '')"
+}
+function Mode-Line2 {
+    $fg = $(if ($script:Config.dlss -eq 'off') { 'no frame gen (DLSS off)' } else { "frame gen $(Fg-Name)" })
+    "$fg, fps cap $(Fps-Name)$(if (AllOut) { ', EXTREME' })"
 }
 function Quick-Menu([int]$TimeoutS = 0) {
-    Write-Host ''
-    Write-Host '  ================================================'
-    Write-Host "    GTA VI - VIctory Try $TryVersion"
-    Write-Host "    now: $(Mode-Line)"
-    Write-Host '  ================================================'
-    Write-Host '    1. Play again, same settings           (Enter)'
-    Write-Host '    2. Series X + DLSS Quality + frame gen 2x'
-    Write-Host '    3. Series X + DLSS Quality, no frame gen'
-    Write-Host '    4. Series S + DLSS Quality + frame gen 2x (faster, softer)'
-    Write-Host '    5. Series X + DLSS Performance + frame gen 2x'
-    Write-Host '    6. EXTREME: DLSS Performance + frame gen 2x + all-out mode'
-    Write-Host '    7. Recommended settings'
-    Write-Host '    8. All settings (the full list of switches)'
-    Write-Host '    U. Update   P. Prepare again   Q. Quit'
-    Write-Host '  ------------------------------------------------'
-    Write-Host '    DLSS: GeForce RTX 20 and newer. Frame gen: RTX 40/50'
-    Write-Host '    (others run the same mode without it).'
-    Write-Host '    In the game: F1 settings menu, F3 numbers box.'
-    Write-Host ''
-    if ($TimeoutS -gt 0) { Write-Host "  (no key in $TimeoutS seconds: 1, the game starts)" }
-    Write-Host -NoNewline '  Choose 1-8, U, P or Q: '
-    return Read-Key '12345678UPQ' $TimeoutS
+    $c = $script:Config
+    while ($true) {
+        $n = Mode-Now
+        Write-Host ''
+        Write-Host '  ================================================'
+        Write-Host "    GTA VI - VIctory Try $TryVersion"
+        Write-Host "    now: $(Mode-Line)"
+        Write-Host "         $(Mode-Line2)"
+        Write-Host '  ================================================'
+        Write-Host '    Enter. Play, same settings'
+        Write-Host '  ------------------------------------------------'
+        Write-Host '         SERIES X                SERIES S'
+        for ($i = 0; $i -lt 6; $i++) {
+            $a = $i + 1; $b = $i + 7
+            $left = "$(if ($n -eq $a) { '>' } else { ' ' })$('{0,2}' -f $a). $($ModeName[$i])"
+            $right = "$(if ($n -eq $b) { '>' } else { ' ' })$('{0,2}' -f $b). $($ModeName[$i])"
+            Write-Host ('   ' + $left.PadRight(23) + $right)
+        }
+        Write-Host '  ------------------------------------------------'
+        Write-Host ('    ' + "F. Frame gen: $(Fg-Name)".PadRight(26) + "C. Fps cap: $(Fps-Name)")
+        Write-Host ('    ' + "X. EXTREME: $(if ($c.allout -eq '1') { 'on' } else { 'off' })".PadRight(26) + 'R. Recommended')
+        Write-Host ('    ' + 'A. All settings'.PadRight(26) + 'U. Update')
+        Write-Host ('    ' + 'P. Prepare again'.PadRight(26) + 'Q. Quit')
+        Write-Host '  ------------------------------------------------'
+        Write-Host '    > is the mode now. Series X: 1440p, sharper.'
+        Write-Host '    Series S: lighter, for 8 GB cards and less.'
+        Write-Host '    DLSS: GeForce RTX 20 and newer. Frame gen:'
+        Write-Host '    RTX 40/50, 3x-4x RTX 50 (others play the'
+        Write-Host '    same mode without it). In the game: F1 menu,'
+        Write-Host '    F3 numbers box.'
+        Write-Host ''
+        if ($TimeoutS -gt 0) { Write-Host "  (no key in $TimeoutS seconds: the game starts)" }
+        Write-Host -NoNewline '  Type 1-12 or a letter, then Enter: '
+        $pick = Read-Choice @('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', 'F', 'C', 'X', 'R', 'A', 'U', 'P', 'Q') $TimeoutS
+        $TimeoutS = 0
+        switch ($pick) {
+            'F' { $c.fg = $(switch ($c.fg) { '' { '2' } '2' { '3' } '3' { '4' } '4' { 'none' } default { '' } }) }
+            'C' { $c.fps = $(switch ($c.fps) { '' { '120' } '120' { 'max' } 'max' { '30' } default { '' } }) }
+            'X' { $c.allout = $(if ($c.allout -eq '1') { '' } else { '1' }); if ($c.allout -eq '1') { $c.plain = '' } }
+            'R' { Reset-Recommended; Say 'settings: the recommended ones (the console is kept)' }
+            default { return $pick }
+        }
+        Save-Config
+    }
 }
 function Set-Mode([string]$Pick) {
     $c = $script:Config
-    if ($Pick -eq '7') { Reset-Recommended; Say 'settings: the recommended ones'; return }
-    $console = $(if ($Pick -eq '4') { 'series-s' } else { 'series-x' })
+    $n = [int]$Pick
+    $console = $(if ($n -ge 7) { 'series-s' } else { 'series-x' })
     if ($c.console -ne $console) { $c.console = $console; $c.console_auto = '5.6'; $c.console_user = '1' }
-    $c.dlss = $(if ($Pick -eq '5' -or $Pick -eq '6') { 'performance' } else { '' })
-    $c.fg = $(if ($Pick -eq '3') { 'none' } else { '2' })
-    $c.allout = $(if ($Pick -eq '6') { '1' } else { '' })
+    $c.dlss = $ModeDlss[($n - 1) % 6]
     $c.plain = ''
     Save-Config
-    Say "mode $Pick`: $(Mode-Line)"
+    Say "mode $Pick`: $(Mode-Line), $(Mode-Line2)"
 }
+function Is-Mode([string]$Pick) { return $Pick -match '^([1-9]|1[0-2])$' }
 
 # The menu first, as nv's cmd shows it, once the game is known (not after
 # U handed over to a newer VIctory Try: that was picked from the menu).
 $startPick = ''
 if ((OwnEngine) -and $script:Config.game_exe -and -not $handoff -and $env:VICTORY_TRY_NO_MENU -ne '1') {
     $startPick = Quick-Menu 8
-    if ('234567'.Contains($startPick)) { Set-Mode $startPick; $startPick = '' }
+    if (Is-Mode $startPick) { Set-Mode $startPick; $startPick = '' }
     elseif ($startPick -eq 'Q') { exit 0 }
-    elseif ($startPick -eq '1') { $startPick = '' }
 }
 while ($true) {
     if ($startPick) { $pick = $startPick; $startPick = '' }
     else {
         Run-Game
-        $pick = $(if (OwnEngine) { Quick-Menu } else { '8' })
+        $pick = $(if (OwnEngine) { Quick-Menu } else { 'A' })
     }
     $k = ''
-    if ('234567'.Contains($pick)) { Set-Mode $pick; continue }
-    if ($pick -eq '1') { continue }
-    if ($pick -ne '8') { $k = $pick }
+    if (Is-Mode $pick) { Set-Mode $pick; continue }
+    if ($pick -eq '') { continue }
+    if ($pick -ne 'A') { $k = $pick }
     if ($k -eq '') { Show-Commands }
     # Switches only change the setting and show the list again; Enter (or
     # U, G, P) runs the game, Q quits.
