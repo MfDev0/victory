@@ -238,9 +238,38 @@ fn translate_listed(c: &[u8]) -> Result<HostShader, String> {
     let hash = blake3::hash(c).to_hex();
     let wide = list.iter().any(|h| hash.starts_with(h.as_str()));
     let program = program_hash(c);
-    victory_shader::emit::for_program(&program, || victory_shader::emit::with_wave_wide(wide, || victory_shader::emit::translate(c)))
-        .map_err(|e| e.to_string())
+    let done = victory_shader::emit::for_program(&program, || victory_shader::emit::with_wave_wide(wide, || victory_shader::emit::translate(c)))
+        .map_err(|e| e.to_string());
+    // Try 6.19: the retry form a console wave64 program was made in, said
+    // where the translation is made (a run, `victory prepare` or the
+    // warm-up; a translation from the cache says nothing). The approximate
+    // forms give each half of a console wave its own cross-lane results: a
+    // tiled program's light list or depth range per half-tile, light in
+    // blocks on the screen.
+    let form = victory_shader::emit::take_form();
+    if done.is_ok()
+        && let Some(form) = form
+    {
+        if form.contains("APPROXIMATE") {
+            let n = APPROXIMATE.fetch_add(1, Ordering::Relaxed) + 1;
+            tracing::warn!(
+                hash = %program,
+                form = %form,
+                so_far = n,
+                "shader translated APPROXIMATELY: each half of a console wave has its own cross-lane results (a tiled program's \
+                 light list or depth range per half-tile: light in blocks); VICTORY_WAVE_WIDE_FIRST=1 tries the wave-wide form \
+                 first for groups of one console wave"
+            );
+        } else {
+            tracing::info!(hash = %program, form = %form, "shader translated in a retry form for 32-lane waves");
+        }
+    }
+    done
 }
+
+/// Try 6.19: translations made in an approximate form ([`translate_listed`]),
+/// since the start.
+pub(crate) static APPROXIMATE: AtomicU64 = AtomicU64::new(0);
 
 /// The offline warm-up (`victory translate --warm`): `container` is
 /// translated into the cache unless it is there already. `Ok(true)`: it

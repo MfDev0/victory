@@ -47,6 +47,28 @@ pub(super) fn denied(shaders: &[Arc<Shader>]) -> Option<&str> {
     shaders.iter().find(|s| list.contains(&s.hash)).map(|s| s.hash.as_str())
 }
 
+/// Try 6.19, after trustno1-coder/VIctory-NVIDIA 35c15608 (readmet3xt-lab):
+/// the light in the water's volume, in tiles
+/// (`water_shading:CS_TransmissionVolumetrics_Tiled` and `_Tiled_LocalLights`,
+/// GTA VI 1.0.2.1). Programs of one 64-lane wave a group, which a host of
+/// 32-lane waves gets in the wave-wide form only (`victory_shader::emit`); in
+/// that form they leave whole tiles of open water dark (around boats, along
+/// shores, under bridges) and take about 15 ms of the card a frame (RTX 5070:
+/// 25 fps with them, 30 without, the blocks gone; fxceless/victory-fork names
+/// the same two programs and form). Left out there: the water has no light of
+/// its own depth (darker, bluer) and no blocks. `VICTORY_WATER_LIGHT=1` runs
+/// them as before.
+const WATER_LIGHT: [&str; 2] = ["5dc3b25986622949", "6f225b641c5b0708"];
+
+/// Whether `shaders` are the water's tiled light on a host of 32-lane waves,
+/// left out ([`WATER_LIGHT`]).
+pub(super) fn water_light_left_out(shaders: &[Arc<Shader>]) -> bool {
+    static ASKED: OnceLock<bool> = OnceLock::new();
+    !*ASKED.get_or_init(|| std::env::var_os("VICTORY_WATER_LIGHT").is_some_and(|v| v == "1"))
+        && victory_shader::emit::host_uses_wave32()
+        && shaders.iter().any(|s| WATER_LIGHT.contains(&s.hash.as_str()))
+}
+
 /// The shaders of `p` (for logs).
 pub(crate) fn shaders(p: &Pending) -> &[Arc<Shader>] {
     &p.shaders
@@ -147,6 +169,18 @@ impl Pending {
                 let n = SAID.fetch_add(1, Ordering::Relaxed) + 1;
                 if n <= 8 || n.is_power_of_two() {
                     tracing::warn!(hash, shaders = ?self.shaders, so_far = n, "pipeline not built: its shader is in VICTORY_DENY_PIPELINES");
+                }
+                return None;
+            }
+            // Try 6.19 (nv 35c15608): the water's tiled light, dark blocks
+            // on a host of 32-lane waves.
+            if water_light_left_out(&self.shaders) {
+                static SAID: AtomicU64 = AtomicU64::new(0);
+                if SAID.fetch_add(1, Ordering::Relaxed) == 0 {
+                    tracing::info!(
+                        shaders = ?self.shaders,
+                        "pipeline not built: the water's tiled light on a host of 32-lane waves (dark blocks on open water; VICTORY_WATER_LIGHT=1 builds it)"
+                    );
                 }
                 return None;
             }

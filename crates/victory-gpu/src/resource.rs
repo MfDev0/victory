@@ -1921,6 +1921,9 @@ pub(crate) fn let_go_idle() {
     // For the trail (`crate::host::trail`): how many went, their bytes,
     // and the first one.
     let (mut went, mut bytes, mut first) = (0u64, 0u64, None);
+    // Try 6.19, with the look at render targets: their host copies by the
+    // title address they start at (copies, bytes, the largest's bytes).
+    let mut by_start: std::collections::HashMap<u64, (u64, u64, u64)> = std::collections::HashMap::new();
     let all = textures();
     for &at in all.iter() {
         // SAFETY: a texture leaves the table before it is freed, under the
@@ -1929,6 +1932,12 @@ pub(crate) fn let_go_idle() {
         if !fills(&r.desc) || crate::texture::host_wrote(at) {
             if targets_due {
                 let_go_target(r, over_budget);
+                if let Some((start, size)) = target_copy(r) {
+                    let e = by_start.entry(start).or_default();
+                    e.0 += 1;
+                    e.1 += size;
+                    e.2 = e.2.max(size);
+                }
             }
             continue;
         }
@@ -1969,6 +1978,24 @@ pub(crate) fn let_go_idle() {
             crate::host::retire(host);
         }
     }
+    if targets_due {
+        // Copies of render targets that start where another does: on the
+        // console they share that memory (the title places its passes'
+        // targets over each other); here each has memory of its own.
+        let (mut starts, mut copies, mut extra, mut all_n, mut all_bytes) = (0u64, 0u64, 0u64, 0u64, 0u64);
+        for (n, sum, most) in by_start.values() {
+            all_n += n;
+            all_bytes += sum;
+            if *n > 1 {
+                starts += 1;
+                copies += n;
+                extra += sum - most;
+            }
+        }
+        for (i, v) in [starts, copies, extra, all_n, all_bytes].into_iter().enumerate() {
+            TARGET_ALIASES[i].store(v, Relaxed);
+        }
+    }
     if went > 0 {
         crate::host::trail(|| {
             format!(
@@ -1988,6 +2015,27 @@ pub(crate) fn let_go_idle() {
 /// its budget, and their bytes; render targets looked at.
 #[cfg(windows)]
 pub(crate) static SWEEP_618: [std::sync::atomic::AtomicU64; 6] = [const { std::sync::atomic::AtomicU64::new(0) }; 6];
+
+/// Try 6.19, at the last look at render targets ([`let_go_idle`]): title
+/// addresses where more than one host copy of a placed render target (or a
+/// texture the host writes) starts, those copies, the bytes they hold past
+/// the largest at each address (what sharing the memory, as the console
+/// does, would save); and all such placed copies and their bytes.
+#[cfg(windows)]
+pub(crate) static TARGET_ALIASES: [std::sync::atomic::AtomicU64; 5] = [const { std::sync::atomic::AtomicU64::new(0) }; 5];
+
+/// The title address a placed texture's host copy starts at and the bytes
+/// the copy holds (its twin's too), if it has one ([`TARGET_ALIASES`]).
+#[cfg(windows)]
+fn target_copy(r: &Resource) -> Option<(u64, u64)> {
+    use std::sync::atomic::Ordering::Relaxed;
+    if !r.host.placed.load(Relaxed) {
+        return None;
+    }
+    let made = r.host.made.lock().unwrap_or_else(|e| e.into_inner());
+    let (host, twin) = made.as_ref()?;
+    Some((r.data() as u64, host.bytes + twin.as_ref().map_or(0, |t| t.colour.bytes)))
+}
 
 /// When [`let_go_idle`] last looked at render targets (`crate::host::now_ms`).
 #[cfg(windows)]
@@ -2982,6 +3030,117 @@ pub(crate) fn texture_at(address: u64, desc: &[u32; 14]) -> Option<This> {
         .store(true, std::sync::atomic::Ordering::Relaxed);
     Some(out)
 }
+
+/// Try 6.19, after cool_fox e11479ae (#72; NetherySiloX, Gregory Bonzon,
+/// ryotdev): the resource for an unordered access view of a texture the
+/// title placed at `address` with resource description `desc` (as words)
+/// and view format `view_format` (0: the resource's own). An unordered
+/// access texture already at that address when its format allows the view;
+/// else a resource made on first use, starting in unordered access and, as
+/// a texture the host writes, in [`TARGETS_AT`]: shader views placed at
+/// `address` in another format find its texels through [`alias_of`].
+/// Such views were given a null view ("placed unordered texture view not
+/// mirrored" in the 6.17 report): what the title's compute shaders wrote
+/// through them went nowhere, and its R9G9B9E5 views of the same memory
+/// (the light it packs into R32_UINT: probes, bounced light) showed title
+/// memory nothing had written.
+/// `VICTORY_PLACED_UAV=0`: null views, as before.
+#[cfg(windows)]
+pub(crate) fn uav_texture_at(address: u64, desc: &[u32; 14], view_format: u32) -> Option<This> {
+    const DEPTH: u32 = 0x2;
+    const UNORDERED: u32 = 0x4;
+    const UNORDERED_ACCESS: u32 = 0x8;
+    const DEFAULT: HeapProperties = HeapProperties {
+        kind: 1,
+        cpu_pages: 0,
+        pool: 0,
+        creation_nodes: 1,
+        visible_nodes: 1,
+    };
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if address == 0 || !*ON.get_or_init(|| std::env::var_os("VICTORY_PLACED_UAV").is_none_or(|v| v != "0")) {
+        return None;
+    }
+    // SAFETY: 56 bytes in the description's layout.
+    let d = unsafe { desc.as_ptr().cast::<ResourceDesc>().read_unaligned() };
+    if d.dimension == BUFFER {
+        return None;
+    }
+    let own = pc_format(d.format);
+    let wanted = if view_format == 0 { own } else { pc_format(view_format) };
+    {
+        // Under the table's lock: a texture leaves it before it is freed.
+        let targets = TARGETS_AT.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(&other) = targets.get(&address) {
+            let o = resource(other as This);
+            let o_fmt = target_format(pc_format(o.desc.format));
+            let w_fmt = target_format(wanted);
+            let typeless = family(o_fmt) == o_fmt && family(o_fmt + 1) == o_fmt;
+            let srgb = SRGB.iter().any(|&(s, _)| s == o_fmt);
+            let compatible = o_fmt == w_fmt || ((typeless || srgb) && family(w_fmt) == family(o_fmt));
+            if o.desc.dimension == d.dimension
+                && o.desc.width == d.width
+                && o.desc.height == d.height
+                && o.desc.mip_levels == d.mip_levels
+                && o.desc.depth_or_array_size == d.depth_or_array_size
+                && o.desc.sample_count <= 1
+                && d.sample_count <= 1
+                && o.desc.flags & (DEPTH | UNORDERED) == UNORDERED
+                && compatible
+            {
+                return Some(other as This);
+            }
+        }
+    }
+    let mut r = *desc;
+    // The layout's filler words, as [`texture_at`] leaves them out.
+    r[1] = 0;
+    r[13] = 0;
+    r[12] = (r[12] & !DEPTH) | UNORDERED;
+    if view_format != 0 && target_format(own) != target_format(wanted) {
+        if family(own) == family(wanted) {
+            r[8] = family(wanted);
+        } else if element(own) == element(wanted) {
+            r[8] = wanted;
+        }
+    }
+    let mut map = PLACED_TEXTURES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&existing) = map.get(&(address, r)) {
+        // A target made at this address since may have taken its place in
+        // the table and been released: back in it if the place is free.
+        TARGETS_AT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(address)
+            .or_insert(existing);
+        return Some(existing as This);
+    }
+    // SAFETY: 56 bytes in the description's layout.
+    let uav_desc = unsafe { r.as_ptr().cast::<ResourceDesc>().read_unaligned() };
+    let mut out = std::ptr::null();
+    let made = hand_out_resource(
+        uav_desc,
+        DEFAULT,
+        0,
+        Backing::Address(address as *mut u8),
+        UNORDERED_ACCESS,
+        std::ptr::null(),
+        &RESOURCE_IIDS[0],
+        &mut out,
+    );
+    if made != S_OK {
+        return None;
+    }
+    map.insert((address, r), out as usize);
+    PLACED_UAVS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    resource(out).host.placed.store(true, std::sync::atomic::Ordering::Relaxed);
+    Some(out)
+}
+
+/// Try 6.19: resources made for placed unordered texture views
+/// ([`uav_texture_at`]), since the start.
+#[cfg(windows)]
+pub(crate) static PLACED_UAVS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub(crate) extern "system" fn create_placed(
     _: This,

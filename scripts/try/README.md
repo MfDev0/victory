@@ -568,6 +568,28 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.19 ("no light in blocks"; 6.18 did not build: `TARGET_LOOK_AT`):
+   - `resource::uav_texture_at` (cool_fox e11479ae, #72): placed unordered
+     texture views get a host UAV texture at their address (an existing
+     compatible target there, else one made in `PLACED_TEXTURES` and so in
+     `TARGETS_AT`); `placed_texture` returns `View::Unordered` for them and
+     clears the target/depth/UAV flags of placed shader views, which then
+     find it through `alias_of`. `VICTORY_PLACED_UAV=0`: as before.
+   - `pipeline::make::water_light_left_out` (nv 35c15608): the water's
+     tiled light (5dc3b25986622949, 6f225b641c5b0708) is not built on
+     32-lane hosts; `VICTORY_WATER_LIGHT=1` builds it.
+   - `VICTORY_TEXTURE_OVER_DROP` (on): adaptive quality drops 3 levels while
+     the card is past its budget.
+   - `emit::take_form`: `shader_cache::translate_listed` logs translations
+     made in an approximate local-wave form. `VICTORY_WAVE_WIDE_FIRST=1`
+     (off) tries `widen` before them for groups of one console wave
+     (`_NOT=<hash>,...`).
+   - Lines: `render targets placed in title memory (6.19)` (copies sharing a
+     start address, placed UAV textures), `indirect executions not run
+     (6.19)`, `shaders translated approximately (6.19)`.
+   - Checked before the push on Linux: `cargo check --all-targets` (and
+     `--features diagnostics`) of victory-gpu with `--cfg windows` against
+     the windows-rs sources, and victory-shader's tests.
    6.18 ("nothing let go that comes back"; plan and to-do in `scripts/try/PLAN.md`):
    - `VICTORY_SWEEP_BACK_MS` (30,000): a texture the sweep let go and that
      was made again waits that long unused before it may go again; the

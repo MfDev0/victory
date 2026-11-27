@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.18'
+$TryVersion = '6.19'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live, tried when the fork itself cannot be
@@ -2165,6 +2165,7 @@ if (OwnEngine) {
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
 Tidy-Disk ([bool]$changed)
 if (OwnEngine) {
+    Say '6.19: the picture: the light the game''s compute shaders write into memory it placed itself is kept (it went nowhere: probes and bounced light read memory nothing wrote), open water without dark blocks (its tiled light left out on NVIDIA), textures that come back into view are kept (no more white or grey people), screen copies the game gave up are let go, a third texture level goes while the card is past its memory, 1.5 s after a loading screen at most; the log says more.'
     Say '6.17: the fps: the game''s fence wait (monitorx) is patched in place now: it could not be where it lay across two 8-byte words, and took an exception 440,000 times a second (more than a whole processor); the pass over the game''s descriptor heap (22-39 ms a frame) runs beside the preparing instead of before it.'
     Say '6.16: the fps: the textures had filled the card, so the game''s memory windows stayed in the PC''s memory and the card read them across the bus (about 200 ms of card work a frame on a 6 GB laptop card); room on the card is kept for them now and all-out leaves 6% of a small card free. The texture rush no longer goes on and off every second (the same textures uploaded again and again, and faces flicking between skin, white and see-through). The disk: older builds'' shader translations, the other engines and old logs are removed (TIDY shows what takes what). The card''s time is measured in every report.'
     Say '6.13: NVIDIA fixes from the other forks: on PCs under 24 GB of memory the game''s memory windows go straight into the card through Resizable BAR (out-of-memory and the driver crash gone, 1.6-3 -> 10-12 fps on a 16 GB RTX 3060 PC; Indy2l), texture read-backs on their own thread (no more 100-400 ms landing stalls while the world streams), a slow shader is waited for in one frame only (no more freezes while it compiles), compute shaders start compiling as soon as the game makes them, face decorations found by name (no black faces in cutscenes), streamed textures are no longer forgotten when the change list fills, and the card''s buffer compare goes out on its own (D3D12 error 538).'

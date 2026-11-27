@@ -312,13 +312,33 @@ fn adaptive_drop() -> u32 {
     static SHORT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     let was = SHORT.load(Ordering::Relaxed);
     let line = if was { sharp_percent().saturating_sub(5) } else { sharp_percent() };
-    let short = host()
-        .and_then(|h| h.video_memory())
-        .is_some_and(|[budget, used, ..]| used >= budget / 100 * line);
+    let video = host().and_then(|h| h.video_memory());
+    let short = video.is_some_and(|[budget, used, ..]| used >= budget / 100 * line);
     SHORT.store(short, Ordering::Relaxed);
-    let n = if short { 1 + u32::from(!crate::resource::room_lately()) } else { 0 };
+    // Try 6.19: a third level while the card stands past its budget. In the
+    // 6.17 reports a 6 GB card stood at 5,628-5,716 MB of a 5,153 MB budget
+    // for the whole world: Windows then moves the card's memory out to the
+    // PC's, and the textures the sweep let go came back as placeholders.
+    // A third level left out is a sixteenth of a large texture's bytes, not
+    // a quarter; the levels come back with the rest (`sharpen`).
+    // (`VICTORY_TEXTURE_OVER_DROP=0`: two at most, as before.)
+    let over = video.is_some_and(|[budget, used, ..]| budget > 0 && used > budget) && over_drop();
+    let n = if over {
+        3
+    } else if short {
+        1 + u32::from(!crate::resource::room_lately())
+    } else {
+        0
+    };
     LAST.store((tenth << 2) | u64::from(n), Ordering::Relaxed);
     n
+}
+
+/// Try 6.19: whether textures lose a third level while the card stands past
+/// its budget ([`adaptive_drop`]; `VICTORY_TEXTURE_OVER_DROP`, on unless 0).
+fn over_drop() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_OVER_DROP").is_none_or(|v| v != "0"))
 }
 
 /// The share of the card's budget, in percent, under which textures keep

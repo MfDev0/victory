@@ -66,6 +66,31 @@ filled textures a minute (650-750 MB) at its 1 s Critical idle; placeholders
       while the card is past its budget; no slot, no list, twin unheld.
 - [x] Curtain 1.5 s (`VICTORY_JOIN_HOLD_MS`).
 - [x] Log: `texture sweep (6.18)` line; `PLACEHOLDER_KINDS`.
+6.19 ("no light in blocks"):
+- [x] Build fix: the look time is `TARGET_LOOK_AT` (`TARGETS_AT` is the
+      targets-by-address map; the first 6.18 did not build).
+- [x] Second 6.18 report (ran the 6.17 build): world 1.7-2.5 fps, the card
+      5,713-5,716 of 5,153 MB, 3D 93-98 %, the title's lists 216-276 ms of
+      card time a frame; windows 1,148 MB in the BAR, 2,184 MB only in PC
+      memory; 591 indirect executions not run a frame (the builder, by the
+      first-time line: dispatch [[2,5,0,0]]).
+- [x] Squares (1): "placed unordered texture view not mirrored" in the log:
+      placed UAV textures were null views, so the R32_UINT-packed light the
+      R9G9B9E5 views read was never written. `uav_texture_at` (cool_fox
+      e11479ae).
+- [x] Squares (2): the water's tiled light in the wave-wide form leaves
+      tiles dark (nv 35c15608): left out on 32-lane hosts.
+- [x] Approximate local-wave translations logged (`take_form`);
+      `VICTORY_WAVE_WIDE_FIRST=1` opt-in (not default: the wave-wide form is
+      not exact for every program, see (2)).
+- [x] `VICTORY_TEXTURE_OVER_DROP`: 3 levels past the budget.
+- [x] Lines: placed render targets by start address (aliasing census);
+      indirect drops by why; approximate shaders.
+- [x] Compile check before pushing (rustc-bin from PyPI, sources from
+      GitHub, `--cfg windows`): catches the first 6.18's error.
+- Next: if the census shows render targets sharing addresses, give them one
+  host heap per address (placed resources; needs the title's discards or
+  clears before each use).
 - Checked: the 5 refused computes are rt-off hashes (deny list); the 5
   untranslated computes ("a descriptor read only as data", lower.rs) are
   made at the menu, never bound in the world.

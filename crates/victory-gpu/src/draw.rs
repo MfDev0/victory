@@ -4945,6 +4945,14 @@ impl State {
     }
 }
 
+/// Try 6.19, for the frame report: indirect executions not run since the
+/// start, by why ([`State::execute_indirect`]): a stage of the structure
+/// builder or a program only for rays (both off on purpose), a walk of
+/// structures nothing built, no host pipeline yet, anything else (a
+/// mismatch, arguments outside title buffers, no signature, mesh off, no
+/// clamp; `note_why` names it in the drop table).
+pub(crate) static INDIRECT_DROPS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
 impl State {
     /// Indirect execution of a one-argument signature of `kind` (PC
     /// numbering: 0 draw, 1 indexed draw, 2 dispatch, 10 mesh dispatch) with
@@ -4968,11 +4976,13 @@ impl State {
         if crate::pipeline::only_for_rays(self.pipeline as This)
             || (crate::pipeline::is_builder(self.pipeline as This) && !crate::pipeline::builder_runs())
         {
+            INDIRECT_DROPS[0].fetch_add(1, Ordering::Relaxed);
             return false;
         }
         // A program that walks ray-tracing structures nothing has built:
         // dropped before the argument clamp, like a skipped one.
         if crate::pipeline::walk_held(self.pipeline as This) {
+            INDIRECT_DROPS[1].fetch_add(1, Ordering::Relaxed);
             #[cfg(feature = "diagnostics")]
             crate::pipeline::note_why("a walk of ray-tracing structures that are not built (VICTORY_BVH_HOLD=1)".to_owned());
             return false;
@@ -4981,8 +4991,12 @@ impl State {
         const INDEXED: u32 = 1;
         const DISPATCH: u32 = 2;
         const MESH: u32 = 10;
-        let why = |what: &str| crate::pipeline::note_why(format!("indirect kind {kind}: {what}"));
+        let why = |what: &str| {
+            INDIRECT_DROPS[3].fetch_add(1, Ordering::Relaxed);
+            crate::pipeline::note_why(format!("indirect kind {kind}: {what}"))
+        };
         let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This) else {
+            INDIRECT_DROPS[2].fetch_add(1, Ordering::Relaxed);
             crate::pipeline::note_drop(self.pipeline as This);
             return false;
         };

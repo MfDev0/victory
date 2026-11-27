@@ -4186,19 +4186,43 @@ fn same_placed_texture(a: &View, b: &View) -> bool {
     }
 }
 
-/// A shader view of a texture the title placed in memory itself, as a view
-/// of the resource made for that memory (on first use).
+/// A shader or unordered access view of a texture the title placed in
+/// memory itself, as a view of the resource made for that memory (on first
+/// use). Try 6.19, after cool_fox e11479ae (#72): unordered access views get
+/// a texture the host writes ([`crate::resource::uav_texture_at`]; they were
+/// null views), and a shader view's description loses the target, depth and
+/// unordered access flags the title left on it: its texels come from title
+/// memory or, through `crate::resource::alias_of`, from the texture the host
+/// writes at that address, which a view made as a target would have taken
+/// the place of.
 pub(crate) fn placed_texture(view: &View) -> Option<View> {
     const BUFFER: u32 = 1;
-    let View::Placed(false, resource, desc) = view else {
+    const TARGET_DEPTH_UNORDERED: u32 = 0x7;
+    let &View::Placed(unordered, mut resource, ref desc) = view else {
         return None;
     };
     if resource[0] == BUFFER {
         return None;
     }
     let address = u64::from(desc[10]) | u64::from(desc[11]) << 32;
-    let texture = crate::resource::texture_at(address, resource)?;
-    Some(View::Shader(texture as usize, desc[..10].try_into().ok()))
+    let words = desc[..10].try_into().ok();
+    if unordered {
+        let texture = crate::resource::uav_texture_at(address, &resource, desc[0])?;
+        return Some(View::Unordered(texture as usize, 0, words));
+    }
+    if placed_uav_on() {
+        resource[12] &= !TARGET_DEPTH_UNORDERED;
+    }
+    let texture = crate::resource::texture_at(address, &resource)?;
+    Some(View::Shader(texture as usize, words))
+}
+
+/// Whether placed unordered texture views get textures
+/// ([`placed_texture`]; `VICTORY_PLACED_UAV=0`: null views and shader views
+/// as the title describes them, as before 6.19).
+fn placed_uav_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_PLACED_UAV").is_none_or(|v| v != "0"))
 }
 
 /// A null view of the kind `view` is, for a slot whose view the host

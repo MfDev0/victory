@@ -392,6 +392,50 @@ thread_local! {
     static WAVE_WIDE_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+thread_local! {
+    /// Try 6.19: the retry form the last translation on this thread was
+    /// made in ([`take_form`]); none: the program's own first form.
+    static FORM: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Try 6.19: the retry form the last translation on this thread was made
+/// in, taken (the next asks get none until another translation is made):
+/// "local waves (APPROXIMATE...)" for a console wave whose cross-lane
+/// results were made per half-wave, as two half-tile results where the
+/// console has one tile-wide one; none for the program's own first form or
+/// a translation that came from the cache.
+pub fn take_form() -> Option<String> {
+    FORM.take()
+}
+
+/// Try 6.19, opt-in (`VICTORY_WAVE_WIDE_FIRST=1`): the wave-wide form
+/// ([`widen`]) before the approximate per-half-wave ones for every console
+/// wave64 compute program of one wave a group on a host of 32-lane waves
+/// (`VICTORY_WAVE_WIDE=0` turns it off with the rest of that form). The
+/// approximate forms give each half of a console wave its own result where
+/// the console has one for the whole 64-thread tile (a tiled program's light
+/// list or depth range per half-tile). Not on by default: the wave-wide form
+/// of the water's two tiled light programs leaves whole tiles dark
+/// (trustno1-coder/VIctory-NVIDIA 35c15608), so it is not exact for every
+/// program either. Which programs take an approximate form is logged
+/// ([`take_form`]). `VICTORY_WAVE_WIDE_FIRST_NOT=<hash>,...`: not for the
+/// listed programs.
+fn wide_first_allowed(program: Option<&str>) -> bool {
+    if std::env::var_os("VICTORY_WAVE_WIDE_FIRST").is_none_or(|v| v != "1") {
+        return false;
+    }
+    static NOT: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let not = NOT.get_or_init(|| {
+        std::env::var("VICTORY_WAVE_WIDE_FIRST_NOT")
+            .unwrap_or_default()
+            .split(',')
+            .map(|h| h.trim().to_lowercase())
+            .filter(|h| !h.is_empty())
+            .collect()
+    });
+    !program.is_some_and(|p| not.iter().any(|h| p.starts_with(h.as_str())))
+}
+
 /// Runs `f` (a translation) with the wave-wide form of a wave64 compute
 /// program on a host of 32-lane waves allowed, as `VICTORY_WAVE_WIDE=1`
 /// allows it for all, for one program chosen by its hash
@@ -439,6 +483,7 @@ fn emit_forms(
 ) -> Result<HostShader, ShaderError> {
     // (what an earlier program's lowering on this thread left behind)
     lower::take_needs();
+    FORM.set(None);
     let original = emit_program(c, native, p, st, io, res);
     // A console wave64 compute program on a host of 32-lane waves that
     // still needs 64 lanes, or whose cross-lane code sits where not every
@@ -456,6 +501,9 @@ fn emit_forms(
     if stuck && native.stage == HwStage::Cs && native.wave64 && host_uses_wave32() {
         let why = std::env::var_os("VICTORY_WAVE_WHY").is_some();
         let report = |what: &str, r: &Result<(HostShader, Option<u32>), ShaderError>| {
+            if matches!(r, Ok((_, wave)) if *wave != Some(64)) {
+                FORM.set(Some(what.to_owned()));
+            }
             if why {
                 match r {
                     Ok((_, wave)) => eprintln!("WAVE64-RETRY {what}: wave {wave:?}"),
@@ -548,7 +596,11 @@ fn emit_forms(
                 [0x58, 0x1d, 0xab, 0x2c, 0xd8, 0xbc, 0xf2, 0x2e, 0x5c, 0x96, 0x4b, 0x98, 0xe9, 0x03, 0x48, 0xd1]
                     | [0x24, 0x31, 0xbb, 0xe7, 0xdc, 0x15, 0x4a, 0xd7, 0x59, 0xd2, 0x0b, 0xc9, 0x54, 0x82, 0x9c, 0x1c]
             );
-        let wide_on = wide_option.as_ref().map_or(scene_kernel, |v| v == "1") || WAVE_WIDE_HERE.get();
+        // Try 6.19, opt-in: the wave-wide form before the approximate ones for every program
+        // of one console wave a group ([`wide_first_allowed`]).
+        let wide_first = matches!(native.io, crate::native::StageIo::Cs(cs) if cs.threads.iter().product::<u32>() == 64)
+            && wide_first_allowed(per_program::current().as_deref());
+        let wide_on = wide_option.as_ref().map_or(scene_kernel || wide_first, |v| v == "1") || WAVE_WIDE_HERE.get();
         // (cool_fox 8cc31ab) A driver-compiled program (ACCC, no DXIL) stopped at a mask
         // exchange where not every lane runs: one guest wave can run its active-lane loop
         // until both host halves are done; [`widen`] checks the latch.

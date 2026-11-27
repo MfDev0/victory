@@ -11460,6 +11460,37 @@ impl Meter {
                     p(2)
                 );
             }
+            // 6.19 (every build): render targets sharing title memory, the
+            // frame line's "indirect" drops by why, approximate shaders.
+            {
+                let t = |i: usize| crate::resource::TARGET_ALIASES[i].load(Ordering::Relaxed);
+                tracing::info!(
+                    "render targets placed in title memory (6.19): {} host copies {} MB; {} title addresses where more than one starts \
+                     ({} copies), {} MB past the largest at each (memory the console shares between them); textures made for placed \
+                     unordered access views since the start (null views before 6.19; VICTORY_PLACED_UAV): {}",
+                    t(3),
+                    t(4) >> 20,
+                    t(0),
+                    t(1),
+                    t(2) >> 20,
+                    crate::resource::PLACED_UAVS.load(Ordering::Relaxed)
+                );
+                let d = |i: usize| crate::draw::INDIRECT_DROPS[i].load(Ordering::Relaxed);
+                tracing::info!(
+                    "indirect executions not run (6.19), since the start: {} stages of the ray-tracing structure builder or programs only \
+                     for rays (off on purpose), {} walks of structures nothing built, {} with no host pipeline yet, {} for another reason \
+                     (the drop table names it)",
+                    d(0),
+                    d(1),
+                    d(2),
+                    d(3)
+                );
+                tracing::info!(
+                    "shaders translated approximately (6.19; each half of a console wave with its own cross-lane results, light in blocks) \
+                     since the start: {} (each named by a \"shader translated APPROXIMATELY\" line)",
+                    crate::shader_cache::APPROXIMATE.load(Ordering::Relaxed)
+                );
+            }
             #[cfg(feature = "diagnostics")]
             crate::copystat::log(std::mem::take(&mut self.copy_stats_frames) as f64);
             // (every build since 4.8: which programs the dropped draws were)

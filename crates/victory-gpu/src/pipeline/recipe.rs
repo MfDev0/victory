@@ -292,7 +292,7 @@ pub fn prepare(threads: usize, progress: &(dyn Fn(&Prepared, bool) + Sync)) -> P
             }
             // Try 6.12: nor those a run never builds (`VICTORY_DENY_PIPELINES`,
             // and the passes that only serve rays with every ray a miss).
-            if super::make::denied(&shaders).is_some() || super::never_built(&shaders) {
+            if super::make::denied(&shaders).is_some() || super::make::water_light_left_out(&shaders) || super::never_built(&shaders) {
                 return None;
             }
             let graphics = if r.graphics.is_empty() {
