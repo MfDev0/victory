@@ -1454,6 +1454,17 @@ fn create() -> windows::core::Result<Host> {
             .and_then(|factory| factory.EnumAdapterByLuid::<IDXGIAdapter3>(device.GetAdapterLuid()))
             .ok();
         tracing::info!("host D3D12 device ready");
+        // Said once here rather than only as one refusal per pipeline
+        // (Belobug #351): without these flags nothing the title draws is
+        // made.
+        if let Some(why) = crate::pipeline::host::runtime_refuses(crate::pipeline::host::DIRECTLY_INDEXED) {
+            tracing::error!(
+                %why,
+                "the D3D12 runtime refuses directly indexed descriptor heaps (shader model 6.6), so every host pipeline \
+                 will be refused; Windows 10's in-box runtime does this, and only a newer D3D12 runtime (the Agility SDK) \
+                 takes them"
+            );
+        }
         Ok(Host {
             device,
             queue,
