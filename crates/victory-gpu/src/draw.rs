@@ -564,6 +564,10 @@ pub(crate) struct State {
     /// Graphics, compute.
     host_roots: [usize; 2],
     host_heaps: [usize; 2],
+    /// The host heap objects (view, sampler) the host list has (0: none set
+    /// yet): other title heaps that come to the same host heaps leave the
+    /// list as it is ([`same_host_heaps`]).
+    host_heap_objs: [usize; 2],
     /// Tables made afresh in this list: (table, slot count, contents) → first
     /// dynamic slot.
     fresh_tables: std::collections::HashMap<(u64, u32, u64), u32>,
@@ -1712,6 +1716,7 @@ impl State {
         self.host_pipeline = 0;
         self.host_roots = [0; 2];
         self.host_heaps = [0; 2];
+        self.host_heap_objs = [0; 2];
         if self.topology_set {
             self.set_topology(list, self.topology);
         }
@@ -2038,11 +2043,22 @@ impl State {
                 .filter_map(|&h| crate::descriptor::heap(h as This).host())
                 .map(|h| Some(h.heap.clone()))
                 .collect();
-            heaps.iter().flatten().for_each(|h| list.keep(h));
-            // SAFETY: an open list and shader-visible heaps.
-            unsafe { l.SetDescriptorHeaps(&heaps) };
+            let mut objs = [0usize; 2];
+            for (o, h) in objs.iter_mut().zip(heaps.iter().flatten()) {
+                *o = h.as_raw() as usize;
+            }
+            // Title heaps that come to the host heaps the list already has:
+            // setting them again would only clear the root signature, whose
+            // arguments every draw sets again (ZigZagBoi1/ScarlettPort
+            // 1e72650; `VICTORY_SAME_HOST_HEAPS=0`: set at every change).
+            if !(same_host_heaps() && objs != [0; 2] && objs == self.host_heap_objs) {
+                heaps.iter().flatten().for_each(|h| list.keep(h));
+                // SAFETY: an open list and shader-visible heaps.
+                unsafe { l.SetDescriptorHeaps(&heaps) };
+                self.host_heap_objs = objs;
+                self.host_roots = [0; 2];
+            }
             self.host_heaps = self.heaps;
-            self.host_roots = [0; 2];
         }
         // The depth target a draw only tests, for the views of it that the
         // draw's shaders read (`readable`).
@@ -4065,6 +4081,7 @@ impl State {
             self.host_pipeline = 0;
             self.host_roots = [0; 2];
             self.host_heaps = [0; 2];
+            self.host_heap_objs = [0; 2];
         }
     }
 
@@ -6152,4 +6169,13 @@ mod tests {
         // No thread along an axis: nothing runs.
         assert_eq!(dispatch_dimensions([0, 1, 1], [64, 1, 1], 0x20), None);
     }
+}
+
+/// Whether a change of title heaps that leaves the host heaps as they are
+/// skips `SetDescriptorHeaps` and the root signature's reset (on by
+/// default; `VICTORY_SAME_HOST_HEAPS=0`: set again at every change, as
+/// before). From ZigZagBoi1/ScarlettPort 1e72650.
+fn same_host_heaps() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("VICTORY_SAME_HOST_HEAPS").map_or(true, |v| v.trim() != "0"))
 }
