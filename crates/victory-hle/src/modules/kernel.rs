@@ -352,13 +352,26 @@ fn refuse(file: &str, path: &str, load: bool) {
     let file = file.to_ascii_lowercase();
     let mut refused = REFUSED.lock().unwrap_or_else(|e| e.into_inner());
     if !refused.contains(&file) {
-        tracing::warn!(
-            dll = file,
-            path,
-            load,
-            similar = ?runtime::images_like(&file),
-            "a host DLL outside the host policy: refused"
-        );
+        // 6.20: a look for a module that is not loaded (`GetModuleHandle`,
+        // `load` false) is answered "not loaded" as Windows answers it; the
+        // title asks that of AMD's upscaler DLL, which the loader we serve
+        // never loads. Only a load that is refused is a warning.
+        if load {
+            tracing::warn!(
+                dll = file,
+                path,
+                load,
+                similar = ?runtime::images_like(&file),
+                "a host DLL outside the host policy: refused"
+            );
+        } else {
+            tracing::info!(
+                dll = file,
+                path,
+                similar = ?runtime::images_like(&file),
+                "a module the title looks for is not loaded (answered as Windows answers it)"
+            );
+        }
         refused.push(file);
     }
 }

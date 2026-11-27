@@ -478,7 +478,10 @@ pub(crate) unsafe fn emulate(ctx: &mut CONTEXT) -> i32 {
     {
         seen.push(std::mem::discriminant(&what));
         if what != ConsoleOnly::Ud2 {
-            tracing::warn!(instruction = ?what, at = format_args!("{rip:#x}"), "a console CPU instruction this CPU lacks: emulated (logged once)");
+            // 6.20: said, not warned: emulating these is the design (the
+            // console's Zen 2 has them, an Intel CPU does not); the counts are
+            // in the "console CPU instructions, exceptions a second" line.
+            tracing::info!(instruction = ?what, at = format_args!("{rip:#x}"), "a console CPU instruction this CPU lacks: emulated, as designed (logged once)");
         }
     }
     match what {

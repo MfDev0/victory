@@ -168,7 +168,7 @@ impl Pending {
                 static SAID: AtomicU64 = AtomicU64::new(0);
                 let n = SAID.fetch_add(1, Ordering::Relaxed) + 1;
                 if n <= 8 || n.is_power_of_two() {
-                    tracing::warn!(hash, shaders = ?self.shaders, so_far = n, "pipeline not built: its shader is in VICTORY_DENY_PIPELINES");
+                    tracing::info!(hash, shaders = ?self.shaders, so_far = n, "pipeline not built: its shader is in VICTORY_DENY_PIPELINES (on purpose: Try lists the ray-tracing and driver-crashing ones)");
                 }
                 return None;
             }

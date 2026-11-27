@@ -6071,6 +6071,17 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    /// Whether the program has a ray-tracing node test
+    /// (`image_bvh_intersect_ray`, `image_bvh64_intersect_ray`).
+    fn walks_rays(&self) -> bool {
+        self.x
+            .p
+            .blocks
+            .iter()
+            .flat_map(|b| &b.insts)
+            .any(|i| i.name().starts_with("image_bvh"))
+    }
+
     /// A descriptor load (`s_load_dword*` from a table or heap) whose dwords
     /// the code also reads as numbers: the console compiler computes sizes
     /// from descriptor bits (an image's width, height, depth, levels; a
@@ -6275,6 +6286,22 @@ impl<'a> Lower<'a> {
                     // other sizes) and a buffer for raw or structured; a view of another
                     // shape reads sizes of the wrong rank.
                     const NONE: Why = "a descriptor read only as data";
+                    // 6.20: in a ray-tracing program with the rays skipped
+                    // (`VICTORY_SKIP_RT=1`: every node test misses), a
+                    // structure's descriptor picked from the heap by an
+                    // index the program computes, whose address the program
+                    // takes to walk the nodes itself, reads 0: the walk then
+                    // finds nothing, as every other ray does. The title's
+                    // five such programs (07c93bfb77fecebb, 002e93a6cc2aa355,
+                    // 0e64f14fae060d04, 96ccb14ef981fd85, dbdbf36298727135)
+                    // did not translate and their dispatches were dropped.
+                    if intersect::skip_rays() && self.walks_rays() {
+                        for k in 0..count {
+                            let zero = self.s.m.i32(0);
+                            self.write(inst, Reg::S(code + k as u8), zero, None);
+                        }
+                        return Ok(());
+                    }
                     let src = Source::Loaded { load: site, first: 0 };
                     let used = self.used_kind(&src);
                     let in_views = self

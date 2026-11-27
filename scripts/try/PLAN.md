@@ -66,6 +66,12 @@ filled textures a minute (650-750 MB) at its 1 s Critical idle; placeholders
       while the card is past its budget; no slot, no list, twin unheld.
 - [x] Curtain 1.5 s (`VICTORY_JOIN_HOLD_MS`).
 - [x] Log: `texture sweep (6.18)` line; `PLACEHOLDER_KINDS`.
+6.20 ("a clean log"):
+- [x] Every WARN of the 6.18 report: card budgets on small cards (all-out),
+      5 untranslated RT computes, CB off 256, raw view off 16, a CB's
+      address, the fill-ahead false miss, rpcrt4; on-purpose lines at info.
+- Next: fps (preparing ~165 ms: write-watch asking 66.7 incl. stale
+  settles; heap pass beside 28 ms; title lists 216-276 ms of card time).
 6.19 ("no light in blocks"):
 - [x] Build fix: the look time is `TARGET_LOOK_AT` (`TARGETS_AT` is the
       targets-by-address map; the first 6.18 did not build).

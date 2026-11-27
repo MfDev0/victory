@@ -94,7 +94,7 @@ struct Ray {
 /// ends at its first node: no shadow from it, and the title's own
 /// fallback for a miss (the sky, no occluder). It also lets the trace
 /// programs translate whatever their structure's descriptor says.
-fn skip_rays() -> bool {
+pub(super) fn skip_rays() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("VICTORY_SKIP_RT").is_some_and(|v| v == "1"))
 }

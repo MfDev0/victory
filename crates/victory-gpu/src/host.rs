@@ -4292,6 +4292,15 @@ mod fill_ahead {
         }
         let frame = crate::frame::current();
         let landing = LANDING.load(Relaxed);
+        // Submissions finished before this landing: every landing path
+        // stores the number after its copy-back, so the flights landing now
+        // all have higher ones. A fill that read when no flight above it
+        // was in the air (its number at most this) missed nothing of this
+        // landing. Try 6.20: the 6.18 report's one such line (16 bytes read
+        // in frame 1906, "changed" in frame 1920) came by a landing whose
+        // flights were not known (`landing` 0), where every write counted,
+        // and turned the waiting on for the rest of the run.
+        let finished = super::FINISHED.load(std::sync::atomic::Ordering::Acquire);
         let hits: Vec<(usize, usize, u64)> = {
             let read = READ.lock().unwrap_or_else(|e| e.into_inner());
             let Some(map) = read.as_ref() else { return };
@@ -4299,7 +4308,7 @@ mod fill_ahead {
             (at / PIECE..=(end - 1) / PIECE)
                 .filter_map(|piece| map.get(&piece))
                 .flat_map(|p| p.fills.iter().copied())
-                .filter(|f| f.0 < end && f.1 > at && f.2 + KEEP >= frame && (landing == 0 || landing <= f.3))
+                .filter(|f| f.0 < end && f.1 > at && f.2 + KEEP >= frame && f.3 > finished && (landing == 0 || landing <= f.3))
                 .map(|f| (f.0, f.1, f.2))
                 .collect()
         };

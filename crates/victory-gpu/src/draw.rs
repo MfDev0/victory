@@ -1381,6 +1381,14 @@ macro_rules! once {
     }};
 }
 
+/// As `once!`, for something done on purpose (6.20: not a warning).
+macro_rules! once_info {
+    ($($arg:tt)*) => {{
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| tracing::info!($($arg)*));
+    }};
+}
+
 /// Whether the stages of one draw share a table they both need made afresh
 /// (`VICTORY_TABLE_STAGES=1`; off by default: each stage makes its own, as
 /// before). `alt`: twenty seconds with, twenty without, in turn, each
@@ -1848,14 +1856,24 @@ impl State {
             return 0;
         }
         // The title address of the buffer view at that dword of the table.
-        let address = match self.roots_ref(compute).get(usize::from(slot)) {
-            Some(&Root::Table(table)) => crate::descriptor::view(table + u64::from(dword) * 4)
-                .and_then(|view| crate::descriptor::host::buffer_range(&view))
-                .map_or(0, |range| range.0),
-            _ => 0,
+        // 6.20: a constant buffer view's address too, and an empty slot (a
+        // null descriptor, whose address on the console is 0 as well) is
+        // not a fault; only a view that is there and has no address is.
+        let view = match self.roots_ref(compute).get(usize::from(slot)) {
+            Some(&Root::Table(table)) => crate::descriptor::view(table + u64::from(dword) * 4),
+            _ => None,
+        };
+        let address = match &view {
+            Some(crate::descriptor::View::Constant(address, _)) => *address,
+            Some(v) => crate::descriptor::host::buffer_range(v).map_or(0, |range| range.0),
+            None => 0,
         };
         if address == 0 {
-            once!(slot, dword, "a shader takes the address of a buffer view that is not there: it reads 0");
+            if view.is_some() {
+                once!(slot, dword, ?view, "a shader takes the address of a view that has none: it reads 0");
+            } else {
+                once_info!(slot, dword, "a shader takes the address of an empty view slot: it reads 0, as on the console");
+            }
         }
         if kind == USER_VIEW_ADDRESS {
             address as u32
@@ -3924,7 +3942,7 @@ impl State {
         // Try 6.12 (edsuuu/VI-BR-PORT): passes that only serve rays, with
         // every ray a miss and the builder off.
         if crate::pipeline::only_for_rays(self.pipeline as This) {
-            once!("passes that only serve rays are left out (VICTORY_SKIP_RT=1, builder off; VICTORY_RT_SKIN, VICTORY_RT_RESOLVE, VICTORY_RT_TRACE, VICTORY_ACTIVATE_RAYS =1 run them)");
+            once_info!("passes that only serve rays are left out (on purpose: VICTORY_SKIP_RT=1, builder off; VICTORY_RT_SKIN, VICTORY_RT_RESOLVE, VICTORY_RT_TRACE, VICTORY_ACTIVATE_RAYS =1 run them)");
             return;
         }
         // The ray-tracing structure builder's stages run all or none.
@@ -3936,9 +3954,11 @@ impl State {
             return;
         }
         let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This) else {
-            once!(
+            // 6.20: why is in the frame line's drop reasons (being made, a
+            // denied or untranslated shader: each has its own line).
+            once_info!(
                 pipeline = format_args!("{:#x}", self.pipeline),
-                "a dispatch without a host pipeline dropped"
+                "a dispatch without a host pipeline dropped (the reasons are counted with the frame lines)"
             );
             DROPPED.fetch_add(1, Ordering::Relaxed);
             crate::pipeline::note_drop(self.pipeline as This);

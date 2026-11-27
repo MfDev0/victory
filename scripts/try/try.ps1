@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.19'
+$TryVersion = '6.20'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live, tried when the fork itself cannot be
@@ -1025,6 +1025,14 @@ function Set-AllOut {
     # and the game's memory windows found no room on it: shaders read them
     # from the PC's memory across the bus (about 200 ms of card work a frame).
     $small = $vram -gt 0 -and $vram -lt 8000
+    # 6.20: and on those cards the buffers compared on the card stay at the
+    # engine's own 512 MB (cards up to 14 GB), and the memory windows through the BAR at 20% of
+    # the card. With a fifth of the card (1,031 MB) and 35% (1,804 MB) the
+    # 6.18 report's 6 GB RTX 4050 Laptop stood at 5,716 MB of its 5,153 MB
+    # budget: 1,805 MB of buffer copies and 1,148 MB of windows left the
+    # textures no room ("textures picked by index: the card has no room"),
+    # and what is past the budget Windows moves to the PC's memory.
+    if ($small) { $cardMb = 512 }
     $texRoom = $(if ($small) { '94' } else { '99' })
     $cardPressure = $(if ($small) { '95,98' } else { '98,99' })
     $set = [ordered]@{
@@ -1060,7 +1068,8 @@ function Set-AllOut {
     if ($null -eq $script:UserAll['VICTORY_TEXTURE_BUDGET_MB']) { [Environment]::SetEnvironmentVariable('VICTORY_TEXTURE_BUDGET_MB', $null, 'Process') }
     # 6.13: memory windows through the BAR up to 3072 MB or 35% of the card
     # (20-30% normally), where they are on at all (under 24 GB of memory).
-    if ($script:BarWindowsMb -gt 0 -and $null -eq $script:UserAll['VICTORY_WINDOWS_BAR_MB'] -and $vram -gt 0) {
+    # 6.20: not on cards under 8 GB (see $small above): 20% as normally.
+    if ($script:BarWindowsMb -gt 0 -and $null -eq $script:UserAll['VICTORY_WINDOWS_BAR_MB'] -and $vram -gt 0 -and -not $small) {
         $env:VICTORY_WINDOWS_BAR_MB = [string]([Math]::Min(3072, [int]($vram * 0.35)))
     }
     Say "ALL-OUT: this PC has $threads threads, $ramMb MB of memory ($virtMb MB with the page file), a $vram MB card; the game gets $use threads at high priority, textures up to $texRoom% of the card, no texture cap, memory guard at $ramCrit MB free   (MAX switches)"
@@ -2165,7 +2174,7 @@ if (OwnEngine) {
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
 Tidy-Disk ([bool]$changed)
 if (OwnEngine) {
-    Say '6.19: the picture: the light the game''s compute shaders write into memory it placed itself is kept (it went nowhere: probes and bounced light read memory nothing wrote), open water without dark blocks (its tiled light left out on NVIDIA), textures that come back into view are kept (no more white or grey people), screen copies the game gave up are let go, a third texture level goes while the card is past its memory, 1.5 s after a loading screen at most; the log says more.'
+    Say '6.20: a clean log: on 6 GB cards MAX leaves about 650 MB more of the card to textures (it stood past its budget, so textures found no room and Windows moved memory to the PC), five ray-tracing compute shaders that were dropped translate, constant buffers and raw views the game places off the PC''s alignment are no longer read as zeros, a false alarm no longer makes every later frame wait, and what is on purpose no longer shows as a warning.'\r\n    Say '6.19: the picture: the light the game''s compute shaders write into memory it placed itself is kept (it went nowhere: probes and bounced light read memory nothing wrote), open water without dark blocks (its tiled light left out on NVIDIA), textures that come back into view are kept (no more white or grey people), screen copies the game gave up are let go, a third texture level goes while the card is past its memory, 1.5 s after a loading screen at most; the log says more.'
     Say '6.17: the fps: the game''s fence wait (monitorx) is patched in place now: it could not be where it lay across two 8-byte words, and took an exception 440,000 times a second (more than a whole processor); the pass over the game''s descriptor heap (22-39 ms a frame) runs beside the preparing instead of before it.'
     Say '6.16: the fps: the textures had filled the card, so the game''s memory windows stayed in the PC''s memory and the card read them across the bus (about 200 ms of card work a frame on a 6 GB laptop card); room on the card is kept for them now and all-out leaves 6% of a small card free. The texture rush no longer goes on and off every second (the same textures uploaded again and again, and faces flicking between skin, white and see-through). The disk: older builds'' shader translations, the other engines and old logs are removed (TIDY shows what takes what). The card''s time is measured in every report.'
     Say '6.13: NVIDIA fixes from the other forks: on PCs under 24 GB of memory the game''s memory windows go straight into the card through Resizable BAR (out-of-memory and the driver crash gone, 1.6-3 -> 10-12 fps on a 16 GB RTX 3060 PC; Indy2l), texture read-backs on their own thread (no more 100-400 ms landing stalls while the world streams), a slow shader is waited for in one frame only (no more freezes while it compiles), compute shaders start compiling as soon as the game makes them, face decorations found by name (no black faces in cutscenes), streamed textures are no longer forgotten when the change list fills, and the card''s buffer compare goes out on its own (D3D12 error 538).'

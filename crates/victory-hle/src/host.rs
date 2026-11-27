@@ -43,6 +43,9 @@ impl Default for HostPolicy {
             "msvcp_win.dll",
             "ole32.dll",
             "advapi32.dll",
+            // 6.20: the RPC runtime's local helpers (UUIDs, strings); ole32
+            // loads it anyway. The title loads it by name (6.18 report).
+            "rpcrt4.dll",
             "iphlpapi.dll",
             // The title's crash handler writes minidumps with it (loaded by name).
             "dbghelp.dll",

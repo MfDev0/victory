@@ -568,6 +568,24 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.20 ("a clean log"; every WARN of the 6.18 report):
+   - try.ps1 `Set-AllOut`: on cards under 8 GB, `VICTORY_CARD_BUFFERS_MB=512`
+     (a fifth of the card before) and no 35% BAR windows (20% as normally).
+   - `emit::lower::descriptor_data`: with `VICTORY_SKIP_RT=1`, in a program
+     with `image_bvh*`, a heap descriptor read only as data reads 0 (the
+     five `07c93bfb77fecebb`, `002e93a6cc2aa355`, `0e64f14fae060d04`,
+     `96ccb14ef981fd85`, `dbdbf36298727135` translate).
+   - `descriptor::host::unaligned_constant`: a constant view off 256 in its
+     copy is made on `shadow::exact` (and `buffer_copy` refreshes that copy);
+     `own_bytes` also takes raw views whose first dword is off 16 bytes.
+   - `draw::host_word` `USER_VIEW_ADDRESS`: a constant view's address.
+   - `host::fill_ahead::wrote`: a fill whose submission number is at most
+     `FINISHED` is not compared (a landing of unknown flights counted all).
+   - hle: `rpcrt4.dll` in `HostPolicy::default`; a refused `GetModuleHandle`
+     probe logs at info. Loader: emulated console instructions at info.
+   - gpu: deliberate denials and RT-off drops, the 0x1c8/0x218 E_NOTIMPL
+     slot and the view heap cap at info; `VICTORY_NATIVE_PSO_LOG=1` dumps
+     native pipeline descriptions.
    6.19 ("no light in blocks"; 6.18 did not build: `TARGET_LOOK_AT`):
    - `resource::uav_texture_at` (cool_fox e11479ae, #72): placed unordered
      texture views get a host UAV texture at their address (an existing

@@ -373,7 +373,20 @@ extern "system" fn unknown_pipeline<const SLOT: usize>(
         // SAFETY: the title's out pointer (a local of its own).
         unsafe { *out = std::ptr::null() };
     }
-    if calls <= 4 || calls.is_power_of_two() {
+    // 6.20: this is expected, not a fault: the title asks for its console
+    // pipeline cache first and makes every pipeline the usual way when the
+    // cache says no (run 335; upstream #3163). One line a method says so;
+    // the description dump is for writing the methods and only with
+    // VICTORY_NATIVE_PSO_LOG=1 (it was 29 + 25 warnings a run).
+    if calls == 1 {
+        tracing::info!(
+            slot = format_args!("{:#x}", SLOT),
+            "the title's console pipeline cache is declined: it makes these pipelines the usual way (expected; VICTORY_NATIVE_PSO_LOG=1 logs the descriptions)"
+        );
+    }
+    static LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let log = *LOG.get_or_init(|| std::env::var("VICTORY_NATIVE_PSO_LOG").is_ok_and(|v| v.trim() == "1"));
+    if log && (calls <= 4 || calls.is_power_of_two()) {
         // Sixteen 64-bit words at `at`, read through the kernel: neither
         // pointer is known to be mapped.
         #[cfg(windows)]
@@ -392,12 +405,12 @@ extern "system" fn unknown_pipeline<const SLOT: usize>(
         let first = description
             .as_ref()
             .and_then(|w| words(w[0] as usize));
-        tracing::warn!(
+        tracing::info!(
             slot = format_args!("{:#x}", SLOT),
             calls,
             description = format_args!("{description:x?}"),
             first_points_at = format_args!("{first:x?}"),
-            "a pipeline creation method that is not implemented: the title goes without this pipeline"
+            "a console pipeline cache description (VICTORY_NATIVE_PSO_LOG)"
         );
         // The first calls also log the bytes of each (address, length) pair
         // of the description (words 1-12: the root signature is word 0), for
@@ -419,7 +432,7 @@ extern "system" fn unknown_pipeline<const SLOT: usize>(
                         .iter()
                         .map(|c| format!("{:08x} ", u32::from_le_bytes(*c)))
                         .collect();
-                    tracing::warn!(
+                    tracing::info!(
                         slot = format_args!("{:#x}", SLOT),
                         calls,
                         word = i,
