@@ -1429,15 +1429,16 @@ function Set-RunEnv {
     # value no longer spreads into black blocks on faces and blocky shine
     # where light reflects through the blur and the upscaler.
     $rtList = Join-Path $Src 'scripts\try\rt-off-hashes.txt'
-    if ($null -eq $script:UserAll['VICTORY_DENY_PIPELINES']) {
-        $deny = $null
-        if ($c.boost -ne 'off' -and $c.plain -ne '1' -and (Test-Path -LiteralPath $rtList)) {
-            $deny = (@(Get-Content -LiteralPath $rtList | Where-Object { $_ -match '^[0-9a-fA-F]{16}$' }) -join ',')
-        }
-        [Environment]::SetEnvironmentVariable('VICTORY_DENY_PIPELINES', $(if ($deny) { $deny } else { $null }), 'Process')
+    # 6.21: handed over as a file (VICTORY_DENY_PIPELINES_FILE, after
+    # fxceless/victory-fork f9e0371) instead of 17 KB of environment.
+    if ($null -eq $script:UserAll['VICTORY_DENY_PIPELINES'] -and $null -eq $script:UserAll['VICTORY_DENY_PIPELINES_FILE']) {
+        $useList = ($c.boost -ne 'off' -and $c.plain -ne '1' -and (Test-Path -LiteralPath $rtList))
+        [Environment]::SetEnvironmentVariable('VICTORY_DENY_PIPELINES', $null, 'Process')
+        [Environment]::SetEnvironmentVariable('VICTORY_DENY_PIPELINES_FILE', $(if ($useList) { $rtList } else { $null }), 'Process')
     }
     if ($null -eq $script:UserAll['VICTORY_NAN_SCRUB']) { [Environment]::SetEnvironmentVariable('VICTORY_NAN_SCRUB', $(if ($c.plain -ne '1') { '1' } else { $null }), 'Process') }
     $denied = $(if ($env:VICTORY_DENY_PIPELINES) { @($env:VICTORY_DENY_PIPELINES -split ',').Count } else { 0 })
+    if ($env:VICTORY_DENY_PIPELINES_FILE -and (Test-Path -LiteralPath $env:VICTORY_DENY_PIPELINES_FILE)) { $denied += @(Get-Content -LiteralPath $env:VICTORY_DENY_PIPELINES_FILE | Where-Object { $_ -match '^[0-9a-fA-F]{16}$' }).Count }
     Say "picture: ray-tracing light passes left out: $(if ($denied) { "$denied (B switches)" } else { 'none' }), NaN colours cleared $(if ($env:VICTORY_NAN_SCRUB -eq '1') { 'ON' } else { 'off' })"
     # 6.12: all-out mode last, so it lifts the caps set above.
     if (AllOut) { Set-AllOut } else { Undo-AllOut; Say 'all-out mode: off   (MAX gives the game everything this PC has but about 1%)' }
