@@ -12118,12 +12118,18 @@ impl Meter {
             crate::shadow::windows_line();
             if crate::shadow::cards() {
                 let per_frame = |i: usize| card[i] as f64 / frames;
+                let [buffers, buffers_most, windows, windows_bar] = crate::shadow::card_bytes_by_kind();
                 tracing::info!(
-                    "host copies in the card's memory: {} copies {} MB, their bytes from before {} MB; per frame: \
+                    "host copies in the card's memory: {} copies {} MB (buffers {} of at most {} MB, windows {} MB, \
+                     windows in CPU-visible card memory {} MB), their bytes from before {} MB; per frame: \
                      {:.1} MB sent up in {:.0} ranges, {:.0} pieces compared on the card, {:.0} of them fetched \
                      ({:.1} MB) with {:.1} more waits for the card ({:.1} ms)",
                     card[7],
                     card[8] >> 20,
+                    buffers >> 20,
+                    buffers_most >> 20,
+                    windows >> 20,
+                    windows_bar >> 20,
                     card[9] >> 20,
                     per_frame(0) / 1e6,
                     per_frame(1),

@@ -407,6 +407,21 @@ pub(crate) fn card_stats() -> [u64; 10] {
     out
 }
 
+/// The bytes of [`card_stats`]' eighth number by kind: buffer copies' card
+/// sides, then the most those may hold (with the big copies' room), then
+/// window copies on the card and window copies in the card's
+/// CPU-visible memory. Only the first is held to the second: a 6.21 report
+/// read "1,805 MB of copies over a 1,031 MB limit" where the windows made
+/// the difference.
+pub(crate) fn card_bytes_by_kind() -> [u64; 4] {
+    [
+        CARD_BYTES[0].load(Ordering::Relaxed),
+        card_limits().1 + card_big_room(),
+        WINDOW_CARD_BYTES.load(Ordering::Relaxed),
+        WINDOW_BAR_BYTES.load(Ordering::Relaxed),
+    ]
+}
+
 /// The bytes of the hashes kept on the card for a copy of `size` bytes: 16
 /// for each 64 KiB piece (a copy that does not start on a piece boundary
 /// has one piece more).
