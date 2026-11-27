@@ -66,7 +66,7 @@ pub(crate) fn set(fps: f64) {
 }
 
 /// A glyph's seven rows, five dots each (bit 4 is the left one).
-fn glyph(c: char) -> [u8; 7] {
+pub(crate) fn glyph(c: char) -> [u8; 7] {
     match c {
         '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
         '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
@@ -101,6 +101,20 @@ fn glyph(c: char) -> [u8; 7] {
         'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
         'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
         'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
+        // For the settings menu (Try 6.24).
+        'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100],
+        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        'Q' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+        'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+        'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+        'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+        '-' => [0, 0, 0, 0b11111, 0, 0, 0],
+        ':' => [0, 0b01100, 0b01100, 0, 0b01100, 0b01100, 0],
+        '<' => [0b00010, 0b00100, 0b01000, 0b10000, 0b01000, 0b00100, 0b00010],
+        '>' => [0b01000, 0b00100, 0b00010, 0b00001, 0b00010, 0b00100, 0b01000],
+        '(' => [0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010],
+        ')' => [0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000],
+        ',' => [0, 0, 0, 0, 0b01100, 0b00100, 0b01000],
         _ => [0; 7],
     }
 }
@@ -120,10 +134,16 @@ const RATE_COLUMNS: usize = 10;
 /// [`COLUMNS`] glyphs: for a frame rate in tenths, the machine's load if a
 /// look was taken, and the card's memory in bytes (budget, used) if the
 /// host answered. A line whose figures are not there yet is blank.
-fn lines(tenths: u32, stats: Option<crate::stats::Stats>, card: Option<(u64, u64)>) -> Vec<String> {
+fn lines(tenths: u32, per: u32, stats: Option<crate::stats::Stats>, card: Option<(u64, u64)>) -> Vec<String> {
     let gb = |mb: f64| mb / 1024.0;
     let mut out = Vec::with_capacity(6);
     out.push(if tenths > 0 { format!("{}  {:.0} MS", text(tenths), 10_000.0 / f64::from(tenths)) } else { text(tenths) });
+    if per > 1 && tenths > 0 {
+        // DLSS Frame Generation shows `per` frames for each one rendered:
+        // the rate shown beside the rate rendered (Try 6.24, as
+        // trustno1-coder/VIctory-NVIDIA's "FPS: x FG: y").
+        out[0].push_str(&format!("  FG {:.0}", f64::from(tenths) * f64::from(per) / 10.0));
+    }
     match stats {
         Some(s) => {
             out.push(format!("CPU {:.0}%  GAME {:.1} CORES", s.cpu_all, s.cores));
@@ -147,7 +167,7 @@ fn lines(tenths: u32, stats: Option<crate::stats::Stats>, card: Option<(u64, u64
 }
 
 /// `line` in exactly `columns` glyphs: cut, or filled with spaces.
-fn fit(line: &str, columns: usize) -> String {
+pub(crate) fn fit(line: &str, columns: usize) -> String {
     let mut out: String = line.chars().take(columns).collect();
     out.extend(std::iter::repeat_n(' ', columns - out.chars().count()));
     out
@@ -247,118 +267,171 @@ unsafe impl Send for Made {}
 /// The buffers a text is drawn into, in turn.
 const RING: usize = 4;
 
-/// The box as last drawn.
+/// Where on the picture a box goes.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Place {
+    /// The top left corner, a margin in.
+    Corner,
+    /// The middle.
+    Middle,
+}
+
+/// A box of text as last drawn: the box of numbers here, the settings
+/// menu (`crate::menu`).
 #[derive(Default)]
-struct Panel {
+pub(crate) struct TextBox {
     /// What the buffers were made for: the format, the scale, the glyphs
     /// across and the lines.
     made_for: Option<(i32, u32, usize, usize)>,
-    /// The text in `ring[at]`: the frame rate and the number of the look at
-    /// the machine's load.
-    shown: Option<(u32, u64)>,
+    /// What is in `ring[at]`, as the caller keys it.
+    shown: Option<u64>,
     ring: Vec<Made>,
     at: usize,
 }
 
-static PANEL: Mutex<Option<Panel>> = Mutex::new(None);
+impl TextBox {
+    /// Copies the box onto `back` (a copy's destination in `list`): the
+    /// text `text` makes, drawn again only when `key` changes. Every text
+    /// of one box is to have the same lines of `columns` glyphs (`fit`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw(
+        &mut self,
+        host: &crate::host::Host,
+        list: &ID3D12GraphicsCommandList,
+        back: &ID3D12Resource,
+        (width, height, format): (u32, u32, DXGI_FORMAT),
+        (columns, rows): (usize, usize),
+        key: u64,
+        text: impl FnOnce() -> String,
+        place: Place,
+    ) {
+        let Some(bytes) = pixel_bytes(format) else {
+            return;
+        };
+        // One dot of the font is `scale` pixels: 2 at 720p, 3 at 1080p, 6 at 4K.
+        let scale = (height / 360).clamp(2, 12);
+        let made_for = Some((format.0, scale, columns, rows));
+        if self.made_for != made_for {
+            // (A buffer still read by a present in the air is not let go:
+            // a change of size or format happens a few times a run at most.)
+            std::mem::forget(std::mem::take(&mut self.ring));
+            *self = TextBox { made_for, ..Default::default() };
+        }
+        if self.shown != Some(key) {
+            let (w, h, lit) = bitmap(&text(), scale);
+            let pitch = (w as usize * bytes).next_multiple_of(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT as usize);
+            let at = if self.ring.len() < RING {
+                let Some((buffer, data)) = host.shared_buffer((pitch * h as usize) as u64) else {
+                    return;
+                };
+                self.ring.push(Made { buffer, data, width: w, height: h, pitch: pitch as u32 });
+                self.ring.len() - 1
+            } else {
+                (self.at + 1) % RING
+            };
+            let m = &self.ring[at];
+            if (m.width, m.height, m.pitch) != (w, h, pitch as u32) {
+                return;
+            }
+            // SAFETY: the buffer is mapped for the process's life and holds
+            // `pitch * h` bytes; the card last read it RING texts ago.
+            let out = unsafe { std::slice::from_raw_parts_mut(m.data, pitch * h as usize) };
+            for y in 0..h as usize {
+                for x in 0..w as usize {
+                    let to = y * pitch + x * bytes;
+                    pixel(format, lit[y * w as usize + x], &mut out[to..to + bytes]);
+                }
+            }
+            self.at = at;
+            self.shown = Some(key);
+        }
+        let Some(m) = self.ring.get(self.at) else {
+            return;
+        };
+        let margin = 4 * scale;
+        if m.width + 2 * margin > width || m.height + 2 * margin > height {
+            return;
+        }
+        let (x, y) = match place {
+            Place::Corner => (margin, margin),
+            Place::Middle => ((width - m.width) / 2, (height - m.height) / 2),
+        };
+        // SAFETY: an open list; the back buffer is a copy's destination in it
+        // and the box lies inside it; our buffer holds `pitch * height` bytes
+        // and is kept for as long as the process runs.
+        unsafe {
+            let from = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: std::mem::transmute_copy(&m.buffer),
+                Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                    PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+                        Offset: 0,
+                        Footprint: D3D12_SUBRESOURCE_FOOTPRINT { Format: format, Width: m.width, Height: m.height, Depth: 1, RowPitch: m.pitch },
+                    },
+                },
+            };
+            let to = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: std::mem::transmute_copy(back),
+                Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+            };
+            list.CopyTextureRegion(&to, x, y, 0, &from, None);
+        }
+    }
+}
 
-/// Copies the box onto `back`, a back buffer of `width` by `height` pixels
-/// of `format` that `list` holds as a copy's destination. Nothing if the
-/// box is off, no rate was measured yet, the format is not one of ours or
-/// the frame is too small for the box.
-pub(crate) fn draw(host: &crate::host::Host, list: &ID3D12GraphicsCommandList, back: &ID3D12Resource, (width, height, format): (u32, u32, DXGI_FORMAT)) {
-    let mode = mode();
+static PANEL: Mutex<Option<TextBox>> = Mutex::new(None);
+
+/// What F3 shows now (Try 6.24, the key from trustno1-coder/VIctory-NVIDIA's
+/// stats panel): 0 the start's (`VICTORY_FPS_COUNTER`), then each press
+/// goes on to the next of the whole box, the frame rate alone, nothing.
+static PRESSED: AtomicU32 = AtomicU32::new(0);
+
+/// F3 was pressed (`crate::menu`).
+pub(crate) fn next_mode() {
+    PRESSED.fetch_add(1, Ordering::Relaxed);
+}
+
+fn mode_now() -> Mode {
+    let order = [Mode::All, Mode::Rate, Mode::Off];
+    let start = order.iter().position(|&m| m == mode()).unwrap_or(0);
+    order[(start + PRESSED.load(Ordering::Relaxed) as usize) % order.len()]
+}
+
+/// Copies the box onto the back buffer `back` (a copy's destination in
+/// `list`), in the format and size it was made with.
+pub(crate) fn draw(host: &crate::host::Host, list: &ID3D12GraphicsCommandList, back: &ID3D12Resource, dims: (u32, u32, DXGI_FORMAT)) {
+    let mode = mode_now();
     if mode == Mode::Off {
         return;
     }
     let tenths = TENTHS.load(Ordering::Relaxed);
-    let Some(bytes) = pixel_bytes(format).filter(|_| tenths != u32::MAX) else {
+    if tenths == u32::MAX {
         return;
-    };
-    // About a fortieth of the frame's height a glyph: 6 dots a pixel at
-    // 2160 lines, 3 at 1080.
-    let scale = (height / 360).clamp(2, 12);
+    }
     let stats = (mode == Mode::All).then(|| {
         crate::stats::start();
         crate::stats::now()
     });
     let look = stats.flatten();
-    let (columns, rows) = if mode == Mode::All { (COLUMNS, 6) } else { (RATE_COLUMNS, 1) };
-    let mut panel = PANEL.lock().unwrap_or_else(|e| e.into_inner());
-    let panel = panel.get_or_insert_with(Panel::default);
-    let made_for = Some((format.0, scale, columns, rows));
-    if panel.made_for != made_for {
-        // Another size of frame or another format: new buffers. A present
-        // still in the air may read the old ones, so they are never let go
-        // (a few hundred KiB each; this happens when the window changes).
-        std::mem::forget(std::mem::take(&mut panel.ring));
-        *panel = Panel { made_for, ..Default::default() };
-    }
-    let key = (tenths, look.map_or(0, |(number, _)| number));
-    if panel.shown != Some(key) {
-        let text = if mode == Mode::All {
+    #[cfg(windows)]
+    let per = crate::streamline::shown_per_frame();
+    #[cfg(not(windows))]
+    let per = 1;
+    // The text changes with the rate, the look at the load and the frames
+    // frame generation shows for each.
+    let key = u64::from(tenths) | look.map_or(0, |(number, _)| number) << 20 | u64::from(per) << 60;
+    let size = if mode == Mode::All { (COLUMNS, 6) } else { (RATE_COLUMNS, 1) };
+    let make = || {
+        if mode == Mode::All {
             let card = host.video_memory().map(|m| (m[0], m[1]));
-            lines(tenths, look.map(|(_, s)| s), card).join("\n")
+            lines(tenths, per, look.map(|(_, s)| s), card).join("\n")
         } else {
             fit(&text(tenths), RATE_COLUMNS)
-        };
-        let (w, h, lit) = bitmap(&text, scale);
-        let pitch = (w as usize * bytes).next_multiple_of(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT as usize);
-        // The next buffer in turn, made at its first use.
-        let at = if panel.ring.len() < RING {
-            let Some((buffer, data)) = host.shared_buffer((pitch * h as usize) as u64) else {
-                return;
-            };
-            panel.ring.push(Made { buffer, data, width: w, height: h, pitch: pitch as u32 });
-            panel.ring.len() - 1
-        } else {
-            (panel.at + 1) % RING
-        };
-        let m = &panel.ring[at];
-        if (m.width, m.height, m.pitch) != (w, h, pitch as u32) {
-            // (Every text of one `made_for` has one size: not reached.)
-            return;
         }
-        // SAFETY: the buffer's own mapped bytes, `pitch * h` of them; the
-        // card last read them at least `RING - 1` texts ago.
-        let out = unsafe { std::slice::from_raw_parts_mut(m.data, pitch * h as usize) };
-        for y in 0..h as usize {
-            for x in 0..w as usize {
-                let to = y * pitch + x * bytes;
-                pixel(format, lit[y * w as usize + x], &mut out[to..to + bytes]);
-            }
-        }
-        panel.at = at;
-        panel.shown = Some(key);
-    }
-    let Some(m) = panel.ring.get(panel.at) else {
-        return;
     };
-    let margin = 4 * scale;
-    if m.width + 2 * margin > width || m.height + 2 * margin > height {
-        return;
-    }
-    // SAFETY: an open list; the back buffer is a copy's destination in it
-    // and the box lies inside it; our buffer holds `pitch * height` bytes
-    // and is kept for as long as the process runs.
-    unsafe {
-        let from = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: std::mem::transmute_copy(&m.buffer),
-            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
-                    Offset: 0,
-                    Footprint: D3D12_SUBRESOURCE_FOOTPRINT { Format: format, Width: m.width, Height: m.height, Depth: 1, RowPitch: m.pitch },
-                },
-            },
-        };
-        let to = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: std::mem::transmute_copy(back),
-            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
-        };
-        list.CopyTextureRegion(&to, margin, margin, 0, &from, None);
-    }
+    let mut panel = PANEL.lock().unwrap_or_else(|e| e.into_inner());
+    panel.get_or_insert_with(TextBox::default).draw(host, list, back, dims, size, key, make, Place::Corner);
 }
 
 #[cfg(test)]
@@ -405,9 +478,9 @@ mod tests {
         };
         // The longest figures there can be, the usual ones, and none.
         let texts = [
-            lines(99_999, Some(stats), Some((12_282 << 20, 11_900 << 20))),
-            lines(58, Some(crate::stats::Stats { gpu_all: None, gpu_ours: None, ..stats }), Some((10_048 << 20, 9_039 << 20))),
-            lines(0, None, None),
+            lines(99_999, 1, Some(stats), Some((12_282 << 20, 11_900 << 20))),
+            lines(58, 1, Some(crate::stats::Stats { gpu_all: None, gpu_ours: None, ..stats }), Some((10_048 << 20, 9_039 << 20))),
+            lines(0, 1, None, None),
         ];
         assert_eq!(texts[0][0].trim_end(), "9999.9 FPS  0 MS");
         assert_eq!(texts[0][1].trim_end(), "CPU 100%  GAME 28.0 CORES");
@@ -417,6 +490,8 @@ mod tests {
         assert_eq!(texts[1][3].trim_end(), "GPU NOT KNOWN");
         assert_eq!(texts[1][4].trim_end(), "VRAM 8.8/9.8 GB");
         assert_eq!(texts[2][0].trim_end(), "0.0 FPS");
+        // With frame generation at 2x: the rate shown beside it.
+        assert_eq!(lines(280, 2, None, None)[0].trim_end(), "28.0 FPS  36 MS  FG 56");
         for lines in &texts {
             assert_eq!(lines.len(), 6);
             for line in lines {

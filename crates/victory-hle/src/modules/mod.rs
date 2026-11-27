@@ -11,9 +11,12 @@
 #[cfg(windows)]
 pub mod apu;
 pub mod audio;
+pub mod bink;
 pub mod d3d12x;
 pub mod ffx;
 pub mod display;
+#[cfg(windows)]
+pub mod dlss;
 pub mod dsp;
 #[cfg(windows)]
 pub mod dstorage;

@@ -74,3 +74,17 @@ pub fn record<R>(list: *const Object, f: impl FnOnce(&Recording<'_>) -> R) -> Op
     });
     out
 }
+
+/// A title texture's host copy, moved to the host resource `state` in
+/// `list`, and the state it is in: `state` without the bits the host copy
+/// cannot take (see `host::legal_state`). For `crate::streamline`, which
+/// records on the host list directly (`crate::list::external`).
+pub(crate) fn host_texture(list: &crate::host::HostList, resource: *const Object, state: u32) -> Option<(ID3D12Resource, u32)> {
+    Recording(list).texture(resource, state)
+}
+
+/// Prepares a title-authored input with the alias, upload and depth twin
+/// rules a compute shader's resource view has (as [`Recording::prepare_input`]).
+pub(crate) fn prepare_input(list: &crate::host::HostList, resource: *const Object) -> Option<()> {
+    Recording(list).prepare_input(resource)
+}

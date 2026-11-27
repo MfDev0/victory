@@ -19,11 +19,37 @@ pub fn run(
     // A title that relaunched itself: the old process must be gone first.
     victory_hle::modules::lifecycle::wait_for_previous();
     let cfg = victory_core::Config::load()?;
+    // NVIDIA DLSS and frame generation (`VICTORY_DLSS`, `VICTORY_FRAMEGEN`;
+    // Try 6.24, from trustno1-coder/VIctory-NVIDIA): Streamline is loaded
+    // before anything of the title or the host GPU, and fails soft; only if
+    // it offers one of them does the title render through its FidelityFX
+    // path, which DLSS takes over (`upscaler_path::prepare_upscaler`).
+    let asked = victory_hle::streamline::Asked::from_env().map_err(anyhow::Error::msg)?;
+    let available = victory_hle::streamline::init(&asked);
+    // `VICTORY_FSR_PATH=1`: the title's FidelityFX path at VICTORY_DLSS_MODE's
+    // scale without Streamline (our temporal resolve answers its upscales):
+    // DLSS's comparison.
+    let fsr_path = std::env::var_os("VICTORY_FSR_PATH").is_some_and(|v| v == "1");
+    let dlss_serving = available.dlss || available.framegen;
+    let upscaler = (dlss_serving || fsr_path).then_some(asked.mode);
+    if fsr_path && !asked.any() {
+        println!("upscaling      the title's FidelityFX path at the {} scale (VICTORY_FSR_PATH=1)", asked.mode.name());
+    }
+    if asked.any() {
+        println!(
+            "upscaling      DLSS {}, frame generation {}{}",
+            if available.dlss { "on" } else if asked.dlss { "asked, not available (see the log: VICTORY_STREAMLINE_DIR, Get-NVIDIA-DLSS.cmd)" } else { "off" },
+            if available.framegen { "on" } else if asked.framegen { "asked, not available" } else { "off" },
+            upscaler.map(|m| format!(", scene at the {} scale ({})", m.name(), m.scale())).unwrap_or_default()
+        );
+    }
     // The PC FidelityFX upscaler serves the title's FidelityFX loader when
     // VICTORY_FIDELITYFX_DIR names a folder with it (Belobug cd8dfc06 from
     // DexNom ab34a8b2; Try 6.10). Chosen before anything looks up an
-    // import: the table of what we serve is made once.
-    if let Some(dir) = std::env::var_os("VICTORY_FIDELITYFX_DIR").filter(|d| !d.is_empty()) {
+    // import: the table of what we serve is made once. Not with DLSS.
+    if dlss_serving && std::env::var_os("VICTORY_FIDELITYFX_DIR").is_some_and(|d| !d.is_empty()) {
+        println!("upscaler       PC FidelityFX not used: DLSS takes the title's upscales (VICTORY_DLSS / VICTORY_FRAMEGEN)");
+    } else if let Some(dir) = std::env::var_os("VICTORY_FIDELITYFX_DIR").filter(|d| !d.is_empty()) {
         let dir = std::path::PathBuf::from(dir);
         match victory_hle::modules::fidelityfx::use_host_dir(&dir) {
             Ok(()) => println!("upscaler       PC FidelityFX from {} (the title's upscale runs on it)", dir.display()),
@@ -31,14 +57,29 @@ pub fn run(
         }
     }
     let original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
-    let prepared = victory_loader::prepare(&original)?;
+    let mut prepared = victory_loader::prepare(&original)?;
     let hash = prepared.original_hash.to_hex();
     match victory_game::identify(&hash) {
         Some(build) => println!("build          {} ({hash})", build.label),
         None => println!("build          unknown ({hash})"),
     }
 
-    let images = cfg.cache_subdir("images")?;
+    // The title's FidelityFX path for DLSS: a patched image, in a folder of
+    // its own beside the stock one.
+    let images = match upscaler {
+        Some(mode) => match crate::upscaler_path::prepare_upscaler(&mut prepared, mode) {
+            Ok(()) => {
+                victory_loader::resolution::upscaler_path_taken();
+                println!("display        the title's output, scene at {} of it through its FidelityFX path ({})", mode.scale(), mode.name());
+                cfg.cache_subdir(&format!("images/upscaler-{}", mode.name()))?
+            }
+            Err(e) => {
+                println!("upscaling      the title's FidelityFX path was not patched in: {e:#}");
+                cfg.cache_subdir("images")?
+            }
+        },
+        None => cfg.cache_subdir("images")?,
+    };
     victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
     let image = victory_loader::load(&prepared, &images)?;
     // The program is mapped from the copy `load` wrote: the file's bytes
@@ -107,6 +148,10 @@ pub fn run(
         inner: &resolver,
         dlls: &dlls,
     };
+    // The title's Bink exports go through the movie skipper when
+    // VICTORY_SKIP_BINK asks for it (bound as before otherwise; Try 6.24,
+    // from trustno1-coder/VIctory-NVIDIA e31f474).
+    let with_dlls = victory_hle::modules::bink::SkipMovies { inner: &with_dlls };
     let show = |name: &str, report: BindReport| {
         println!(
             "bound          {name}: {} hle, {} host, {} title, {} missing",
@@ -133,6 +178,7 @@ pub fn run(
             symbol: &victory_pe::ImportSymbol,
         ) -> victory_loader::Resolution {
             let ours = !victory_hle::modules::fidelityfx::serving()
+                && !victory_hle::streamline::serving()
                 && dll.eq_ignore_ascii_case(victory_hle::modules::ffx::LOADER)
                 && matches!(symbol, victory_pe::ImportSymbol::Name { name, .. } if name == "ffxDispatch");
             if ours {
@@ -144,7 +190,11 @@ pub fn run(
             self.0.resolve(dll, symbol)
         }
     }
-    show(&exe_name, image.bind_imports(&TakeDispatch(&with_dlls), policy)?);
+    // With DLSS or frame generation the title's FidelityFX calls go through
+    // `victory_hle::modules::dlss` (bound as before otherwise).
+    let take = TakeDispatch(&with_dlls);
+    let interposed = victory_hle::modules::dlss::Interpose { inner: &take };
+    show(&exe_name, image.bind_imports(&interposed, policy)?);
     // The title's output size and render scale (VICTORY_OUTPUT,
     // VICTORY_TITLE_SCALE, VICTORY_FFX_SCALE, VICTORY_UPSCALER; each off
     // without it), from avatarmanz/VIctory-7900XTX (Try 6.9).
@@ -153,6 +203,30 @@ pub fn run(
         let size = image.info().size_of_image as usize;
         // SAFETY: the image stays mapped and nothing of it has run yet.
         unsafe { victory_loader::resolution::apply_asked(image.base(), size) };
+    }
+    // The frame rate (VICTORY_FRAME_INTERVAL_MS, off without it; Try 6.24,
+    // from trustno1-coder/VIctory-NVIDIA): our frame clock ticks at that
+    // interval (victory-gpu's `frame`), and the title is given the matching
+    // rate in place of its setting's 30 (VICTORY_TITLE_FPS overrides it;
+    // `off` leaves the title alone).
+    #[cfg(windows)]
+    if execute && let Some(ms) = victory_loader::frame_rate::asked_interval_ms() {
+        use victory_loader::frame_rate::{Patched, SITES, apply, title_interval_us, title_rate};
+        let asked = std::env::var("VICTORY_TITLE_FPS").ok();
+        match title_rate(ms, asked.as_deref()) {
+            Some(rate) => {
+                let size = image.info().size_of_image as usize;
+                // SAFETY: the image stays mapped and nothing of it has run yet.
+                let done = unsafe { apply(image.base(), size, rate, &SITES) };
+                let patched = done.iter().filter(|d| **d == Patched::Done).count();
+                println!(
+                    "frame rate     our clock {ms} ms; the title's rate {rate} ({patched} of {} reads of its setting patched; it asks for {} us at 60 Hz)",
+                    SITES.len(),
+                    title_interval_us(rate, false)
+                );
+            }
+            None => println!("frame rate     our clock {ms} ms; the title's own rate (30) left as it is"),
+        }
     }
     if !execute {
         println!("not executing (pass --execute to start the title)");
@@ -300,6 +374,9 @@ impl LateDlls {
                     inner: &old,
                     dlls: &new,
                 };
+                // As at startup: Bink imports of DLLs loaded later too
+                // (VICTORY_SKIP_BINK; bound as before otherwise).
+                let resolver = victory_hle::modules::bink::SkipMovies { inner: &resolver };
                 for (name, dll) in &new {
                     println!(
                         "title dll      {name} at {:#x} (loaded by the title)",

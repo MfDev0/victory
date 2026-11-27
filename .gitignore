@@ -24,6 +24,8 @@
 /extracted/
 /cache/
 /out/
+# NVIDIA's DLSS files (Get-NVIDIA-DLSS.cmd): NVIDIA's, under NVIDIA's licences.
+/nvidia-sdk/
 
 # Executables, libraries, symbols
 *.exe

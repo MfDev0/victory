@@ -175,9 +175,28 @@ void resolveMain(uint3 id : SV_DispatchThreadID) {
 "#;
 
 /// Whether frames are made between the title's (`VICTORY_FRAMEGEN=1`).
+/// Not when DLSS Frame Generation runs (Try 6.24: the same switch asks for
+/// it, `crate::streamline`), which makes its frames in Streamline's present;
+/// ours then stays out of it. Asked first at the first present, after the
+/// swap chain was made, so whether NVIDIA's is running is known.
 fn framegen() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_FRAMEGEN").is_some_and(|v| v == "1"))
+    *ON.get_or_init(|| {
+        let asked = std::env::var_os("VICTORY_FRAMEGEN").is_some_and(|v| v == "1");
+        // VICTORY_FRAMEGEN_X names DLSS Frame Generation's amount (Try 6.24
+        // sets it whenever it makes DLSS's ready): ours stays off then, even
+        // if Streamline does not come up.
+        if asked && std::env::var_os("VICTORY_FRAMEGEN_X").is_some() {
+            tracing::info!("frames in between: left to DLSS Frame Generation (VICTORY_FRAMEGEN_X)");
+            return false;
+        }
+        #[cfg(windows)]
+        if asked && crate::streamline::framegen_live() {
+            tracing::info!("frames in between: DLSS Frame Generation makes them (ours stays off)");
+            return false;
+        }
+        asked
+    })
 }
 
 /// Milliseconds between frames made in between (`VICTORY_FRAMEGEN_MS`).

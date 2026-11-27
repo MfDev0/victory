@@ -568,6 +568,31 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.24 ("NVIDIA DLSS"; trustno1-coder/VIctory-NVIDIA main 959dcaf, see
+   `docs/dlss.md`):
+   - **DL**: `VICTORY_DLSS=1`, `VICTORY_DLSS_MODE` (quality by default;
+     balanced, performance, ultraperformance, dlaa, off),
+     `VICTORY_STREAMLINE_DIR=%LOCALAPPDATA%\VIctoryTry\nvidia-sdk\Streamline\bin\x64`
+     (downloaded once, NVIDIA-signed), GeForce RTX only; on Series X
+     `VICTORY_OUTPUT=2560x1440` (R: 3840x2160) and no `VICTORY_RENDER_SCALE`.
+   - **FG**: RTX 40/50 with GPU scheduling (HwSchMode 2, or unset on
+     Windows 11) and `VICTORY_ASYNC_SUBMIT=1`: `VICTORY_FRAMEGEN=1`,
+     `VICTORY_FRAMEGEN_X` 0 (ready; the F1 menu switches it live) or 2-4;
+     `VICTORY_TEXTURE_ROOM_PERCENT` at most 86 (80 when on).
+   - **FPS**: `VICTORY_FRAME_INTERVAL_MS` 16.667 (default), 8.333, 1 (none),
+     unset (30, the game's own). `VICTORY_TITLE_FPS=<n>|off` overrides the
+     game's rate.
+   - **MOV** `VICTORY_SKIP_BINK=1`; **FS** `VICTORY_FULLSCREEN=1`
+     (`VICTORY_FULLSCREEN_RES`); **MOUSE** `VICTORY_MOUSE_CAPTURE=1`
+     (`VICTORY_MOUSE_WARP`); F1 menu only: `VICTORY_IME_ENGLISH=1`.
+   - The F1 menu saves `VICTORY_MENU_DLSS`, `_FRAMEGEN`, `_FULLSCREEN`,
+     `_MOUSE_CAPTURE`, `_IME_ENGLISH` to `VICTORY_MENU_FILE`
+     (`%LOCALAPPDATA%\VIctoryTry\victory-menu.txt`); Try takes it in once
+     per save. `VICTORY_MENU=0`: no menu.
+   - Engine defaults: `VICTORY_ONE_PAD` (=0: a device per pad),
+     `VICTORY_DUALSENSE` (unset auto, 0 off, 1 both), `VICTORY_RAW_VIEW_CLAMP`
+     (=0 off), `VICTORY_HELPER_PRIORITY` (=0 off). `VICTORY_KEYS` and
+     `VICTORY_KEYS_FILE` in every build; `VICTORY_WINDOW_MAX=WxH`.
    6.23 ("every shader"; the "do not translate" count of prepare):
    - ACCC containers (driver-compiled FidelityFX) translate: DXIL-or-ACCC in
      `emit::translate_plain`, `pipeline::translate`, the spilled path,

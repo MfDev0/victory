@@ -1,4 +1,4 @@
-# VIctory Try: plan and to-do (6.10, updated for 6.23)
+# VIctory Try: plan and to-do (6.10, updated for 6.24)
 
 Goal: the whole picture rendered, **20+ fps** on the reporter's PC: RTX 4050
 Laptop (5921 MB, budget about 5153 MB), 12 threads, about 16 GB of RAM,
@@ -48,6 +48,32 @@ below are checked again.
       66afb2b4; parser only so far).
 - [x] Logs: `upscaler PC FidelityFX ...` line at start, providers offered
       and chosen, every 600 upscales how many were jittered (both paths).
+
+## Done in 6.24 ("NVIDIA DLSS": trustno1-coder/VIctory-NVIDIA, main 959dcaf)
+
+- [x] Streamline/DLSS SR + FG: gpu `streamline.rs` + `streamline/{abi,plan}`
+      (names mapped: `queue::behind`, `host.present`, `host.execute`), hle
+      `modules/dlss.rs` (nv fidelityfx.rs, misses go to `ffx::stand_in`),
+      app `upscaler_path.rs` (nv `prepare_upscaler`, DexNom), run.rs bind
+      through `dlss::Interpose`, `resolution::upscaler_path_taken()`.
+- [x] Our presentfx in-betweens stand down for DLSS FG (`framegen_live`, or
+      `VICTORY_FRAMEGEN_X` set).
+- [x] F1 menu (`menu.rs`, fresh on `fpsbox::TextBox`; nv's host/menu.rs
+      needs panel/font we lack), F3, input gate in gameinput.
+- [x] nv aec85ef raw view clamp; e31f474 Bink skip; bacb402 + 45f6250
+      frame rate switch (loader `frame_rate`, frame.rs
+      `VICTORY_FRAME_INTERVAL_MS`); 80c70b7 (heap-sync thread only: our
+      wide pool was raised already); gameinput.rs/lifecycle.rs whole from nv
+      (mouse device, one pad, DualSense, keys file, fullscreen, IME, mouse
+      capture, window max, constrained-change routines).
+- [x] try.ps1: DL, FG, FPS, MOV, FS, MOUSE; Streamline download (nv's
+      ranged zip reader) + signature check; HAGS check (nv 0a542c0); menu
+      file taken in once per save; Series X 2560x1440 output with DLSS.
+- [ ] First run: does `upscale` take every dispatch ("DLSS ... upscalings"),
+      does FG show frames (`frames shown per frame`), the 60 fps cap's game
+      clock (cutscene audio sync), `VICTORY_OUTPUT` on our engine.
+- Already in: nv 6726920 (BC7), 47747d6 (NEXT_ID), b1369af (embedded hash).
+  Not taken: 826ba15 (probe filter), 35c1560 water skip (pairs form here).
 
 ## Done in 6.23 ("every shader": the ~234 of prepare's "do not translate")
 

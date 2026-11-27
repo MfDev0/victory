@@ -9,6 +9,8 @@ mod prepare;
 mod run;
 mod shader;
 mod translate;
+#[cfg(windows)]
+mod upscaler_path;
 
 use std::path::PathBuf;
 
@@ -125,6 +127,21 @@ enum Command {
     },
     /// Show the resolved configuration and check it.
     Config,
+    /// NVIDIA Streamline, DLSS and DLSS Frame Generation on this PC, without
+    /// the title (`VICTORY_STREAMLINE_DIR` names the folder; Try 6.24, from
+    /// trustno1-coder/VIctory-NVIDIA). Always: the library loads and says
+    /// what this GPU supports.
+    UpscalerCheck {
+        /// The output size, `<width>x<height>`.
+        #[arg(long, default_value = "2560x1440")]
+        output: String,
+        /// Make the host device and run DLSS on it.
+        #[arg(long)]
+        device: bool,
+        /// Present for three seconds with frame generation (implies --device).
+        #[arg(long)]
+        present: bool,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -195,6 +212,7 @@ fn main() -> Result<()> {
             title_args: _,
         } => run::run(&exe, unimplemented, strict, execute, console),
         Command::Config => show_config(),
+        Command::UpscalerCheck { output, device, present } => upscaler_check(&output, device, present),
     }
 }
 
@@ -242,4 +260,22 @@ pub(crate) fn default_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
         "no paths given and none configured (see victory.example.toml)"
     );
     Ok(all)
+}
+
+/// `victory upscaler-check`: what [`victory_hle::streamline::check`] says.
+#[cfg(windows)]
+fn upscaler_check(output: &str, device: bool, present: bool) -> Result<()> {
+    let size = output
+        .split_once(['x', 'X'])
+        .and_then(|(w, h)| Some([w.trim().parse().ok()?, h.trim().parse().ok()?]))
+        .ok_or_else(|| anyhow::anyhow!("--output {output}: not <width>x<height>"))?;
+    for line in victory_hle::streamline::check(size, device || present, present) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn upscaler_check(_output: &str, _device: bool, _present: bool) -> Result<()> {
+    anyhow::bail!("DLSS needs Windows and an NVIDIA RTX card")
 }

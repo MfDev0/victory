@@ -19,6 +19,9 @@ pub mod runtime;
 pub use host::HostPolicy;
 pub use registry::{HleExport, HleModule, registry};
 pub use victory_gpu::console;
+/// DLSS and frame generation (`VICTORY_DLSS`, `VICTORY_FRAMEGEN`; Try 6.24).
+#[cfg(windows)]
+pub use victory_gpu::streamline;
 
 use victory_loader::{ImportResolver, Provenance, Resolution};
 use victory_pe::ImportSymbol;

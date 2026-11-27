@@ -304,6 +304,18 @@ pub unsafe fn write(base: usize, size: usize, site: &Site, code: &[u8]) -> Patch
     Patched::Done
 }
 
+/// Set when the image was made to render through the title's FidelityFX
+/// path for DLSS (the `victory` app's `upscaler_path`, Try 6.24): the render
+/// scale and upscaler picker are then that patch's, and the switches for
+/// [`OWN_SCALE`], [`FFX_SCALE`] and [`PICKER`] are left out (their bytes are
+/// no longer the stock ones).
+static UPSCALER_PATH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// See [`UPSCALER_PATH`].
+pub fn upscaler_path_taken() {
+    UPSCALER_PATH.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Applies what the switches ask for; a line each in the log and on
 /// standard output.
 ///
@@ -319,13 +331,18 @@ pub unsafe fn apply_asked(base: usize, size: usize) {
             asked.push((&POOL_CHECK, pool_check_code(), format!("{w}x{h}")));
         }
     }
-    if let Some(s) = asked_render_scale() {
+    let path = UPSCALER_PATH.load(std::sync::atomic::Ordering::Relaxed);
+    if path && (asked_render_scale().is_some() || asked_ffx_scale().is_some() || asked_upscaler().is_some()) {
+        tracing::warn!("resolution: VICTORY_TITLE_SCALE / VICTORY_FFX_SCALE / VICTORY_UPSCALER left out: DLSS's FidelityFX path sets the render scale");
+        println!("resolution: VICTORY_TITLE_SCALE, VICTORY_FFX_SCALE and VICTORY_UPSCALER left out (DLSS's FidelityFX path sets the scale)");
+    }
+    if let Some(s) = asked_render_scale().filter(|_| !path) {
         asked.push((&OWN_SCALE, own_scale_code(s), format!("{s}")));
     }
-    if let Some(s) = asked_ffx_scale() {
+    if let Some(s) = asked_ffx_scale().filter(|_| !path) {
         asked.push((&FFX_SCALE, ffx_scale_code(s), format!("{s}")));
     }
-    if let Some(kind) = asked_upscaler() {
+    if let Some(kind) = asked_upscaler().filter(|_| !path) {
         asked.push((&PICKER, picker_code(kind), format!("returns {kind}")));
     }
     for (site, code, value) in asked {

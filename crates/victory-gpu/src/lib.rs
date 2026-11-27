@@ -45,6 +45,8 @@ mod drvwatch;
 #[cfg(windows)]
 mod fpsbox;
 #[cfg(windows)]
+mod menu;
+#[cfg(windows)]
 mod stats;
 #[cfg(windows)]
 mod spread;
@@ -53,6 +55,8 @@ mod draw;
 pub mod dxgi;
 #[cfg(windows)]
 pub mod external;
+#[cfg(windows)]
+pub mod streamline;
 pub mod fence;
 pub mod frame;
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -107,6 +111,10 @@ mod watch;
 mod texback;
 
 #[cfg(windows)]
+/// Whether the F1 settings menu is open (Try 6.24): the input module then
+/// gives the title no keyboard.
+pub static SETTINGS_MENU_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub use host::on_failure;
 #[cfg(windows)]
 pub use inplace::{title_memory_freeing, title_memory_section, title_memory_view};

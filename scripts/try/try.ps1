@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.23'
+$TryVersion = '6.24'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live, tried when the fork itself cannot be
@@ -72,11 +72,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = ''; tidy = ''; meter = ''; beside = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = ''; tidy = ''; meter = ''; beside = ''; dlss = ''; fg = ''; fps = ''; movies = ''; fullscreen = ''; mousecap = ''; imeen = ''; dlss_dl = ''; menu_seen = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin', 'tidy', 'meter', 'beside')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin', 'tidy', 'meter', 'beside', 'dlss', 'fg', 'fps', 'movies', 'fullscreen', 'mousecap', 'imeen', 'dlss_dl', 'menu_seen')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -1000,6 +1000,190 @@ function Ensure-Fsr {
     if ($script:Config.fsr_dl -ne 'ok') { $script:Config.fsr_dl = 'ok'; Save-Config }
     return $dir
 }
+# 6.24: NVIDIA DLSS, from trustno1-coder/VIctory-NVIDIA (the fork that runs
+# on NVIDIA: RTX 5070 12 GB, Series X at 1440p, DLSS Quality 26-30 fps where
+# the game's own upscaling gave 15-17). NVIDIA Streamline 2.14.16 with DLSS
+# Super Resolution and DLSS Frame Generation: the eight files the game loads
+# (about 70 MB), taken once out of NVIDIA's own release on GitHub
+# (github.com/NVIDIA-RTX/Streamline) into the VIctory Try folder, with
+# NVIDIA's licences beside them. Nothing of NVIDIA's is in the fork. Their
+# folder, or $null when they cannot be had (the game then upscales as before).
+$SlTag = 'v2.14.16'
+$SlDlls = @('sl.interposer.dll', 'sl.common.dll', 'sl.dlss.dll', 'sl.dlss_g.dll', 'sl.reflex.dll', 'sl.pcl.dll', 'nvngx_dlss.dll', 'nvngx_dlssg.dll')
+function Sl-Root { return Join-Path $TryHome 'nvidia-sdk\Streamline' }
+function Sl-Bin { return Join-Path (Sl-Root) 'bin\x64' }
+function Sl-Missing { $b = Sl-Bin; return @($SlDlls | Where-Object { -not (Test-Path -LiteralPath (Join-Path $b $_)) }) }
+# Bytes First..Last of a URL (nv's scripts\get-nvidia-sdks.ps1).
+function Get-Range([string]$Url, [long]$First, [long]$Last) {
+    $q = [Net.HttpWebRequest]::Create($Url)
+    $q.UserAgent = 'victory-try'
+    $q.AddRange($First, $Last)
+    $r = $q.GetResponse()
+    try {
+        if ([int]$r.StatusCode -ne 206) { throw 'the server does not give parts of the file' }
+        $m = New-Object IO.MemoryStream
+        $r.GetResponseStream().CopyTo($m)
+        , $m.ToArray()
+    } finally { $r.Close() }
+}
+# The named files out of a zip on a server without downloading the whole zip
+# (its directory is at its end, and each file in it can be asked for by its
+# place). $Want: a regex on the paths in the zip. Each goes into $Into under
+# the part of its path after the SDK's top folder. (nv's, as it is.)
+function Get-FromZip([string]$Url, [string]$Want, [string]$Into) {
+    $h = [Net.HttpWebRequest]::Create($Url); $h.Method = 'HEAD'; $h.UserAgent = 'victory-try'
+    $r = $h.GetResponse(); $real = $r.ResponseUri.AbsoluteUri; $length = $r.ContentLength; $r.Close()
+    $tailLen = [Math]::Min($length, 2MB)
+    $tail = Get-Range $real ($length - $tailLen) ($length - 1)
+    $end = -1
+    for ($i = $tail.Length - 22; $i -ge 0; $i--) {
+        if ($tail[$i] -eq 0x50 -and $tail[$i + 1] -eq 0x4b -and $tail[$i + 2] -eq 5 -and $tail[$i + 3] -eq 6) { $end = $i; break }
+    }
+    if ($end -lt 0) { throw 'no zip directory found' }
+    $dirSize = [BitConverter]::ToUInt32($tail, $end + 12)
+    $dirAt = [BitConverter]::ToUInt32($tail, $end + 16)
+    if ($dirAt -eq [uint32]::MaxValue) { throw 'a zip64 archive' }
+    $dir = if ($dirAt -ge $length - $tailLen) {
+        $from = [int]($dirAt - ($length - $tailLen)); , $tail[$from..($from + $dirSize - 1)]
+    } else { Get-Range $real $dirAt ($dirAt + $dirSize - 1) }
+    $got = 0
+    $at = 0
+    while ($at + 46 -le $dir.Length -and [BitConverter]::ToUInt32($dir, $at) -eq 0x02014b50) {
+        $method = [BitConverter]::ToUInt16($dir, $at + 10)
+        $packed = [BitConverter]::ToUInt32($dir, $at + 20)
+        $size = [BitConverter]::ToUInt32($dir, $at + 24)
+        $nameLen = [BitConverter]::ToUInt16($dir, $at + 28)
+        $extraLen = [BitConverter]::ToUInt16($dir, $at + 30)
+        $noteLen = [BitConverter]::ToUInt16($dir, $at + 32)
+        $headerAt = [BitConverter]::ToUInt32($dir, $at + 42)
+        $name = [Text.Encoding]::UTF8.GetString($dir, $at + 46, $nameLen)
+        $at += 46 + $nameLen + $extraLen + $noteLen
+        if ($name -notmatch $Want) { continue }
+        $piece = Get-Range $real $headerAt ($headerAt + 30 + $nameLen + 2048 + $packed - 1)
+        if ([BitConverter]::ToUInt32($piece, 0) -ne 0x04034b50) { throw "no file header for $name" }
+        $dataAt = 30 + [BitConverter]::ToUInt16($piece, 26) + [BitConverter]::ToUInt16($piece, 28)
+        if ($dataAt + $packed -gt $piece.Length) { throw "the header of $name is longer than expected" }
+        $out = [IO.MemoryStream]::new()
+        if ($method -eq 0) { $out.Write($piece, $dataAt, [int]$packed) }
+        elseif ($method -eq 8) {
+            $in = [IO.MemoryStream]::new($piece, $dataAt, [int]$packed)
+            $z = [IO.Compression.DeflateStream]::new($in, [IO.Compression.CompressionMode]::Decompress)
+            $z.CopyTo($out); $z.Close()
+        } else { throw "$name is packed in a way this script does not know ($method)" }
+        if ($out.Length -ne $size) { throw "$name came out $($out.Length) bytes long, not $size" }
+        $rel = ($name -replace '^.*?(?=(bin/x64/|license\.txt$))', '') -replace '/', '\'
+        $to = Join-Path $Into $rel
+        New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
+        [IO.File]::WriteAllBytes($to, $out.ToArray())
+        Say ("{0}  {1:N1} MB" -f $rel, ($size / 1MB))
+        $got++
+    }
+    $got
+}
+function Ensure-Dlss {
+    if ((Sl-Missing).Count -gt 0) {
+        if ($script:Config.dlss_dl -eq 'failed' -and -not $script:FsrRetry) { return $null }
+        Step "Downloading NVIDIA DLSS (Streamline $SlTag from NVIDIA's GitHub, about 70 MB, once)"
+        $url = "https://github.com/NVIDIA-RTX/Streamline/releases/download/$SlTag/streamline-sdk-$SlTag.zip"
+        $names = ($SlDlls | ForEach-Object { [regex]::Escape($_) }) -join '|'
+        $want = "(^|/)bin/x64/($names|[^/]*license[^/]*\.txt)$|^([^/]+/)?license\.txt$"
+        try { [void](Get-FromZip $url $want (Sl-Root)) }
+        catch { Say "taking the files out of NVIDIA's archive in place did not work ($($_.Exception.Message))" }
+        if ((Sl-Missing).Count -gt 0) {
+            # The whole archive then (263 MB).
+            Say 'getting the whole archive instead (263 MB) ...'
+            $sdk = Split-Path (Sl-Root)
+            $zip = Join-Path $sdk "streamline-sdk-$SlTag.zip"
+            $into = Join-Path $sdk 'streamline-unpacked'
+            try {
+                New-Item -ItemType Directory -Force -Path $sdk | Out-Null
+                if (Download $url $zip) {
+                    Expand-Archive -Path $zip -DestinationPath $into -Force -ErrorAction Stop
+                    $found = Get-ChildItem $into -Recurse -Filter 'sl.interposer.dll' | Where-Object { $_.FullName -match '\\bin\\x64\\sl\.interposer\.dll$' -and $_.FullName -notmatch '\\development\\' } | Select-Object -First 1
+                    if ($found) {
+                        $top = Split-Path (Split-Path (Split-Path $found.FullName))
+                        New-Item -ItemType Directory -Force (Sl-Bin) | Out-Null
+                        Get-ChildItem (Join-Path $top 'bin\x64') -File | Where-Object { $SlDlls -contains $_.Name -or $_.Name -match 'license.*\.txt$' } | Copy-Item -Destination (Sl-Bin) -Force
+                        Copy-Item (Join-Path $top 'license.txt') (Sl-Root) -Force -ErrorAction SilentlyContinue
+                    }
+                }
+            } catch { Bad "could not unpack NVIDIA's archive: $_" }
+            Remove-Item $into -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item $zip -Force -ErrorAction SilentlyContinue
+        }
+        if ((Sl-Missing).Count -gt 0) {
+            Bad "could not get NVIDIA's DLSS files: the game upscales as before (DL, or U, tries again)"
+            $script:Config.dlss_dl = 'failed'; Save-Config
+            return $null
+        }
+        Say "NVIDIA's licences: $(Join-Path (Sl-Root) 'license.txt') and the *license*.txt files in $(Sl-Bin)"
+    }
+    # NVIDIA's signature on the interposer, every run (the layer checks it
+    # again before loading it).
+    $dll = Join-Path (Sl-Bin) 'sl.interposer.dll'
+    try {
+        $sig = Get-AuthenticodeSignature -LiteralPath $dll
+        if ($sig.Status -ne 'Valid' -or "$($sig.SignerCertificate.Subject)" -notmatch 'NVIDIA') {
+            Bad "NVIDIA's sl.interposer.dll is not signed by NVIDIA ($($sig.Status)): DLSS not used (delete $(Sl-Root) to get it again)"
+            return $null
+        }
+    } catch { Bad "could not check the signature of NVIDIA's files: DLSS not used ($_)"; return $null }
+    if ($script:Config.dlss_dl -ne 'ok') { $script:Config.dlss_dl = 'ok'; Save-Config }
+    return Sl-Bin
+}
+# The card with the most memory, by its driver's name.
+function Card-Name {
+    $best = [int64]-1; $name = ''
+    try {
+        Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*' -ErrorAction SilentlyContinue | ForEach-Object {
+            $q = [int64]0
+            if ($_.'HardwareInformation.qwMemorySize') { $q = [int64]$_.'HardwareInformation.qwMemorySize' }
+            if ($_.DriverDesc -and $q -gt $best) { $best = $q; $name = [string]$_.DriverDesc }
+        }
+    } catch {}
+    return $name
+}
+# Its GeForce RTX generation: 20, 30, 40, 50 (0: not an RTX card). DLSS
+# needs 20 or later, its frame generation 40 or later (more than 2x: 50).
+function Rtx-Gen {
+    $n = Card-Name
+    if ($n -notmatch 'NVIDIA|GeForce|RTX') { return 0 }
+    if ($n -match 'RTX\s*(\d)0\d\d') { return 10 * [int]$Matches[1] }
+    if ($n -match 'RTX') { return 20 }
+    return 0
+}
+# Hardware-accelerated GPU scheduling, which DLSS Frame Generation needs: on,
+# default (no value: on in Windows 11) or off (nv 0a542c0).
+function Hags-State {
+    $v = $null
+    try { $v = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name HwSchMode -ErrorAction Stop).HwSchMode } catch {}
+    if ($v -eq 2) { return 'on' }
+    if ($null -eq $v -and [Environment]::OSVersion.Version.Build -ge 22000) { return 'default' }
+    return 'off'
+}
+# 6.24: the game's F1 settings menu saves its choices to this file
+# (VICTORY_MENU_FILE); VIctory Try takes them into its own settings once per
+# save, so the keys here and the menu in the game change the same settings.
+$MenuFile = Join-Path $TryHome 'victory-menu.txt'
+function Read-MenuFile {
+    if (-not (Test-Path -LiteralPath $MenuFile)) { return }
+    $c = $script:Config
+    $stamp = [string](Get-Item -LiteralPath $MenuFile).LastWriteTimeUtc.Ticks
+    if ($c.menu_seen -eq $stamp) { return }
+    $m = @{}
+    foreach ($line in Get-Content -LiteralPath $MenuFile) { if ($line -match '^\s*(VICTORY_MENU_[A-Z_]+)\s*=(.*)$') { $m[$Matches[1]] = $Matches[2].Trim() } }
+    $d = [string]$m['VICTORY_MENU_DLSS']
+    if (@('quality', 'balanced', 'performance', 'ultraperformance', 'dlaa', 'off') -contains $d) { $c.dlss = $(if ($d -eq 'quality') { '' } else { $d }) }
+    $f = [string]$m['VICTORY_MENU_FRAMEGEN']
+    if ($f -eq '0') { $c.fg = '' } elseif ($f -match '^[2-6]$') { $c.fg = $f }
+    foreach ($kv in @(@('VICTORY_MENU_FULLSCREEN', 'fullscreen'), @('VICTORY_MENU_MOUSE_CAPTURE', 'mousecap'), @('VICTORY_MENU_IME_ENGLISH', 'imeen'))) {
+        $v = [string]$m[$kv[0]]
+        if ($v -eq '1') { $c[$kv[1]] = '1' } elseif ($v -eq '0') { $c[$kv[1]] = '' }
+    }
+    $c.menu_seen = $stamp
+    Save-Config
+    Say 'settings: what the game''s F1 menu saved is taken in'
+}
 # 6.12: all-out mode (MAX, or VICTORY_TRY_ALL_OUT=1): the caps VICTORY puts
 # on itself are lifted to what this PC has, less about 1% (and one CPU
 # thread) so Windows, the mouse and the keyboard still answer. Read from the
@@ -1459,6 +1643,89 @@ function Set-RunEnv {
     Say "picture: ray-tracing light passes left out: $(if ($denied) { "$denied (B switches)" } else { 'none' }), NaN colours cleared $(if ($env:VICTORY_NAN_SCRUB -eq '1') { 'ON' } else { 'off' })"
     # 6.12: all-out mode last, so it lifts the caps set above.
     if (AllOut) { Set-AllOut } else { Undo-AllOut; Say 'all-out mode: off   (MAX gives the game everything this PC has but about 1%)' }
+    # 6.24: NVIDIA DLSS (DL) and DLSS Frame Generation (FG), from
+    # trustno1-coder/VIctory-NVIDIA: DLSS makes the game's upscale in place of
+    # its FidelityFX (and of T's), on GeForce RTX cards, with NVIDIA's files
+    # (Ensure-Dlss). Series X then outputs 2560x1440 (VICTORY_OUTPUT; R: 4K),
+    # the set nv measured (RTX 5070: 26-30 fps, 15-17 before), and our own
+    # 75% scale-up (B) stays off: DLSS scales already. Frame generation is
+    # made ready at every start (RTX 40/50, GPU scheduling on, one frame
+    # ahead), so the game's F1 menu turns it on and changes its amount while
+    # playing; FG turns it on from the start. A fifth of the card's texture
+    # room is left to it (86% of the budget ready, 80% on: nv's numbers; a
+    # full 12 GB card made no generated frames).
+    Read-MenuFile
+    $env:VICTORY_MENU_FILE = $MenuFile
+    $script:DlssFromTry = $false
+    if ($null -eq $script:UserAll['VICTORY_DLSS']) {
+        foreach ($k in @('VICTORY_DLSS', 'VICTORY_DLSS_MODE', 'VICTORY_STREAMLINE_DIR', 'VICTORY_FRAMEGEN_X', 'VICTORY_OUTPUT')) {
+            if ($null -eq $script:UserAll[$k]) { [Environment]::SetEnvironmentVariable($k, $null, 'Process') }
+        }
+        $gen = Rtx-Gen
+        $mode = $(if ($c.dlss) { $c.dlss } else { 'quality' })
+        $why = ''
+        if (-not (OwnEngine)) { $why = 'this fork''s engine only' }
+        elseif ($c.plain -eq '1') { $why = 'not in plain mode' }
+        elseif ($mode -eq 'off') { $why = 'off' }
+        elseif ($gen -lt 20) { $why = 'needs a GeForce RTX card (this PC: ' + $(if (Card-Name) { Card-Name } else { 'unknown' }) + ')' }
+        $bin = $null
+        if (-not $why) { $bin = Ensure-Dlss; if (-not $bin) { $why = 'NVIDIA''s files are not there (DL tries the download again)' } }
+        if ($bin) {
+            $script:DlssFromTry = $true
+            $env:VICTORY_DLSS = '1'
+            $env:VICTORY_DLSS_MODE = $mode
+            $env:VICTORY_STREAMLINE_DIR = $bin
+            if ($c.console -eq 'series-x' -and $null -eq $script:UserAll['VICTORY_OUTPUT']) { $env:VICTORY_OUTPUT = $(if ($c.res -eq '4k') { '3840x2160' } else { '2560x1440' }) }
+            if ($null -eq $script:UserFx['VICTORY_RENDER_SCALE']) { [Environment]::SetEnvironmentVariable('VICTORY_RENDER_SCALE', $null, 'Process') }
+            $hags = Hags-State
+            $fgWhy = ''
+            if ($c.fg -eq 'none') { $fgWhy = 'off' }
+            elseif ($null -ne $script:UserFx['VICTORY_FRAMEGEN']) { $fgWhy = 'VICTORY_FRAMEGEN was set before VIctory Try started' }
+            elseif ($gen -lt 40) { $fgWhy = 'needs an RTX 40 or 50 card' }
+            elseif ($hags -eq 'off') { $fgWhy = 'needs hardware-accelerated GPU scheduling: Windows Settings > System > Display > Graphics > Change default graphics settings, turn it on, restart the PC' }
+            elseif ($env:VICTORY_ASYNC_SUBMIT -ne '1') { $fgWhy = 'needs one frame ahead, off since a run lost the card' }
+            if (-not $fgWhy) {
+                $times = $(if ($c.fg -match '^[2-6]$') { $c.fg } else { '0' })
+                $env:VICTORY_FRAMEGEN = '1'
+                $env:VICTORY_FRAMEGEN_X = $times
+                if ($null -eq $script:UserAll['VICTORY_TEXTURE_ROOM_PERCENT']) {
+                    $room = $(if ($times -ne '0') { 80 } else { 86 })
+                    $now = $(if ($env:VICTORY_TEXTURE_ROOM_PERCENT -match '^\d+$') { [int]$env:VICTORY_TEXTURE_ROOM_PERCENT } else { 90 })
+                    $env:VICTORY_TEXTURE_ROOM_PERCENT = [string]([Math]::Min($now, $room))
+                }
+                $fgSay = $(if ($times -eq '0') { 'ready (the F1 menu in the game turns it on)' } else { "ON, $($times)x" + $(if ($gen -lt 50 -and [int]$times -gt 2) { ' (an RTX 40 makes 2x: the layer gives what the card does)' } else { '' }) })
+                Say "picture: DLSS Frame Generation $fgSay, textures up to $($env:VICTORY_TEXTURE_ROOM_PERCENT)% of the card   (FG switches)"
+            } else {
+                Say "picture: DLSS Frame Generation off: $fgWhy   (FG switches)"
+            }
+            Say "picture: NVIDIA DLSS $mode makes the upscale$(if ($env:VICTORY_OUTPUT) { ', game output ' + $env:VICTORY_OUTPUT })   (DL switches; it replaces T's upscaler)"
+        } else {
+            Say "picture: NVIDIA DLSS: $why   (DL switches)"
+        }
+    }
+    # 6.24: the game's own 30 fps limit lifted (FPS): our frame clock ticks
+    # at the rate asked for and the game's three reads of its frame rate
+    # setting are patched to match (VICTORY_FRAME_INTERVAL_MS, from nv, there
+    # from Belobug/VIctory-Belobug-AMD; the game clock follows: the timers'
+    # shortest step is patched too). 60 by default; 120, none, or 30 (the
+    # game's own, nothing patched). Frames that take longer than 33 ms are
+    # not changed by it.
+    if ($null -eq $script:UserAll['VICTORY_FRAME_INTERVAL_MS']) {
+        $ms = $null
+        if ((OwnEngine) -and $c.plain -ne '1') { $ms = $(switch ($c.fps) { '30' { $null } '120' { '8.333' } 'max' { '1' } default { '16.667' } }) }
+        [Environment]::SetEnvironmentVariable('VICTORY_FRAME_INTERVAL_MS', $ms, 'Process')
+    }
+    # 6.24: the logos and intro movies skipped (MOV, VICTORY_SKIP_BINK=1, nv
+    # e31f474: each ends at once, the game loads on behind it), and from the
+    # game's F1 menu or the keys here: a borderless window over the whole
+    # screen (FS), the mouse kept in the window to turn the camera (MOUSE),
+    # an English keyboard layout for the game (F1 menu only); nv's.
+    if ($null -eq $script:UserAll['VICTORY_SKIP_BINK']) { [Environment]::SetEnvironmentVariable('VICTORY_SKIP_BINK', $(if ($c.movies -eq 'skip' -and (OwnEngine)) { '1' } else { $null }), 'Process') }
+    foreach ($kv in @(@('VICTORY_FULLSCREEN', 'fullscreen'), @('VICTORY_MOUSE_CAPTURE', 'mousecap'), @('VICTORY_IME_ENGLISH', 'imeen'))) {
+        if ($null -eq $script:UserAll[$kv[0]]) { [Environment]::SetEnvironmentVariable($kv[0], $(if ($c[$kv[1]] -eq '1' -and (OwnEngine)) { '1' } else { $null }), 'Process') }
+    }
+    Say "frame cap: $(switch ($env:VICTORY_FRAME_INTERVAL_MS) { '16.667' { '60 fps' } '8.333' { '120 fps' } '1' { 'none' } default { if ($env:VICTORY_FRAME_INTERVAL_MS) { $env:VICTORY_FRAME_INTERVAL_MS + ' ms' } else { '30 fps (the game''s own)' } } })   (FPS switches)   movies skipped: $(if ($env:VICTORY_SKIP_BINK) { 'ON' } else { 'off' })   (MOV)   fullscreen: $(if ($env:VICTORY_FULLSCREEN -eq '1') { 'ON' } else { 'off' })   (FS)   mouse capture: $(if ($env:VICTORY_MOUSE_CAPTURE -eq '1') { 'ON' } else { 'off' })   (MOUSE)"
+    if (OwnEngine) { Say 'in the game: F1 settings menu (frame generation live, DLSS, fullscreen, mouse; arrows and Enter), F3 the numbers box' }
     # Its own cache: the old base's pipeline library and shaders do not mix.
     if (-not $env:VICTORY_CACHE_DIR -or $env:VICTORY_CACHE_DIR -eq (Join-Path $TryHome 'cache-8gb')) { $env:VICTORY_CACHE_DIR = Join-Path $TryHome 'cache-gta6' }
     # Shaders that do not translate are saved here (zip and send this folder).
@@ -2157,7 +2424,7 @@ $script:Config = Load-Config
 # shadow fix, copies on the card, clean-up off, fps boost), whatever earlier
 # versions or a lost card switched off. D does the same at any time.
 function Reset-Recommended {
-    foreach ($k in @('fast', 'loop', 'wide', 'wavewide', 'new38', 'lazy', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'temporal', 'fxspeed', 'low', 'allout')) { $script:Config[$k] = '' }
+    foreach ($k in @('fast', 'loop', 'wide', 'wavewide', 'new38', 'lazy', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'temporal', 'fxspeed', 'low', 'allout', 'dlss', 'fg', 'fps')) { $script:Config[$k] = '' }
     $script:Config.defaults = '5.0'
     Save-Config
 }
@@ -2192,10 +2459,12 @@ if (OwnEngine) {
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
 Tidy-Disk ([bool]$changed)
 if (OwnEngine) {
+    Say '6.24: NVIDIA DLSS, from trustno1-coder/VIctory-NVIDIA (the fork that runs on NVIDIA: 15-17 -> 26-30 fps on an RTX 5070 at 1440p): on RTX cards DLSS makes the picture instead of the game''s upscaler (NVIDIA''s files, 70 MB, downloaded once; DL), DLSS Frame Generation on RTX 40/50 (ready at every start, F1 in the game turns it on; FG), the game''s 30 fps limit lifted to 60 (FPS), an F1 settings menu in the game, a mouse that turns the camera (MOUSE), borderless fullscreen (FS), PS5 pads, movies skipped (MOV), and his fixes (raw views kept inside their buffers, the game asked to save before it closes).'
     Say '6.23: every shader: AMD''s own FidelityFX programs (stored compiled by the console''s driver, most of the shaders that did not translate) now translate, with the console instructions they use; shaders inside bigger files are found by their real hash (ScarlettPort #114); prepare lists why any shader still does not translate and saves those in failed-shaders for the report.'
     Say '6.22: from ScarlettPort (the VIctory port that runs 7-22 fps on cards like yours): no frame stands still for a new shader any more (objects come in a frame or two later instead), the game''s small buffers go to the card''s memory, the upscaler''s network stays on the card, fewer descriptor heap re-sets, cheaper write tracking, two shader clean-ups that are exact (on), and saves no longer wait. The water''s light shaders in their exact form are on by default now (no blocks, VICTORY_WAVE_PAIRS_ONLY=none goes back). AMD: mesh pipelines made one at a time (RX 6000 lost the card in the intro).'
     Say '6.21: from fxceless''s fork (RTX 4070): about 30 of his fixes, among them a dispatch now waits for its compute shader instead of being dropped, mesh draws started by the card, busy memory pages patched on the card instead of waited for, and the water''s light shaders in an exact form (opt-in). Kept off here: his ray-traced shadows (0.2 to 3 fps even on his 4070); our fill light stays, so shadows are not black. Five ray-tracing shaders now translate with default settings.'
-    Say '6.20: a clean log: on 6 GB cards MAX leaves about 650 MB more of the card to textures (it stood past its budget, so textures found no room and Windows moved memory to the PC), five ray-tracing compute shaders that were dropped translate, constant buffers and raw views the game places off the PC''s alignment are no longer read as zeros, a false alarm no longer makes every later frame wait, and what is on purpose no longer shows as a warning.'\r\n    Say '6.19: the picture: the light the game''s compute shaders write into memory it placed itself is kept (it went nowhere: probes and bounced light read memory nothing wrote), open water without dark blocks (its tiled light left out on NVIDIA), textures that come back into view are kept (no more white or grey people), screen copies the game gave up are let go, a third texture level goes while the card is past its memory, 1.5 s after a loading screen at most; the log says more.'
+    Say '6.20: a clean log: on 6 GB cards MAX leaves about 650 MB more of the card to textures (it stood past its budget, so textures found no room and Windows moved memory to the PC), five ray-tracing compute shaders that were dropped translate, constant buffers and raw views the game places off the PC''s alignment are no longer read as zeros, a false alarm no longer makes every later frame wait, and what is on purpose no longer shows as a warning.'
+    Say '6.19: the picture: the light the game''s compute shaders write into memory it placed itself is kept (it went nowhere: probes and bounced light read memory nothing wrote), open water without dark blocks (its tiled light left out on NVIDIA), textures that come back into view are kept (no more white or grey people), screen copies the game gave up are let go, a third texture level goes while the card is past its memory, 1.5 s after a loading screen at most; the log says more.'
     Say '6.17: the fps: the game''s fence wait (monitorx) is patched in place now: it could not be where it lay across two 8-byte words, and took an exception 440,000 times a second (more than a whole processor); the pass over the game''s descriptor heap (22-39 ms a frame) runs beside the preparing instead of before it.'
     Say '6.16: the fps: the textures had filled the card, so the game''s memory windows stayed in the PC''s memory and the card read them across the bus (about 200 ms of card work a frame on a 6 GB laptop card); room on the card is kept for them now and all-out leaves 6% of a small card free. The texture rush no longer goes on and off every second (the same textures uploaded again and again, and faces flicking between skin, white and see-through). The disk: older builds'' shader translations, the other engines and old logs are removed (TIDY shows what takes what). The card''s time is measured in every report.'
     Say '6.13: NVIDIA fixes from the other forks: on PCs under 24 GB of memory the game''s memory windows go straight into the card through Resizable BAR (out-of-memory and the driver crash gone, 1.6-3 -> 10-12 fps on a 16 GB RTX 3060 PC; Indy2l), texture read-backs on their own thread (no more 100-400 ms landing stalls while the world streams), a slow shader is waited for in one frame only (no more freezes while it compiles), compute shaders start compiling as soon as the game makes them, face decorations found by name (no black faces in cutscenes), streamed textures are no longer forgotten when the change list fills, and the card''s buffer compare goes out on its own (D3D12 error 538).'
@@ -2266,6 +2535,12 @@ function Show-Commands {
         @('I', 'CPU graphics helper', $(& $on ($c.igpu -ne 'off')), 'browsers / Discord / Spotify use the CPU''s own graphics, so the card''s memory is the game''s'),
         @('K', 'Copies on the card', $(& $on ($c.gpucopy -ne 'off')), 'faster: the game''s buffer copies run on the card (no waiting for it); off if things look wrong'),
         @('T', 'Upscaler', $(switch ($c.temporal) { 'off' { 'off' } 'own' { 'own' } default { 'FSR' } }), 'FSR: AMD''s PC FidelityFX upscaler (sharp, right reflections); own: VIctory''s frame accumulation; off: plain stretch'),
+        @('DL', 'NVIDIA DLSS', $(switch ($c.dlss) { 'balanced' { 'B  ' } 'performance' { 'P  ' } 'ultraperformance' { 'UP ' } 'dlaa' { 'AA ' } 'off' { 'off' } default { 'Q  ' } }), 'RTX cards: NVIDIA''s upscaler instead of the game''s (and T''s): quality, balanced, performance, ultra perf., DLAA, off'),
+        @('FG', 'Frame generation', $(switch ($c.fg) { 'none' { 'off' } '' { 'rdy' } default { $c.fg + 'x ' } }), 'DLSS Frame Generation (RTX 40/50, GPU scheduling on): ready (F1 in the game turns it on), 2x, 3x, 4x, off'),
+        @('FPS', 'Frame cap', $(switch ($c.fps) { '120' { '120' } 'max' { 'max' } '30' { '30 ' } default { '60 ' } }), 'the game''s own 30 fps limit lifted: 60, 120, none, or 30 (the game''s own, as before 6.24)'),
+        @('MOV', 'Skip movies', $(& $on ($c.movies -eq 'skip')), 'the logos and intro movies end at once (the game loads on behind them)'),
+        @('FS', 'Fullscreen', $(& $on ($c.fullscreen -eq '1')), 'a borderless window over the whole screen (also in the game''s F1 menu)'),
+        @('MOUSE', 'Mouse capture', $(& $on ($c.mousecap -eq '1')), 'the pointer stays in the game''s window, hidden, and the mouse turns the camera'),
         @('Y', 'fxceless speed set', $(& $on ($c.fxspeed -ne 'off')), 'heap work on its own thread, texture checks side by side, settle room (fxceless/victory-fork)'),
         @('X', 'Low preset', $(& $on $script:LowFromTry), '6 GB cards: game told 1280x720, textures up to 1536 MB (faster, blurrier; on by itself under 7 GB)'),
         @('J', 'Saved game', '', 'continue or new game (from the very beginning), bring a save back, ask before launch on/off'),
@@ -2285,7 +2560,8 @@ function Show-Commands {
         Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3])
     }
     Write-Host '  ====================================================================================' -ForegroundColor Cyan
-    Write-Host '  Switches (N, C, R, F, B, M, H, A, L, O, W, K, T, Y, X, Z, D, MAX) flip at once and are saved; Enter then runs the game with them.'
+    Write-Host '  Switches (N, C, R, F, B, M, H, A, L, O, W, K, T, DL, FG, FPS, MOV, FS, MOUSE, Y, X, Z, D, MAX) flip at once and are saved; Enter then runs the game with them.'
+    Write-Host '  In the game: F1 opens the settings menu (frame generation, DLSS, fullscreen, mouse), F3 the numbers box.'
 }
 
 function Show-Version {
@@ -2347,6 +2623,12 @@ while ($true) {
             'K' { $c.gpucopy = $(if ($c.gpucopy -eq 'off') { '' } else { 'off' }) }
             'T' { $script:FsrRetry = $true; $c.temporal = $(switch ($c.temporal) { 'own' { 'off' } 'off' { '' } default { 'own' } }) }
             'Y' { $c.fxspeed = $(if ($c.fxspeed -eq 'off') { '' } else { 'off' }) }
+            'DL' { $script:FsrRetry = $true; $c.dlss = $(switch ($c.dlss) { 'balanced' { 'performance' } 'performance' { 'ultraperformance' } 'ultraperformance' { 'dlaa' } 'dlaa' { 'off' } 'off' { '' } default { 'balanced' } }) }
+            'FG' { $c.fg = $(switch ($c.fg) { '' { '2' } '2' { '3' } '3' { '4' } 'none' { '' } default { 'none' } }) }
+            'FPS' { $c.fps = $(switch ($c.fps) { '120' { 'max' } 'max' { '30' } '30' { '' } default { '120' } }) }
+            'MOV' { $c.movies = $(if ($c.movies -eq 'skip') { '' } else { 'skip' }) }
+            'FS' { $c.fullscreen = $(if ($c.fullscreen -eq '1') { '' } else { '1' }) }
+            'MOUSE' { $c.mousecap = $(if ($c.mousecap -eq '1') { '' } else { '1' }) }
             'X' { $c.low = $(if ($script:LowFromTry) { 'off' } else { '1' }) }
             'I' { if ($c.igpu -eq 'off') { $c.igpu = '' } else { $c.igpu = 'off'; Undo-Helper } }
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }

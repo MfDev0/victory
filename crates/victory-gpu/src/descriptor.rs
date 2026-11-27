@@ -335,6 +335,14 @@ pub(crate) fn sync_begin() {
             .name("victory-heap-sync".into())
             .spawn(|| {
                 crate::framelog::keep_on_fast_cores("victory-heap-sync");
+                // The submitting thread waits for this one (`sync_end`): above
+                // normal, as the wide workers are, unless
+                // VICTORY_HELPER_PRIORITY=0. Try 6.24, after
+                // trustno1-coder/VIctory-NVIDIA 80c70b7 (i5-12400F + RTX 3060:
+                // waiting for the heaps' records 6.2 -> 2.5 ms a frame).
+                if std::env::var_os("VICTORY_HELPER_PRIORITY").is_none_or(|v| v != "0") {
+                    crate::shadow::raise_this_thread();
+                }
                 loop {
                     {
                         let mut state = BESIDE.0.lock().unwrap_or_else(|e| e.into_inner());

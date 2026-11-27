@@ -81,6 +81,62 @@ const UPSCALE: u64 = 0x0001_0001;
 type Dispatch = extern "system" fn(*mut *mut c_void, *const Header) -> u32;
 
 extern "system" fn dispatch(context: *mut *mut c_void, desc: *const Header) -> u32 {
+    stand_in(context, desc.cast(), true)
+}
+
+/// What answers an upscale dispatch that DLSS did not take
+/// (`super::dlss`, Try 6.24): our temporal resolve, then, with `title`, the
+/// title's own `ffxDispatch`. Without `title` (a context the title's
+/// FidelityFX made smaller than the dispatch asks, which its own passes
+/// would read past) nothing more runs: the output keeps the last frame's
+/// and success is returned.
+pub(crate) fn stand_in(context: *mut *mut c_void, desc: *const c_void, title: bool) -> u32 {
+    let desc = desc.cast::<Header>();
+    if !title {
+        // SAFETY: as in `answer`.
+        let upscale = unsafe { desc.as_ref() }.is_some_and(|h| h.kind == UPSCALE);
+        if !upscale {
+            return ERROR;
+        }
+        // SAFETY: an upscale description, by its type.
+        let d = unsafe { &*desc.cast::<Upscale>() };
+        if !temporal(d) {
+            static TOLD: std::sync::Once = std::sync::Once::new();
+            TOLD.call_once(|| tracing::warn!("an upscale DLSS did not take was not resolved by ours either: the output keeps the last frame"));
+        }
+        return 0;
+    }
+    answer(context, desc)
+}
+
+/// Our temporal resolve of upscale `d`, recorded at its place of the
+/// title's list; whether it was.
+fn temporal(d: &Upscale) -> bool {
+    #[cfg(windows)]
+    {
+        victory_gpu::list::upscale_temporal(
+            d.list,
+            d.colour.resource,
+            d.motion.resource,
+            d.output.resource,
+            victory_gpu::list::UpscaleFrame {
+                render: d.render,
+                jitter: d.jitter,
+                motion_scale: d.motion_scale,
+                reset: d.reset != 0,
+                sharpness: (d.enable_sharpening != 0).then_some(d.sharpness),
+                pre_exposure: d.pre_exposure,
+            },
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = d;
+        false
+    }
+}
+
+fn answer(context: *mut *mut c_void, desc: *const Header) -> u32 {
     // SAFETY: the title passes a dispatch description, whose header says
     // what follows it.
     if let Some(header) = unsafe { desc.as_ref() } {
@@ -135,21 +191,7 @@ extern "system" fn dispatch(context: *mut *mut c_void, desc: *const Header) -> u
                     "upscale dispatches so far (our temporal resolve)"
                 );
             }
-            #[cfg(windows)]
-            if victory_gpu::list::upscale_temporal(
-                d.list,
-                d.colour.resource,
-                d.motion.resource,
-                d.output.resource,
-                victory_gpu::list::UpscaleFrame {
-                    render: d.render,
-                    jitter: d.jitter,
-                    motion_scale: d.motion_scale,
-                    reset: d.reset != 0,
-                    sharpness: (d.enable_sharpening != 0).then_some(d.sharpness),
-                    pre_exposure: d.pre_exposure,
-                },
-            ) {
+            if temporal(d) {
                 return 0;
             }
             if first {
