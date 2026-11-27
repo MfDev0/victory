@@ -622,6 +622,8 @@ extern "C" fn ffxDispatch(context: *mut *mut c_void, desc: *mut Header) -> u32 {
     }
     // SAFETY: an upscaling, by its type.
     let mut dispatch = unsafe { desc.cast::<DispatchUpscale>().read() };
+    // The title's camera cuts (`victory_gpu::cutscene`, Try 6.25).
+    victory_gpu::cutscene::upscaled(dispatch.settings[4] & 0xff != 0);
     if context.is_null() {
         once!(warn, "FidelityFX dispatch arrived without a context");
         return PARAMETER;

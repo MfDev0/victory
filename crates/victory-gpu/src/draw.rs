@@ -1748,9 +1748,18 @@ impl State {
     /// beloooo). Whether it recorded anything: the compute pipeline, root
     /// signature and heaps on the host list are then the ambient pass's.
     fn ambient(&self, list: &HostList, p: &HostPipeline) -> bool {
-        let Some(stage) = p.stages.first().filter(|s| s.shader.resolves_light) else {
+        use crate::ambient::{Role, estimate};
+        let Some((stage, role)) = p.stages.first().and_then(|s| Some((s, s.shader.ambient?))) else {
             return false;
         };
+        // Try 6.25: in play, VIctory-NVIDIA's estimate from the frame; in
+        // cutscenes (and until a frame's light is kept) the constant below.
+        if estimate::wanted(role) && self.ambient_estimate(list, p, role) {
+            return true;
+        }
+        if role != Role::Resolve {
+            return false;
+        }
         let view = |kind: ResourceType, (slot, offset): (u8, u32)| {
             let u = stage.translated().used.iter().find(|u| {
                 u.kind == kind
@@ -1797,6 +1806,109 @@ impl State {
             })
             .collect();
         crate::ambient::raise(list, light as This, depth, &scenes)
+    }
+
+    /// The estimate's pass after a dispatch of the title's program of `role`
+    /// (`crate::ambient::estimate`; trustno1-coder/VIctory-NVIDIA's finding of
+    /// the images and depths, Try 6.25). Whether it recorded anything.
+    fn ambient_estimate(&self, list: &HostList, p: &HostPipeline, role: crate::ambient::Role) -> bool {
+        use crate::ambient::{AIR, DEPTH, LIGHT, MISS_ALPHA, MISS_DEPTH, MISS_LIGHT, MISS_OPAQUE, RADIANCE, Role, estimate};
+        use windows::Win32::Graphics::Dxgi::Common::*;
+        let Some(t) = p.stages.first().map(|s| s.translated()) else {
+            return false;
+        };
+        let roots = self.roots_ref(true);
+        // Which surfaces the miss program's rays are of (its first root
+        // constant): water's reflections are left as they are (the depth
+        // there is of what lies under it), the alpha layer's unless asked.
+        if role == Role::Miss {
+            let layer = t
+                .used
+                .iter()
+                .find(|u| u.root == RootType::Constants)
+                .and_then(|u| match roots.get(usize::from(u.slot)) {
+                    Some(Root::Constants(c)) => c.first().copied(),
+                    _ => None,
+                })
+                .unwrap_or(u32::MAX);
+            if !(layer == MISS_OPAQUE || (estimate::alpha_too() && layer == MISS_ALPHA)) {
+                return false;
+            }
+        }
+        let view_at = |(slot, offset): (u8, u32)| {
+            let Some(Root::Table(table)) = roots.get(usize::from(slot)) else {
+                return None;
+            };
+            let view = crate::descriptor::view(table + u64::from(offset) * 4)?;
+            // A view of a texture the title placed in its memory names the
+            // host texture `placed_texture` finds.
+            Some(crate::descriptor::host::placed_texture(&view).unwrap_or(view))
+        };
+        let entry = |kind: ResourceType, at: (u8, u32)| {
+            t.used.iter().find(|u| {
+                u.kind == kind && u.root == RootType::Table && (u.slot, u.table_offset_dwords) == at
+            })?;
+            let resource = match view_at(at)? {
+                View::Shader(r, _) | View::Unordered(r, ..) => r,
+                _ => return None,
+            };
+            let host = crate::resource::host_resource(resource as This)?;
+            // SAFETY: a live resource.
+            let desc = unsafe { host.GetDesc() };
+            Some((host.clone(), desc))
+        };
+        // A depth-stencil texture's view of its stencil plane is no depth
+        // (VIctory-NVIDIA: the estimate made of it is flat).
+        let stencil_at = |at: (u8, u32)| match view_at(at) {
+            Some(View::Shader(_, Some(d))) => matches!(crate::resource::pc_format(d[0]), 22 | 47) || (d[1] == 4 && d[6] == 1),
+            _ => false,
+        };
+        let depth32 = |d: &D3D12_RESOURCE_DESC| {
+            d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && estimate::depth_view(d.Format).is_some()
+        };
+        let scan = |kind: ResourceType, fits: &dyn Fn(&D3D12_RESOURCE_DESC) -> bool| {
+            t.used
+                .iter()
+                .filter(|u| u.kind == kind && u.root == RootType::Table)
+                .filter(|u| kind != ResourceType::Srv || !stencil_at((u.slot, u.table_offset_dwords)))
+                .filter_map(|u| entry(kind, (u.slot, u.table_offset_dwords)))
+                .find(|(_, desc)| fits(desc))
+        };
+        let image = match role {
+            Role::Resolve => entry(ResourceType::Uav, LIGHT),
+            Role::Radiance => entry(ResourceType::Uav, RADIANCE),
+            Role::Air => entry(ResourceType::Uav, AIR),
+            // Variants of the miss program bind the rays' image and the depth
+            // at other places (VIctory-NVIDIA's run final-1: 416 of 472
+            // dispatches): the first that fits.
+            Role::Miss => entry(ResourceType::Uav, MISS_LIGHT).or_else(|| {
+                scan(ResourceType::Uav, &|d| {
+                    d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && d.Format == DXGI_FORMAT_R11G11B10_FLOAT
+                })
+            }),
+        };
+        let Some((image, of)) = image else {
+            once_info!(?role, "light estimate: other tables; left as the title had it");
+            return false;
+        };
+        let twice = |d: &D3D12_RESOURCE_DESC| {
+            d.Width.abs_diff(of.Width * 2) <= 1 && u64::from(d.Height).abs_diff(u64::from(of.Height) * 2) <= 1
+        };
+        let usual = |at: (u8, u32)| if stencil_at(at) { None } else { entry(ResourceType::Srv, at) };
+        let depth = match role {
+            Role::Resolve => usual(DEPTH)
+                .filter(|(_, d)| (d.Width, d.Height) == (of.Width, of.Height))
+                .or_else(|| scan(ResourceType::Srv, &|d| depth32(d) && (d.Width, d.Height) == (of.Width, of.Height))),
+            Role::Miss => usual(MISS_DEPTH)
+                .filter(|(_, d)| twice(d))
+                .or_else(|| scan(ResourceType::Srv, &|d| depth32(d) && twice(d))),
+            Role::Radiance | Role::Air => None,
+        };
+        if matches!(role, Role::Resolve | Role::Miss) && depth.is_none() {
+            once_info!(?role, "light estimate: no depth of the image's size; left as the title had it");
+            return false;
+        }
+        estimate::after(list, role, &estimate::Target { image, depth: depth.map(|(d, _)| d) })
     }
 
     /// The user-data value of a root argument, as translated shaders read

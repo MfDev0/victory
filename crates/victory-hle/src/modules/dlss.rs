@@ -313,6 +313,8 @@ extern "C" fn ffxDispatch(context: *mut *mut c_void, desc: *mut Header) -> u32 {
     // SAFETY: an upscaling, by its type.
     let d = unsafe { desc.cast::<DispatchUpscale>().read() };
     first_dispatch(&d, &created);
+    // The title's camera cuts (`victory_gpu::cutscene`, Try 6.25).
+    victory_gpu::cutscene::upscaled(d.reset != 0);
     let up = upscale(&d, &created, handle);
     match streamline::upscale(&up) {
         Taken::Dlss => OK,

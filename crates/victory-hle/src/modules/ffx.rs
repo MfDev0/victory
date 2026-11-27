@@ -81,6 +81,14 @@ const UPSCALE: u64 = 0x0001_0001;
 type Dispatch = extern "system" fn(*mut *mut c_void, *const Header) -> u32;
 
 extern "system" fn dispatch(context: *mut *mut c_void, desc: *const Header) -> u32 {
+    // The title's camera cuts (`victory_gpu::cutscene`, Try 6.25; noted once
+    // a frame, whichever of this, `super::dlss` and `super::fidelityfx` sees
+    // the dispatch).
+    // SAFETY: as in `answer`.
+    if unsafe { desc.as_ref() }.is_some_and(|h| h.kind == UPSCALE) {
+        // SAFETY: an upscale description, by its type.
+        victory_gpu::cutscene::upscaled(unsafe { &*desc.cast::<Upscale>() }.reset != 0);
+    }
     stand_in(context, desc.cast(), true)
 }
 

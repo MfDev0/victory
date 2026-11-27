@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.24'
+$TryVersion = '6.25'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live, tried when the fork itself cannot be
@@ -72,11 +72,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = ''; tidy = ''; meter = ''; beside = ''; dlss = ''; fg = ''; fps = ''; movies = ''; fullscreen = ''; mousecap = ''; imeen = ''; dlss_dl = ''; menu_seen = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = ''; tidy = ''; meter = ''; beside = ''; dlss = ''; fg = ''; fps = ''; movies = ''; fullscreen = ''; mousecap = ''; imeen = ''; look = ''; dlss_dl = ''; menu_seen = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin', 'tidy', 'meter', 'beside', 'dlss', 'fg', 'fps', 'movies', 'fullscreen', 'mousecap', 'imeen', 'dlss_dl', 'menu_seen')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin', 'tidy', 'meter', 'beside', 'dlss', 'fg', 'fps', 'movies', 'fullscreen', 'mousecap', 'imeen', 'look', 'dlss_dl', 'menu_seen')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -1082,7 +1082,12 @@ function Get-FromZip([string]$Url, [string]$Want, [string]$Into) {
 }
 function Ensure-Dlss {
     if ((Sl-Missing).Count -gt 0) {
-        if ($script:Config.dlss_dl -eq 'failed' -and -not $script:FsrRetry) { return $null }
+        # 6.25: a failed download is tried again by itself after 6 hours (a
+        # dropped connection no longer keeps DLSS off until DL or U).
+        $failedAt = 0
+        if ($script:Config.dlss_dl -match '^failed(:(\d+))?$') { $failedAt = $(if ($Matches[2]) { [int64]$Matches[2] } else { 0 }) }
+        $nowS = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        if ($script:Config.dlss_dl -like 'failed*' -and -not $script:FsrRetry -and ($nowS - $failedAt) -lt 6 * 3600) { return $null }
         Step "Downloading NVIDIA DLSS (Streamline $SlTag from NVIDIA's GitHub, about 70 MB, once)"
         $url = "https://github.com/NVIDIA-RTX/Streamline/releases/download/$SlTag/streamline-sdk-$SlTag.zip"
         $names = ($SlDlls | ForEach-Object { [regex]::Escape($_) }) -join '|'
@@ -1112,8 +1117,8 @@ function Ensure-Dlss {
             Remove-Item $zip -Force -ErrorAction SilentlyContinue
         }
         if ((Sl-Missing).Count -gt 0) {
-            Bad "could not get NVIDIA's DLSS files: the game upscales as before (DL, or U, tries again)"
-            $script:Config.dlss_dl = 'failed'; Save-Config
+            Bad "could not get NVIDIA's DLSS files: the game upscales as before (tried again by itself in 6 hours; DL or U tries now)"
+            $script:Config.dlss_dl = "failed:$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"; Save-Config
             return $null
         }
         Say "NVIDIA's licences: $(Join-Path (Sl-Root) 'license.txt') and the *license*.txt files in $(Sl-Bin)"
@@ -1732,6 +1737,15 @@ function Set-RunEnv {
         if ($null -eq $script:UserAll[$kv[0]]) { [Environment]::SetEnvironmentVariable($kv[0], $(if ($c[$kv[1]] -eq '1' -and (OwnEngine)) { '1' } else { $null }), 'Process') }
     }
     Say "frame cap: $(switch ($env:VICTORY_FRAME_INTERVAL_MS) { '16.667' { '60 fps' } '8.333' { '120 fps' } '1' { 'none' } default { if ($env:VICTORY_FRAME_INTERVAL_MS) { $env:VICTORY_FRAME_INTERVAL_MS + ' ms' } else { '30 fps (the game''s own)' } } })   (FPS switches)   movies skipped: $(if ($env:VICTORY_SKIP_BINK) { 'ON' } else { 'off' })   (MOV)   fullscreen: $(if ($env:VICTORY_FULLSCREEN -eq '1') { 'ON' } else { 'off' })   (FS)   mouse capture: $(if ($env:VICTORY_MOUSE_CAPTURE -eq '1') { 'ON' } else { 'off' })   (MOUSE)"
+    # 6.25: the game world lit as trustno1-coder/VIctory-NVIDIA lights it
+    # (light estimated from the last frame's, air of rooms and reflections),
+    # cutscenes with this fork's soft fill light as before; told apart by the
+    # game's own camera cuts (LOOK: auto, world always, ours always). And the
+    # console's early depth test kept (nv 41b4a05: glass behind hair no
+    # longer takes the hair's depth, the haze no longer smears outlines).
+    if ($null -eq $script:UserAll['VICTORY_CUTSCENE_LOOK']) { [Environment]::SetEnvironmentVariable('VICTORY_CUTSCENE_LOOK', $(if ($c.look -and (OwnEngine)) { $c.look } else { $null }), 'Process') }
+    if ($null -eq $script:UserAll['VICTORY_EARLY_DEPTH']) { [Environment]::SetEnvironmentVariable('VICTORY_EARLY_DEPTH', $(if ((OwnEngine) -and $c.plain -ne '1') { '1' } else { $null }), 'Process') }
+    if (OwnEngine) { Say "light: $(switch ($env:VICTORY_CUTSCENE_LOOK) { 'world' { 'world look always' } 'ours' { 'soft fill light always' } default { 'world look in the game, soft fill light in cutscenes' } })   (LOOK switches)" }
     if (OwnEngine) { Say 'in the game: F1 settings menu (frame generation live, DLSS, fullscreen, mouse; arrows and Enter), F3 the numbers box' }
     # Its own cache: the old base's pipeline library and shaders do not mix.
     if (-not $env:VICTORY_CACHE_DIR -or $env:VICTORY_CACHE_DIR -eq (Join-Path $TryHome 'cache-8gb')) { $env:VICTORY_CACHE_DIR = Join-Path $TryHome 'cache-gta6' }
@@ -2431,7 +2445,7 @@ $script:Config = Load-Config
 # shadow fix, copies on the card, clean-up off, fps boost), whatever earlier
 # versions or a lost card switched off. D does the same at any time.
 function Reset-Recommended {
-    foreach ($k in @('fast', 'loop', 'wide', 'wavewide', 'new38', 'lazy', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'temporal', 'fxspeed', 'low', 'allout', 'dlss', 'fg', 'fps')) { $script:Config[$k] = '' }
+    foreach ($k in @('fast', 'loop', 'wide', 'wavewide', 'new38', 'lazy', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'temporal', 'fxspeed', 'low', 'allout', 'dlss', 'fg', 'fps', 'look')) { $script:Config[$k] = '' }
     $script:Config.defaults = '5.0'
     Save-Config
 }
@@ -2548,6 +2562,7 @@ function Show-Commands {
         @('MOV', 'Skip movies', $(& $on ($c.movies -eq 'skip')), 'the logos and intro movies end at once (the game loads on behind them)'),
         @('FS', 'Fullscreen', $(& $on ($c.fullscreen -eq '1')), 'a borderless window over the whole screen (also in the game''s F1 menu)'),
         @('MOUSE', 'Mouse capture', $(& $on ($c.mousecap -eq '1')), 'the pointer stays in the game''s window, hidden, and the mouse turns the camera'),
+        @('LOOK', 'Light look', $(switch ($c.look) { 'world' { 'wld' } 'ours' { 'fil' } default { 'aut' } }), 'auto: VIctory-NVIDIA''s world light in the game, the soft fill light in cutscenes; world; fill'),
         @('Y', 'fxceless speed set', $(& $on ($c.fxspeed -ne 'off')), 'heap work on its own thread, texture checks side by side, settle room (fxceless/victory-fork)'),
         @('X', 'Low preset', $(& $on $script:LowFromTry), '6 GB cards: game told 1280x720, textures up to 1536 MB (faster, blurrier; on by itself under 7 GB)'),
         @('J', 'Saved game', '', 'continue or new game (from the very beginning), bring a save back, ask before launch on/off'),
@@ -2567,7 +2582,7 @@ function Show-Commands {
         Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3])
     }
     Write-Host '  ====================================================================================' -ForegroundColor Cyan
-    Write-Host '  Switches (N, C, R, F, B, M, H, A, L, O, W, K, T, DL, FG, FPS, MOV, FS, MOUSE, Y, X, Z, D, MAX) flip at once and are saved; Enter then runs the game with them.'
+    Write-Host '  Switches (N, C, R, F, B, M, H, A, L, O, W, K, T, DL, FG, FPS, MOV, FS, MOUSE, LOOK, Y, X, Z, D, MAX) flip at once and are saved; Enter then runs the game with them.'
     Write-Host '  In the game: F1 opens the settings menu (frame generation, DLSS, fullscreen, mouse), F3 the numbers box.'
 }
 
@@ -2589,14 +2604,104 @@ function Show-Version {
     Say "game: $($c.game_exe)"
 }
 
+# 6.25: after a run, a short menu in the style of trustno1-coder/
+# VIctory-NVIDIA's PLAY_FRAMEGEN.cmd: a few ready-made modes, one key each
+# (no Enter needed), plain cmd-style lines; 8 opens the full list of
+# switches as before. Each mode is saved like the switches it sets.
+function Read-Key([string]$Allowed, [int]$TimeoutS = 0) {
+    $until = (Get-Date).AddSeconds($TimeoutS)
+    while ($true) {
+        $ch = ''
+        try {
+            if ([Console]::IsInputRedirected) {
+                if ($TimeoutS -gt 0) { Write-Host '1'; return '1' }
+                throw 'no console keys'
+            }
+            if ($TimeoutS -gt 0) {
+                while (-not [Console]::KeyAvailable) {
+                    if ((Get-Date) -gt $until) { Write-Host '1'; return '1' }
+                    Start-Sleep -Milliseconds 100
+                }
+            }
+            $key = [Console]::ReadKey($true)
+            $ch = $(if ($key.Key -eq [ConsoleKey]::Enter) { '1' } else { ([string]$key.KeyChar).ToUpper() })
+        } catch {
+            $ch = (Read-Host '  Choice').Trim().ToUpper()
+            if ($ch -eq '') { $ch = '1' }
+        }
+        if ($ch.Length -eq 1 -and $Allowed.Contains($ch)) { Write-Host $ch; return $ch }
+    }
+}
+function Mode-Line {
+    $c = $script:Config
+    $console = $(if ($c.console -eq 'series-s') { 'Series S' } else { 'Series X' })
+    $dlss = $(switch ($c.dlss) { 'off' { 'DLSS off' } 'balanced' { 'DLSS Balanced' } 'performance' { 'DLSS Performance' } 'ultraperformance' { 'DLSS Ultra Perf.' } 'dlaa' { 'DLAA' } default { 'DLSS Quality' } })
+    $fg = $(switch ($c.fg) { 'none' { 'no frame gen' } '' { 'frame gen ready (F1)' } default { "frame gen $($c.fg)x" } })
+    $fps = $(switch ($c.fps) { '120' { '120 fps cap' } 'max' { 'no fps cap' } '30' { '30 fps cap' } default { '60 fps cap' } })
+    "$console, $dlss, $fg, $fps$(if (AllOut) { ', EXTREME' })"
+}
+function Quick-Menu([int]$TimeoutS = 0) {
+    Write-Host ''
+    Write-Host '  ================================================'
+    Write-Host "    GTA VI - VIctory Try $TryVersion"
+    Write-Host "    now: $(Mode-Line)"
+    Write-Host '  ================================================'
+    Write-Host '    1. Play again, same settings           (Enter)'
+    Write-Host '    2. Series X + DLSS Quality + frame gen 2x'
+    Write-Host '    3. Series X + DLSS Quality, no frame gen'
+    Write-Host '    4. Series S + DLSS Quality + frame gen 2x (faster, softer)'
+    Write-Host '    5. Series X + DLSS Performance + frame gen 2x'
+    Write-Host '    6. EXTREME: DLSS Performance + frame gen 2x + all-out mode'
+    Write-Host '    7. Recommended settings'
+    Write-Host '    8. All settings (the full list of switches)'
+    Write-Host '    U. Update   P. Prepare again   Q. Quit'
+    Write-Host '  ------------------------------------------------'
+    Write-Host '    DLSS: GeForce RTX 20 and newer. Frame gen: RTX 40/50'
+    Write-Host '    (others run the same mode without it).'
+    Write-Host '    In the game: F1 settings menu, F3 numbers box.'
+    Write-Host ''
+    if ($TimeoutS -gt 0) { Write-Host "  (no key in $TimeoutS seconds: 1, the game starts)" }
+    Write-Host -NoNewline '  Choose 1-8, U, P or Q: '
+    return Read-Key '12345678UPQ' $TimeoutS
+}
+function Set-Mode([string]$Pick) {
+    $c = $script:Config
+    if ($Pick -eq '7') { Reset-Recommended; Say 'settings: the recommended ones'; return }
+    $console = $(if ($Pick -eq '4') { 'series-s' } else { 'series-x' })
+    if ($c.console -ne $console) { $c.console = $console; $c.console_auto = '5.6'; $c.console_user = '1' }
+    $c.dlss = $(if ($Pick -eq '5' -or $Pick -eq '6') { 'performance' } else { '' })
+    $c.fg = $(if ($Pick -eq '3') { 'none' } else { '2' })
+    $c.allout = $(if ($Pick -eq '6') { '1' } else { '' })
+    $c.plain = ''
+    Save-Config
+    Say "mode $Pick`: $(Mode-Line)"
+}
+
+# The menu first, as nv's cmd shows it, once the game is known (not after
+# U handed over to a newer VIctory Try: that was picked from the menu).
+$startPick = ''
+if ((OwnEngine) -and $script:Config.game_exe -and -not $handoff -and $env:VICTORY_TRY_NO_MENU -ne '1') {
+    $startPick = Quick-Menu 8
+    if ('234567'.Contains($startPick)) { Set-Mode $startPick; $startPick = '' }
+    elseif ($startPick -eq 'Q') { exit 0 }
+    elseif ($startPick -eq '1') { $startPick = '' }
+}
 while ($true) {
-    Run-Game
-    Show-Commands
+    if ($startPick) { $pick = $startPick; $startPick = '' }
+    else {
+        Run-Game
+        $pick = $(if (OwnEngine) { Quick-Menu } else { '8' })
+    }
+    $k = ''
+    if ('234567'.Contains($pick)) { Set-Mode $pick; continue }
+    if ($pick -eq '1') { continue }
+    if ($pick -ne '8') { $k = $pick }
+    if ($k -eq '') { Show-Commands }
     # Switches only change the setting and show the list again; Enter (or
     # U, G, P) runs the game, Q quits.
-    $k = ''
+    $preset = $k
     while ($true) {
-        $k = (Read-Host '  Choice').Trim().ToUpper()
+        if ($preset) { $k = $preset; $preset = '' } else { $k = (Read-Host '  Choice').Trim().ToUpper() }
         if ($k -eq 'V') { Show-Version; Show-Commands; continue }
         if ($k -eq 'TIDY') { Tidy-Disk $true; Show-Commands; continue }
         if ($k -eq 'J') { Save-Menu; Show-Commands; continue }
@@ -2636,6 +2741,7 @@ while ($true) {
             'MOV' { $c.movies = $(if ($c.movies -eq 'skip') { '' } else { 'skip' }) }
             'FS' { $c.fullscreen = $(if ($c.fullscreen -eq '1') { '' } else { '1' }) }
             'MOUSE' { $c.mousecap = $(if ($c.mousecap -eq '1') { '' } else { '1' }) }
+            'LOOK' { $c.look = $(switch ($c.look) { 'world' { 'ours' } 'ours' { '' } default { 'world' } }) }
             'X' { $c.low = $(if ($script:LowFromTry) { 'off' } else { '1' }) }
             'I' { if ($c.igpu -eq 'off') { $c.igpu = '' } else { $c.igpu = 'off'; Undo-Helper } }
             'R' { $c.res = $(if ($c.res -eq '4k') { '' } else { '4k' }) }

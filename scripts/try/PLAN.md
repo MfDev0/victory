@@ -1,4 +1,4 @@
-# VIctory Try: plan and to-do (6.10, updated for 6.24)
+# VIctory Try: plan and to-do (6.10, updated for 6.25)
 
 Goal: the whole picture rendered, **20+ fps** on the reporter's PC: RTX 4050
 Laptop (5921 MB, budget about 5153 MB), 12 threads, about 16 GB of RAM,
@@ -48,6 +48,27 @@ below are checked again.
       66afb2b4; parser only so far).
 - [x] Logs: `upscaler PC FidelityFX ...` line at start, providers offered
       and chosen, every 600 upscales how many were jittered (both paths).
+
+## Done in 6.25 ("the world's light": nv main d12eb1b, Itsbatt, edsuuu)
+
+- [x] nv ambient estimate as `ambient/estimate.rs` (its HLSL unchanged;
+      own heap of 1,024 view pairs; roots, constants and dispatches as nv's
+      `after`), roles by name in `ambient::role`, `draw::ambient_estimate`
+      finds the views from the title's tables (stencil planes skipped).
+- [x] `cutscene.rs`: camera cuts from the upscale reset flags (hle dlss /
+      fidelityfx / ffx, once a frame); auto look; a cut resets the mean.
+- [x] nv 41b4a05 early depth (Try sets it), nv 854f57f + 2dc3df1 thread
+      ticket, LEAVE_OUT default (foxhound's two).
+- [x] Itsbatt 92dc878 structure.rs whole-wave edge narrowing (its
+      resource.rs half was in via cool_fox f4b48ad).
+- [x] edsuuu 7e81806 targets room follows use (our console/35 % ceiling).
+- [x] try.ps1: LOOK, cmd-style quick menu (start, 8 s timeout; after runs),
+      DLSS download retried after 6 h.
+- [ ] First run: "light estimate (VIctory-NVIDIA's)" lines for all four
+      roles, "cutscene look: on/off" around the opening, no magenta; the
+      "card's memory for textures" line (Measured after the world).
+- Next: nv PRs #34 PLACED_ORDER, #43 Wave32 LDS alias, #41 AVX2 detiler;
+  nv SOFT_VIEWS; an F1 menu row for LOOK.
 
 ## Done in 6.24 ("NVIDIA DLSS": trustno1-coder/VIctory-NVIDIA, main 959dcaf)
 

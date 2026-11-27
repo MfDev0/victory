@@ -61,9 +61,11 @@ pub(crate) struct Shader {
     /// The first 8 bytes of its BLAKE3, as logged.
     pub(crate) hash: String,
     container: Vec<u8>,
-    /// Its result gets the least indirect light ([`crate::ambient`]).
+    /// Its part in the stand-in for the indirect light ([`crate::ambient`]):
+    /// the resolve whose result is raised, and (Try 6.25, from
+    /// trustno1-coder/VIctory-NVIDIA) the programs the estimate follows.
     #[cfg(windows)]
-    pub(crate) resolves_light: bool,
+    pub(crate) ambient: Option<crate::ambient::Role>,
     /// A pixel program of the title's decoration bake ([`bakes`]).
     #[cfg(windows)]
     pub(crate) bakes: bool,
@@ -122,9 +124,7 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
                 hash: full.to_hex()[..16].to_owned(),
                 container: bytes.to_vec(),
                 #[cfg(windows)]
-                resolves_light: bytes
-                    .windows(crate::ambient::PROGRAM.len())
-                    .any(|w| w == crate::ambient::PROGRAM),
+                ambient: (stage == "compute").then(|| crate::ambient::role(bytes)).flatten(),
                 #[cfg(windows)]
                 bakes: stage == "pixel" && bakes(bytes),
                 #[cfg(windows)]

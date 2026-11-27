@@ -28,6 +28,7 @@ mod renderdoc;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod shot;
 pub mod console;
+pub mod cutscene;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod copystat;
 #[cfg(windows)]

@@ -14,6 +14,10 @@
 //! `VICTORY_AMBIENT=<level>` sets it (0.45 by default, 0 for none); `off`
 //! keeps the title's own output.
 //! shortcut: the same light everywhere, from everywhere; gone once rays run.
+//!
+//! Try 6.25: during play the world gets trustno1-coder/VIctory-NVIDIA's
+//! estimate from the frame instead, with the air and reflections
+//! ([`estimate`]); cutscenes keep this constant (`crate::cutscene`).
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -26,8 +30,62 @@ use windows::core::s;
 use crate::host::{HostList, host};
 use crate::object::This;
 
+pub(crate) mod estimate;
+
 /// The programs it follows, by the start of their name.
 pub(crate) const PROGRAM: &[u8] = b"CS_ScreenProbes_TemporalResolve";
+
+/// The title's programs the stand-ins follow (Try 6.25, from
+/// trustno1-coder/VIctory-NVIDIA).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Role {
+    /// Resolves the diffuse light ([`PROGRAM`]): raised to the constant or
+    /// the estimate.
+    Resolve,
+    /// Keeps the light visible surfaces send out: the estimate's source.
+    Radiance,
+    /// The last program that writes what the air scatters.
+    Air,
+    /// Gives the reflection rays that found nothing the sky's light
+    /// (`CS_RayMiss`, not `CS_RayMiss_Volumetrics` nor the screen probes').
+    Miss,
+}
+
+/// The program's part, by its name in the container.
+pub(crate) fn role(container: &[u8]) -> Option<Role> {
+    let has = |name: &[u8]| container.windows(name.len()).any(|w| w == name);
+    if has(PROGRAM) {
+        Some(Role::Resolve)
+    } else if has(b"CS_CacheScreenSpaceRadiance") {
+        Some(Role::Radiance)
+    } else if has(b"CS_AccumulateLocalLightInscatteringVolume") {
+        Some(Role::Air)
+    } else if is_miss(container) {
+        Some(Role::Miss)
+    } else {
+        None
+    }
+}
+
+/// `CS_RayMiss_` and the eight hex digits of a variant's hash.
+fn is_miss(container: &[u8]) -> bool {
+    const NAME: &[u8] = b"CS_RayMiss_";
+    container.windows(NAME.len() + 9).any(|w| {
+        w.starts_with(NAME) && w[NAME.len()..NAME.len() + 8].iter().all(u8::is_ascii_hexdigit) && w[NAME.len() + 8] == b'_'
+    })
+}
+
+/// Where the other programs write what the estimate reads or changes: the
+/// light of visible surfaces, what the air scatters, the reflected light
+/// (R11G11B10, half the picture's size) and the depth the miss program reads
+/// (32-bit, the picture's size): root parameter and place in its table.
+pub(crate) const RADIANCE: (u8, u32) = (1, 16);
+pub(crate) const AIR: (u8, u32) = (1, 32);
+pub(crate) const MISS_LIGHT: (u8, u32) = (1, 104);
+pub(crate) const MISS_DEPTH: (u8, u32) = (0, 1000);
+/// The miss program's first root constant: which surfaces its rays are of.
+pub(crate) const MISS_OPAQUE: u32 = 0;
+pub(crate) const MISS_ALPHA: u32 = 1;
 /// Where they write the indirect diffuse light (R9G9B9E5 as 32-bit
 /// integers): root parameter and place in its table.
 pub(crate) const LIGHT: (u8, u32) = (1, 176);
@@ -575,6 +633,18 @@ pub(crate) fn raise(list: &HostList, light: This, depth: Option<This>, scenes: &
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn roles_by_name() {
+        use super::{Role, role};
+        assert_eq!(role(b"..CS_ScreenProbes_TemporalResolve_a911b49c_Wrapped.."), Some(Role::Resolve));
+        assert_eq!(role(b"..CS_CacheScreenSpaceRadiance_eed2fc35.."), Some(Role::Radiance));
+        assert_eq!(role(b"CS_AccumulateLocalLightInscatteringVolume_7e2f5eef"), Some(Role::Air));
+        assert_eq!(role(b"CS_TemporalResolve"), None);
+        assert_eq!(role(b"..CS_RayMiss_de6b91a6_Wrapped.."), Some(Role::Miss));
+        assert_eq!(role(b"..CS_RayMiss_Volumetrics_3c5d8c00_Wrapped.."), None);
+        assert_eq!(role(b"..CS_ScreenProbe_RayMiss_80a88544_Wrapped.."), None);
+    }
+
     /// The pass compiles with the system's compiler and the host takes it.
     #[test]
     fn ambient_pass_builds() {

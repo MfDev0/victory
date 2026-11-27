@@ -57,6 +57,38 @@ pub(super) fn denied(shaders: &[Arc<Shader>]) -> Option<&str> {
     shaders.iter().find(|s| list.contains(&s.hash)).map(|s| s.hash.as_str())
 }
 
+/// What foxhound and trustno1-coder/VIctory-NVIDIA leave out by default
+/// (Try 6.25): the decal heap's `CS_DefragHeap_ComputeRelocations`
+/// (02384a60fda6f2d0), whose host waves meet by spinning on 32-lane hosts:
+/// 11.85 ms of the card a frame in the first gameplay area (their timing run
+/// of 2026-11-26); and the heat-haze / in-scattering pass (731a39171b568298),
+/// which smears blocks of pixels, on water too.
+const LEAVE_OUT: &str = "02384a60fda6f2d0,731a39171b568298";
+
+/// `VICTORY_LEAVE_OUT=<16 hex digits>[,..]` (unset: [`LEAVE_OUT`]; `none`:
+/// nothing): shaders whose pipelines are left out in every build, their
+/// draws and dispatches dropped.
+fn leave_out() -> &'static [String] {
+    static HASHES: OnceLock<Vec<String>> = OnceLock::new();
+    HASHES.get_or_init(|| parse_leave_out(std::env::var("VICTORY_LEAVE_OUT").ok().as_deref()))
+}
+
+fn parse_leave_out(set: Option<&str>) -> Vec<String> {
+    set.unwrap_or(LEAVE_OUT)
+        .split(',')
+        .map(|h| h.trim().to_ascii_lowercase())
+        .filter(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+        .collect()
+}
+
+fn left_out(shaders: &[Arc<Shader>]) -> Option<&str> {
+    let list = leave_out();
+    if list.is_empty() {
+        return None;
+    }
+    shaders.iter().find(|s| list.contains(&s.hash)).map(|s| s.hash.as_str())
+}
+
 /// Try 6.19, after trustno1-coder/VIctory-NVIDIA 35c15608 (readmet3xt-lab):
 /// the light in the water's volume, in tiles
 /// (`water_shading:CS_TransmissionVolumetrics_Tiled` and `_Tiled_LocalLights`,
@@ -191,6 +223,15 @@ impl Pending {
                 let n = SAID.fetch_add(1, Ordering::Relaxed) + 1;
                 if n <= 8 || n.is_power_of_two() {
                     tracing::info!(hash, shaders = ?self.shaders, so_far = n, "pipeline not built: its shader is in VICTORY_DENY_PIPELINES (on purpose: Try lists the ray-tracing and driver-crashing ones)");
+                }
+                return None;
+            }
+            // Try 6.25 (trustno1-coder/VIctory-NVIDIA, from foxhound): the
+            // heat haze and the decal heap's defragmentation.
+            if let Some(hash) = left_out(&self.shaders) {
+                static SAID: AtomicU64 = AtomicU64::new(0);
+                if SAID.fetch_add(1, Ordering::Relaxed) < 4 {
+                    tracing::info!(hash, "pipeline left out (VICTORY_LEAVE_OUT: the heat haze, which smears blocks of pixels, and the decal heap's defragmentation, about 12 ms of the card a frame; =none runs them)");
                 }
                 return None;
             }
@@ -944,6 +985,16 @@ fn drained() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Try 6.25: unset leaves out foxhound's two; `none` (or anything with
+    /// no hash) nothing; a list its own.
+    #[test]
+    fn leave_out_list() {
+        assert_eq!(parse_leave_out(None), ["02384a60fda6f2d0", "731a39171b568298"]);
+        assert!(parse_leave_out(Some("none")).is_empty());
+        assert!(parse_leave_out(Some("")).is_empty());
+        assert_eq!(parse_leave_out(Some(" 02384A60FDA6F2D0 ,x")), ["02384a60fda6f2d0"]);
+    }
 
     /// A first use queues the pipeline and, within the budget, gets the
     /// worker's answer (here: no host pipeline for no shaders).

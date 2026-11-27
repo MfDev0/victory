@@ -1604,23 +1604,172 @@ pub(crate) fn squeezing<R>(f: impl FnOnce() -> R) -> R {
 /// 1280x720 and less), and never more than 35 % of the card's `budget`: on a
 /// 6 GB card (budget 5,153 MB, 2026-11-26 report) the 3,072 MB left the
 /// textures some 1,500 MB, and 27,000 of them waited, drawn black.
+///
+/// Try 6.25, after edsuuu/VI-BR-PORT 7e81806: that much is kept only until
+/// what the world's targets take is known ([`targets_rule`]). With the
+/// Series S profile and the upscaler at 720p they came to 1,407-1,445 MB at
+/// most; some 1,650 MB stayed kept for targets that never came, the queue
+/// had no room for new textures again and again (122 warnings in a prison
+/// run), 5-8 GB of host copies were let go and 2-4 GB made again, and slots
+/// went on showing other textures (a guard's forearms in a normal map's
+/// blue). Kept for what they really take: no warning, every lost swap made
+/// again, the looks for textures to let go 0.48 ms each instead of 5.50.
 #[cfg(windows)]
 pub(crate) fn targets_room_kept(budget: u64) -> u64 {
     use std::sync::atomic::Ordering::Relaxed;
-    static MOST: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
-    let asked = *MOST.get_or_init(|| {
+    // Every host texture's bytes less those of the copies the title fills.
+    let now = HOST_TEXTURES[1].load(Relaxed).saturating_sub(KINDS[1].load(Relaxed));
+    let peak = TARGETS_PEAK.fetch_max(now, Relaxed).max(now);
+    let (most, fixed) = targets_most(budget);
+    targets_rule(most, fixed, now, peak, targets_known(), TARGETS_GROWN.load(Relaxed)).0
+}
+
+/// The most kept for targets in all, and whether it was set by hand
+/// (`VICTORY_CARD_ROOM_FOR_TARGETS_MB=<n>`: that many in all, 0 none);
+/// without it 3,072 MB (Series S 1,536), never more than 35 % of `budget`.
+#[cfg(windows)]
+fn targets_most(budget: u64) -> (u64, bool) {
+    static ASKED: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    let asked = *ASKED.get_or_init(|| {
         std::env::var("VICTORY_CARD_ROOM_FOR_TARGETS_MB")
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
             .map(|mb| mb.min(8192) << 20)
     });
-    let most = asked.unwrap_or_else(|| {
-        let console = if crate::console::current() == crate::console::Console::SeriesS { 1536 << 20 } else { 3072 << 20 };
-        console.min(budget / 100 * 35)
-    });
-    // Every host texture's bytes less those of the copies the title fills.
+    match asked {
+        Some(most) => (most, true),
+        None => {
+            let console = if crate::console::current() == crate::console::Console::SeriesS { 1536 << 20 } else { 3072 << 20 };
+            (console.min(budget / 100 * 35), false)
+        }
+    }
+}
+
+/// The most bytes the textures the host writes held at once, since the
+/// start ([`targets_room_kept`]).
+#[cfg(windows)]
+static TARGETS_PEAK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Bytes added to the targets' margin each time the card's memory in use
+/// passed the system's budget ([`targets_presented`]).
+#[cfg(windows)]
+static TARGETS_GROWN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The first frame that ran 500 draws or more: the world's (its targets
+/// are made in it and the frames after).
+#[cfg(windows)]
+static WORLD_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+
+/// Frames after the world's first until what its targets take is taken
+/// for known: some ten seconds at the frame rates of a world that loads.
+const TARGETS_SETTLE_FRAMES: u64 = 300;
+
+/// The least margin kept above the targets' peak ([`targets_rule`]); the
+/// margin is otherwise a quarter of the peak.
+const TARGETS_MARGIN_MIN: u64 = 384 << 20;
+
+/// What is kept for targets in all once known grows by this much each
+/// time the card's memory in use passed the budget, up to the most.
+const TARGETS_GROW_STEP: u64 = 256 << 20;
+
+/// Whether what the world's targets take is known: [`TARGETS_SETTLE_FRAMES`]
+/// after its first frame.
+#[cfg(windows)]
+fn targets_known() -> bool {
+    let world = WORLD_AT.load(std::sync::atomic::Ordering::Relaxed);
+    world != u64::MAX && crate::frame::current().saturating_sub(world) >= TARGETS_SETTLE_FRAMES
+}
+
+/// Which rule set the room kept for targets ([`targets_rule`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TargetsBy {
+    /// `VICTORY_CARD_ROOM_FOR_TARGETS_MB`: that many in all.
+    Hand,
+    /// Before the world's targets are known: the most.
+    Unknown,
+    /// Their peak, a margin and what overruns of the budget added.
+    Measured,
+}
+
+/// The room kept for targets not made yet, and the rule that set it, from
+/// the most kept in all (`most`; set by hand: `fixed`), what the textures
+/// the host writes hold now (`now`) and held at most (`peak`), whether the
+/// world's targets are known, and what overruns of the budget added
+/// (`grown`). Kept in all: by hand, `most`; before the world's targets are
+/// known, `most`; then their peak and a quarter of it more (at least
+/// 384 MB: a cutscene's or a resolution's larger targets fit there), and
+/// `grown`, never more than `most`. What they hold now is not kept again.
+/// Pure, for tests.
+pub(crate) fn targets_rule(most: u64, fixed: bool, now: u64, peak: u64, known: bool, grown: u64) -> (u64, TargetsBy) {
+    let peak = peak.max(now);
+    let (all, by) = if fixed {
+        (most, TargetsBy::Hand)
+    } else if !known {
+        (most, TargetsBy::Unknown)
+    } else {
+        let margin = (peak / 4).max(TARGETS_MARGIN_MIN);
+        ((peak + margin + grown).min(most), TargetsBy::Measured)
+    };
+    (all.saturating_sub(now), by)
+}
+
+/// At each present (frame `frame`): notes the world's first frame (500
+/// draws or more since the last present), grows the targets' margin when
+/// the card's memory in use passed the system's budget (once a second at
+/// most), and says what the room for textures stands at: once a minute,
+/// and when the room kept for targets moved by 256 MB or more (once every
+/// five seconds at most). A cutscene or a resolution whose targets are
+/// larger than any before is met by the margin, by the system's count of
+/// memory in use that [`room`] reads, and by the margin grown here.
+#[cfg(windows)]
+pub(crate) fn targets_presented(frame: u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    static LAST_DRAWN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let drawn = crate::draw::drawn();
+    let before = LAST_DRAWN.swap(drawn, Relaxed);
+    if drawn.saturating_sub(before) >= 500 && WORLD_AT.compare_exchange(u64::MAX, frame, Relaxed, Relaxed).is_ok() {
+        tracing::info!(frame, "the world's first frame (500 draws or more): what its render targets take is measured from here on");
+    }
+    // Once a second.
+    static SECOND: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let now_ms = crate::host::now_ms();
+    let second = now_ms / 1000 + 1;
+    if SECOND.swap(second, Relaxed) == second {
+        return;
+    }
+    let Some([budget, used, ..]) = crate::host::host().and_then(|h| h.video_memory()) else {
+        return;
+    };
+    let (most, fixed) = targets_most(budget);
+    if used > budget && !fixed && targets_known() {
+        let grown = TARGETS_GROWN.load(Relaxed);
+        if grown < most {
+            TARGETS_GROWN.store((grown + TARGETS_GROW_STEP).min(most), Relaxed);
+        }
+    }
+    static SAID: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+    let kept = targets_room_kept(budget);
     let targets = HOST_TEXTURES[1].load(Relaxed).saturating_sub(KINDS[1].load(Relaxed));
-    most.saturating_sub(targets)
+    let (_, by) = targets_rule(most, fixed, targets, TARGETS_PEAK.load(Relaxed), targets_known(), TARGETS_GROWN.load(Relaxed));
+    let last_ms = SAID[0].load(Relaxed);
+    let moved = SAID[1].load(Relaxed).abs_diff(kept) >= 256 << 20;
+    if last_ms != 0 && now_ms.saturating_sub(last_ms) < 60_000 && !(moved && now_ms.saturating_sub(last_ms) >= 5000) {
+        return;
+    }
+    SAID[0].store(now_ms.max(1), Relaxed);
+    SAID[1].store(kept, Relaxed);
+    let mb = |b: u64| b >> 20;
+    tracing::info!(
+        "the card's memory for textures: {} MB in use of a budget of {} MB; kept for render targets not made yet {} MB ({:?}: targets hold {} MB now, {} MB at most; {} MB added after the budget was passed; VICTORY_CARD_ROOM_FOR_TARGETS_MB fixes it); room for new textures: {}",
+        mb(used),
+        mb(budget),
+        mb(kept),
+        by,
+        mb(targets),
+        mb(TARGETS_PEAK.load(Relaxed)),
+        mb(TARGETS_GROWN.load(Relaxed)),
+        if room() { "yes" } else { "no" }
+    );
 }
 
 /// [`room`] as it was at most a tenth of a second ago, for a question
@@ -3337,6 +3486,23 @@ static RESOURCE_FUNCTIONS: Table<32> = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Try 6.25 (edsuuu/VI-BR-PORT 7e81806): the room kept for render
+    /// targets follows what they take once the world's are known.
+    #[test]
+    fn the_room_for_targets_follows_what_they_take_once_known() {
+        const MB: u64 = 1 << 20;
+        let most = 3072 * MB;
+        assert_eq!(targets_rule(most, false, 652 * MB, 652 * MB, false, 0), (2420 * MB, TargetsBy::Unknown));
+        assert_eq!(targets_rule(most, false, 1400 * MB, 1445 * MB, true, 0), ((1445 + 384 - 1400) * MB, TargetsBy::Measured));
+        assert_eq!(targets_rule(most, false, 2000 * MB, 2400 * MB, true, 0), ((2400 + 600 - 2000) * MB, TargetsBy::Measured));
+        assert_eq!(targets_rule(most, false, 2000 * MB, 2800 * MB, true, 512 * MB).0, (3072 - 2000) * MB);
+        assert_eq!(targets_rule(most, false, 900 * MB, 1445 * MB, true, 0).0, (1445 + 384 - 900) * MB);
+        assert_eq!(targets_rule(most, false, 2500 * MB, 1445 * MB, true, 0).0, (3072 - 2500) * MB);
+        assert_eq!(targets_rule(most, false, 1400 * MB, 1445 * MB, true, 256 * MB).0, (1445 + 384 + 256 - 1400) * MB);
+        assert_eq!(targets_rule(1600 * MB, true, 1400 * MB, 1445 * MB, true, 256 * MB), (200 * MB, TargetsBy::Hand));
+        assert_eq!(targets_rule(0, true, 1400 * MB, 1445 * MB, false, 0).0, 0);
+    }
     use crate::object::slot;
 
     type Release = extern "system" fn(This) -> u32;

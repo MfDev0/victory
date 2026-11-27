@@ -596,6 +596,33 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      `VICTORY_DUALSENSE` (unset auto, 0 off, 1 both), `VICTORY_RAW_VIEW_CLAMP`
      (=0 off), `VICTORY_HELPER_PRIORITY` (=0 off). `VICTORY_KEYS` and
      `VICTORY_KEYS_FILE` in every build; `VICTORY_WINDOW_MAX=WxH`.
+   6.25 ("the world's light"; nv's ambient estimate, our cutscene look):
+   - `VICTORY_CUTSCENE_LOOK` (**LOOK**; unset auto, `world`, `ours`): auto
+     counts the title's upscaler resets (camera cuts; noted once a frame by
+     `hle::dlss`, `hle::fidelityfx` or `hle::ffx`): 3 in 20 s turn on our
+     constant fill light (`VICTORY_AMBIENT`, as 6.24), 15 s without one turn
+     on the world look again. A cut restarts the estimate's slow mean.
+   - World look (`victory_gpu::ambient::estimate`, nv's): after
+     `CS_CacheScreenSpaceRadiance` (keep, mean), `CS_ScreenProbes_TemporalResolve`
+     (place, gather, raise), `CS_AccumulateLocalLightInscatteringVolume` (air)
+     and `CS_RayMiss_<8 hex>_` (reflections, opaque layer;
+     `VICTORY_AMBIENT_SPECULAR_ALPHA=1` both). `VICTORY_AMBIENT_ESTIMATE`
+     (0.8), `VICTORY_AMBIENT_AIR` (1.5), `VICTORY_AMBIENT_SPECULAR=<share>[,<sky>]`
+     (1), `VICTORY_AMBIENT_ONCE=1`, `VICTORY_AMBIENT_SHADE`; `VICTORY_AMBIENT=off`
+     turns both looks off.
+   - `VICTORY_EARLY_DEPTH=1` (Try sets it; nv 41b4a05): DB_SHADER_CONTROL bit
+     12 gives DXIL's ForceEarlyDepthStencil where the program exports no
+     depth or stencil. `VICTORY_LEAVE_OUT` (unset:
+     `02384a60fda6f2d0,731a39171b568298`; `none`). `VICTORY_THREAD_TICKET`
+     (=0 off; nv 854f57f).
+   - Targets room (edsuuu 7e81806): measured 300 frames after the first
+     frame of 500+ draws; peak + max(peak/4, 384 MB) + 256 MB per budget
+     overrun, at most the old rule. `VICTORY_CARD_ROOM_FOR_TARGETS_MB` fixes it.
+   - Menu: after a run (and at start, 8 s, then 1) a cmd-style list read by
+     `[Console]::ReadKey` (Read-Host when input is redirected): 1 / Enter,
+     modes 2-6 (`Set-Mode`), 7 `Reset-Recommended`, 8 the full table, U, P,
+     Q. `VICTORY_TRY_NO_MENU=1`: none at start. `dlss_dl` keeps
+     `failed:<unix seconds>` and retries after 6 h.
    6.23 ("every shader"; the "do not translate" count of prepare):
    - ACCC containers (driver-compiled FidelityFX) translate: DXIL-or-ACCC in
      `emit::translate_plain`, `pipeline::translate`, the spilled path,
