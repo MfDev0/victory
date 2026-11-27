@@ -191,7 +191,23 @@ pub fn group_sync() -> u8 {
 /// does).
 pub fn shader_opt() -> u32 {
     static PASSES: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *PASSES.get_or_init(|| parse_shader_opt(std::env::var("VICTORY_SHADER_OPT").ok().as_deref()))
+    *PASSES.get_or_init(|| {
+        let mut passes = parse_shader_opt(std::env::var("VICTORY_SHADER_OPT").ok().as_deref());
+        // Try 6.22, after ZigZagBoi1/ScarlettPort 0.5.0 (on by default there,
+        // also beside a shader-opt value): `VICTORY_GUARD_SINK` one guard
+        // select per run of guarded writes (`bitcode::opt::GUARDS`, exact);
+        // `VICTORY_LOADS_WIDE` a console load's dwords four to a call
+        // (`bitcode::opt::WIDE`, with its masks and view-end guard). On unless
+        // `=0`, also with `VICTORY_SHADER_OPT=0` (Try's walls setting, which
+        // the passes that lost walls in 4.5 stay out of: neither was in the
+        // default then). Both change the translation, which the cache keys on.
+        for (name, bit) in [("VICTORY_GUARD_SINK", bitcode::opt::GUARDS), ("VICTORY_LOADS_WIDE", bitcode::opt::WIDE)] {
+            if std::env::var_os(name).is_none_or(|v| v != "0") {
+                passes |= bit;
+            }
+        }
+        passes
+    })
 }
 
 /// Everything a translation depends on besides the container: the
@@ -231,7 +247,7 @@ fn parse_shader_opt(value: Option<&str>) -> u32 {
             Some(hex) => u32::from_str_radix(hex, 16).ok(),
             None => v.parse().ok(),
         });
-    parsed.map_or(bitcode::opt::DEFAULT, |n| n & (bitcode::opt::ALL | bitcode::opt::FAST))
+    parsed.map_or(bitcode::opt::DEFAULT, |n| n & (bitcode::opt::ALL | bitcode::opt::FAST | bitcode::opt::GUARDS))
 }
 
 /// `VICTORY_SHADER_LOOP_LIMIT`'s value; the default when it is unset,
@@ -1221,7 +1237,7 @@ mod tests {
         assert_eq!(parse_shader_opt(Some("0x1")), 1);
         assert_eq!(parse_shader_opt(Some("127")), all);
         let fast = super::bitcode::opt::FAST;
-        assert_eq!(parse_shader_opt(Some("0xffffffff")), all | fast);
+        assert_eq!(parse_shader_opt(Some("0xffffffff")), all | fast | super::bitcode::opt::GUARDS);
         assert_eq!(parse_shader_opt(Some("255")), all | fast);
         assert_eq!(parse_shader_opt(Some("on")), usual);
     }

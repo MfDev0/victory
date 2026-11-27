@@ -524,15 +524,75 @@ fn card_for(size: u64) -> Option<ID3D12Resource> {
         }
         return None;
     }
-    if CARD_BYTES[0].fetch_add(size, Ordering::Relaxed) + size > most {
+    let big_room = card_big_room();
+    let most_here = if big_room > 0 && size >= BIG_COPY { most + big_room } else { most };
+    if CARD_BYTES[0].fetch_add(size, Ordering::Relaxed) + size > most_here {
         CARD_BYTES[0].fetch_sub(size, Ordering::Relaxed);
+        // Said (it was silent): this refusal is what kept the upscaler's
+        // 24 MB network in the PC's memory once small copies had taken the
+        // cap (ScarlettPort 0.5.0).
+        let n = CARD_REFUSED[0].fetch_add(1, Ordering::Relaxed) + 1;
+        let bytes = CARD_REFUSED[1].fetch_add(size, Ordering::Relaxed) + size;
+        if n <= 64 || n.is_multiple_of(32) {
+            tracing::info!(
+                "no card copy for a title buffer of {} KiB: the copies made hold {} MB of at most {} MB (big copies' room {} MB, \
+                 VICTORY_CARD_BIG_ROOM); {} buffers turned down so far ({} MB), frame {}",
+                size >> 10,
+                CARD_BYTES[0].load(Ordering::Relaxed) >> 20,
+                most_here >> 20,
+                big_room >> 20,
+                n,
+                bytes >> 20,
+                crate::frame::current()
+            );
+        }
         return None;
+    }
+    if most_here > most && CARD_BYTES[0].load(Ordering::Relaxed) > most {
+        tracing::info!(
+            "card copy of a big title buffer made past the copies' cap (VICTORY_CARD_BIG_ROOM): {} KiB, copies now {} MB of {} MB \
+             + {} MB for big ones, frame {}",
+            size >> 10,
+            CARD_BYTES[0].load(Ordering::Relaxed) >> 20,
+            most >> 20,
+            big_room >> 20,
+            crate::frame::current()
+        );
     }
     let buffer = host.uav_buffer(size);
     if buffer.is_none() {
         CARD_BYTES[0].fetch_sub(size, Ordering::Relaxed);
     }
     buffer
+}
+
+/// Buffers of this size or more may use [`card_big_room`].
+const BIG_COPY: u64 = 16 << 20;
+
+/// Bytes of card copies beyond [`card_limits`]' second number that only
+/// title buffers of 16 MiB or more may take (`VICTORY_CARD_BIG_ROOM=<MB>`;
+/// unset or `1`: 256 MB; `0`: off). From ZigZagBoi1/ScarlettPort 0.5.0
+/// (f059bbf, on by default there): copies are made first come, first
+/// served, and the world load's hundreds of small copies took the whole cap
+/// before the upscaler's buffers were made, so its 24 MB network stayed in
+/// the PC's memory and its three 3x3 convolutions read it over the bus:
+/// 55.7-70.8 ms a frame for its slowest pass against 0.10-0.28 ms in the
+/// card's memory (RTX 3060). A copy made through this room is an ordinary
+/// card copy, and the rule that a fifth of the card's budget stays free
+/// still holds, so a 6 GB card is not pushed past its budget by it.
+fn card_big_room() -> u64 {
+    static ROOM: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *ROOM.get_or_init(|| {
+        let mb = match std::env::var("VICTORY_CARD_BIG_ROOM").ok().as_deref().map(str::trim) {
+            Some("0") => 0,
+            None | Some("" | "1") => 256,
+            Some(s) => s.parse::<u64>().unwrap_or(0),
+        };
+        if mb > 0 {
+            tracing::info!(big_room_mb = mb, least_mb = BIG_COPY >> 20, "room for big card copies past the cap");
+        }
+        mb << 20
+    })
 }
 
 /// The most bytes of windows outside buffers whose copies go to the card's

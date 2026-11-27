@@ -78,6 +78,15 @@ pub const DEFAULT: u32 = ALL | FAST;
 /// without it, 255 every pass with it. Outside [`ALL`], so `127` stays
 /// "every pass" without it.
 pub const FAST: u32 = 128;
+/// One guard select for a run of guarded writes, not one each
+/// ([`Module::sink_guards`]). A block whose EXEC the console narrows without
+/// a branch has every vector write lowered as `select(g, new, old)`; a run of
+/// such writes (the int8 networks' `v_dot4` chains: 7,008 selects in one
+/// program, one per dot product) then costs a select per instruction. Exact.
+/// From ZigZagBoi1/ScarlettPort 0.5.0 (bit 128 there, `SCARLETT_GUARD_SINK`,
+/// on by default): on here unless `VICTORY_GUARD_SINK=0`, whatever
+/// `VICTORY_SHADER_OPT` says. Outside [`ALL`].
+pub const GUARDS: u32 = 256;
 
 /// What the instructions a module writes use, of the features a shader
 /// declares by flag (the validator's "flags must match usage").
@@ -237,6 +246,9 @@ pub(super) fn effect(f: &Func) -> Effect {
 impl Module {
     /// Runs the clean-up passes named in `passes` ([`ALL`]: every one).
     pub(crate) fn optimise(&mut self, passes: u32) {
+        if passes & GUARDS != 0 {
+            self.sink_guards();
+        }
         if passes & (FOLD | REUSE | FACTS | LOADS) != 0 {
             // Values merged in one round can make two joins the same in
             // the next (a loop's registers that only go round), and a
@@ -929,6 +941,110 @@ impl Module {
         true
     }
 
+    /// [`GUARDS`]: a guarded write is `select(g, new, old)`. Two rules, both
+    /// exact:
+    /// - a select on `g` whose arm is itself a select on `g` takes that
+    ///   select's own arm on the same side (`select(g, x, select(g, a, b))`
+    ///   is `select(g, x, b)`);
+    /// - an instruction without an effect whose result is only ever seen in
+    ///   lanes where `g` holds (it reaches nothing but the taken arm of
+    ///   selects on `g`, through other such instructions) reads `a` where
+    ///   it read `select(g, a, b)`: the same value in every lane that can
+    ///   see the result.
+    ///
+    /// A run of writes under one guard then keeps one select at its end;
+    /// [`DEAD`] takes out the rest. Reads of memory and divisions are not
+    /// rewritten (another address or divisor in a lane nobody looks at is
+    /// still a read or a division by zero there).
+    fn sink_guards(&mut self) {
+        #[derive(Clone, Copy, PartialEq)]
+        enum Only {
+            /// No use seen yet.
+            Top,
+            /// Seen only where this condition holds.
+            Under(V),
+            /// Seen elsewhere too.
+            Any,
+        }
+        let meet = |a: Only, b: Only| match (a, b) {
+            (Only::Top, x) | (x, Only::Top) => x,
+            (Only::Under(x), Only::Under(y)) if x == y => Only::Under(x),
+            _ => Only::Any,
+        };
+        if self.blocks.is_empty() {
+            return;
+        }
+        let effects = self.effects();
+        let tree = self.dominator_tree();
+        let n = self.insts.len();
+        let rewritable = |m: &Module, i: u32| match &m.insts[i as usize].op {
+            Op::Bin(op, ..) => !matches!(op, Bin::UDiv | Bin::SDiv | Bin::URem),
+            Op::Cast(..) | Op::Cmp(..) | Op::Select(..) | Op::Extract(..) => true,
+            Op::Call(f, _) => effects[*f as usize] == Effect::Pure,
+            _ => false,
+        };
+        let mut only = vec![Only::Top; n];
+        // Users after the values they read: blocks in reverse dominator
+        // order, each from its end.
+        for &b in tree.order.iter().rev() {
+            if let Some(Term::CondBr(V::Inst(c), ..)) = self.blocks[b].term {
+                only[c as usize] = Only::Any;
+            }
+            let blk = &self.blocks[b];
+            for &k in blk.body.iter().rev().chain(blk.phis.iter()) {
+                // (`Top`: unread, dead code passes nothing on.)
+                let mine = if rewritable(self, k) { only[k as usize] } else { Only::Any };
+                let op = &self.insts[k as usize].op;
+                let mut seen = |v: V, how: Only| {
+                    if let V::Inst(j) = v {
+                        only[j as usize] = meet(only[j as usize], how);
+                    }
+                };
+                match op {
+                    Op::Select(c, t, f) => {
+                        seen(*c, Only::Any);
+                        // The taken arm is seen where `c` holds (and no more
+                        // than where the select is seen).
+                        seen(*t, if t == f { mine } else { Only::Under(*c) });
+                        seen(*f, mine);
+                    }
+                    Op::Phi(_) => for_each_operand(op, |v| seen(v, Only::Any)),
+                    _ => for_each_operand(op, |v| seen(v, mine)),
+                }
+            }
+        }
+        let arm = |m: &Module, v: V, g: V, taken: bool| -> V {
+            let mut v = v;
+            for _ in 0..64 {
+                match v {
+                    V::Inst(s) => match &m.insts[s as usize].op {
+                        Op::Select(c, a, b) if *c == g => v = if taken { *a } else { *b },
+                        _ => break,
+                    },
+                    _ => break,
+                }
+            }
+            v
+        };
+        for &b in &tree.order {
+            for idx in 0..self.blocks[b].body.len() {
+                let k = self.blocks[b].body[idx];
+                let mut op = self.insts[k as usize].op.clone();
+                if let Op::Select(c, t, f) = &mut op {
+                    let g = *c;
+                    *t = arm(self, *t, g, true);
+                    *f = arm(self, *f, g, false);
+                }
+                if let Only::Under(g) = only[k as usize]
+                    && rewritable(self, k)
+                {
+                    map_operands(&mut op, |v| if v == g { v } else { arm(self, v, g, true) });
+                }
+                self.insts[k as usize].op = op;
+            }
+        }
+    }
+
     /// Whether instruction `i` must stay whatever reads it.
     fn has_effect(&self, effects: &[Effect], i: u32) -> bool {
         match &self.insts[i as usize].op {
@@ -1311,6 +1427,41 @@ mod tests {
         };
         assert_eq!(mask(&m, narrowed), 3, "components 0 and 1");
         assert_eq!(mask(&m, kept), 15, "its status is read");
+        m.write();
+    }
+
+    #[test]
+    fn a_run_of_guarded_writes_keeps_one_select() {
+        let Kit {
+            mut m,
+            b,
+            pure,
+            reads,
+            writes,
+        } = kit();
+        let (one, two) = (m.i32(1), m.i32(2));
+        let lane = m.call(b, reads, vec![one, one]);
+        let g = m.cmp(b, pred::IULT, lane, two);
+        // r = old; four times: r = g ? f(r) : r; then stored.
+        let old = m.call(b, reads, vec![two, two]);
+        let mut r = old;
+        for _ in 0..4 {
+            let x = m.call(b, pure, vec![r, one]);
+            r = m.select(b, g, x, r);
+        }
+        // A read under the same guard keeps its select'd address.
+        let seen = m.call(b, reads, vec![r, one]);
+        let y = m.select(b, g, seen, old);
+        m.call(b, writes, vec![r, y]);
+        m.terminate(b, Term::Ret);
+        // (the first input is the lane's: the guard holds for 0 and not for 3)
+        let inputs: [&[u32]; 2] = [&[0, 1, 2, 3, 5], &[3, 1, 2, 7, 5]];
+        let before: Vec<_> = inputs.iter().map(|i| run(&m, i)).collect();
+        let selects = |m: &Module| m.blocks[b].body.iter().filter(|&&i| matches!(m.insts[i as usize].op, Op::Select(..))).count();
+        m.optimise(GUARDS | DEAD);
+        let after: Vec<_> = inputs.iter().map(|i| run(&m, i)).collect();
+        assert_eq!(after, before);
+        assert_eq!(selects(&m), 2, "the last write's and the read's");
         m.write();
     }
 

@@ -177,6 +177,77 @@ fn parse_manifest(bytes: &[u8]) -> Option<Vec<String>> {
     (out.len() >= 2).then_some(out)
 }
 
+/// Windows errors that clear up by themselves while a virus scanner, the
+/// indexer or an Explorer window holds a handle for a moment: access denied
+/// (5), sharing violation (32), lock violation (33).
+fn transient(e: &std::io::Error) -> bool {
+    cfg!(windows) && matches!(e.raw_os_error(), Some(5 | 32 | 33))
+}
+
+/// Runs `op` again after a short wait while it fails with a [`transient`]
+/// error (about two seconds in all). Only for the reads and the one rename
+/// a save needs, never for removing leftovers (ScarlettPort 0.5.0: retried
+/// removals of six leftovers under the saves' lock held the boot for about
+/// 243 s).
+fn retry<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut wait = 10;
+    let mut tries = 1;
+    loop {
+        match op() {
+            Err(e) if transient(&e) && tries < 12 => {
+                std::thread::sleep(std::time::Duration::from_millis(wait));
+                wait = (wait * 2).min(250);
+                tries += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Removes a leftover (an unfinished or an older version) once, without
+/// waiting; what will not go stays alone for the rest of the run. It must
+/// never make the container unreadable or unsavable, which loses the save
+/// (and with it the profile's accepted terms, so the first-boot screens
+/// come back). From ZigZagBoi1/ScarlettPort f059bbf (`SAVE_NO_WAIT`, its
+/// default).
+fn discard(path: &Path) {
+    static STAYED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    let stayed = || STAYED.lock().unwrap_or_else(|e| e.into_inner());
+    if stayed().iter().any(|p| p == path) {
+        return;
+    }
+    match remove_plainly(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            tracing::debug!(path = %path.display(), %e, "game save: leftover not removed yet");
+            stayed().push(path.to_path_buf());
+        }
+    }
+}
+
+/// `remove_dir_all`, and where that fails, the folder's files one by one and
+/// then the folder by its path. On the PC ScarlettPort measured this on,
+/// `remove_dir_all` removed the files and then failed on the folder itself
+/// with a sharing violation every time, also for an empty folder hours old,
+/// while `remove_dir` removed it at once.
+fn remove_plainly(path: &Path) -> std::io::Result<()> {
+    let Err(first) = std::fs::remove_dir_all(path) else {
+        return Ok(());
+    };
+    if first.kind() == std::io::ErrorKind::NotFound {
+        return Err(first);
+    }
+    // Version folders hold files only; anything else stays, and the folder
+    // with it.
+    for entry in std::fs::read_dir(path)?.flatten() {
+        if entry.file_type().is_ok_and(|t| t.is_file()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    std::fs::remove_dir(path)
+}
+
 /// The container's newest committed version, if any. Removes what a crash
 /// left: unfinished versions and older ones (what cannot be removed now
 /// is left for a later call).
@@ -186,7 +257,7 @@ fn current(dir: &Path) -> std::io::Result<Option<Version>> {
         let file = entry.file_name();
         let file = file.to_string_lossy();
         if file.ends_with(".new") {
-            std::fs::remove_dir_all(entry.path())?;
+            discard(&entry.path());
         } else if let Some(digits) = file.strip_prefix('v')
             && let Ok(number) = digits.parse::<u64>()
             && digits == number.to_string()
@@ -207,13 +278,15 @@ fn current(dir: &Path) -> std::io::Result<Option<Version>> {
     // file was held.
     for old in &committed[..committed.len() - 1] {
         let path = dir.join(format!("v{old}"));
-        if let Err(e) = std::fs::remove_dir_all(&path) {
+        if let Err(e) = remove_plainly(&path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
             tracing::info!(dir = %path.display(), %e, "an older save version stays for now; it goes at a later save");
         }
     }
     let version = dir.join(format!("v{number}"));
     let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "bad save manifest");
-    let mut names = parse_manifest(&std::fs::read(version.join(MANIFEST))?).ok_or_else(bad)?;
+    let mut names = parse_manifest(&retry(|| std::fs::read(version.join(MANIFEST)))?).ok_or_else(bad)?;
     let blobs = names.split_off(2);
     let [name, display] = <[String; 2]>::try_from(names).map_err(|_| bad())?;
     Ok(Some(Version {
@@ -255,9 +328,18 @@ fn commit(
     display: &str,
     blobs: &[(&str, Source<'_>)],
 ) -> std::io::Result<()> {
-    let staged = dir.join(format!("v{number}.new"));
-    if staged.exists() {
-        std::fs::remove_dir_all(&staged)?;
+    // A leftover staging folder that cannot be removed (a scanner holds it)
+    // is not in the way: stage under another name (ScarlettPort f059bbf).
+    let mut staged = dir.join(format!("v{number}.new"));
+    for n in 1..=8 {
+        if !staged.exists() {
+            break;
+        }
+        discard(&staged);
+        if !staged.exists() {
+            break;
+        }
+        staged = dir.join(format!("v{number}.{n}.new"));
     }
     std::fs::create_dir_all(&staged)?;
     let write = |path: PathBuf, data: &[u8]| -> std::io::Result<()> {
@@ -278,7 +360,11 @@ fn commit(
     let names: Vec<&str> = blobs.iter().map(|(n, _)| *n).collect();
     write(staged.join(MANIFEST), &manifest(name, display, &names))?;
     step();
-    std::fs::rename(&staged, dir.join(format!("v{number}")))?;
+    // The one step that commits (retried over a scanner's brief hold).
+    if let Err(e) = retry(|| std::fs::rename(&staged, dir.join(format!("v{number}")))) {
+        discard(&staged);
+        return Err(e);
+    }
     step();
     Ok(())
 }
@@ -490,7 +576,7 @@ impl Update {
         }
         // The old version is garbage now; a crash here leaves it for later.
         if let Some(old) = &current {
-            let _ = std::fs::remove_dir_all(&old.dir);
+            discard(&old.dir);
             step();
         }
         S_OK

@@ -74,7 +74,7 @@ const WATER_LIGHT: [&str; 2] = ["5dc3b25986622949", "6f225b641c5b0708"];
 /// left out ([`WATER_LIGHT`]).
 ///
 /// Try 6.21: also run (not left out) when `VICTORY_WAVE_PAIRS_ONLY` lists
-/// them: the paired wave64 form of fxceless/victory-fork (pull requests
+/// them (Try 6.22: its default lists them, so they run by default): the paired wave64 form of fxceless/victory-fork (pull requests
 /// #1397 and #1419, gfx48), in which their sums are exact and the water has
 /// its colour without the wave-wide form's dark tiles (his tester,
 /// 2026-11-27, with `VICTORY_WAVE_PAIRS_FP32=non-ieee-rne-ftz`).
@@ -82,8 +82,10 @@ pub(super) fn water_light_left_out(shaders: &[Arc<Shader>]) -> bool {
     static ASKED: OnceLock<bool> = OnceLock::new();
     !*ASKED.get_or_init(|| {
         std::env::var_os("VICTORY_WATER_LIGHT").is_some_and(|v| v == "1")
-            || std::env::var("VICTORY_WAVE_PAIRS_ONLY")
-                .is_ok_and(|list| WATER_LIGHT.iter().all(|h| list.to_ascii_lowercase().contains(h)))
+            || {
+                let list = crate::shader_cache::wave_pairs_only().to_ascii_lowercase();
+                WATER_LIGHT.iter().all(|h| list.contains(h))
+            }
     })
         && victory_shader::emit::host_uses_wave32()
         && shaders.iter().any(|s| WATER_LIGHT.contains(&s.hash.as_str()))

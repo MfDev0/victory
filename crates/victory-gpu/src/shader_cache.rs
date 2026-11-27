@@ -212,11 +212,21 @@ fn build() -> [u8; 32] {
         h.update(value.as_encoded_bytes());
     }
     h.update(b"\0VICTORY_WAVE_PAIRS_ONLY=");
-    if let Some(value) = std::env::var_os("VICTORY_WAVE_PAIRS_ONLY") {
-        h.update(value.as_encoded_bytes());
-    }
+    h.update(wave_pairs_only().as_bytes());
     h.update(include_bytes!("shader_cache.rs"));
     *h.finalize().as_bytes()
+}
+
+/// The water's two tiled light programs (transmission volumetrics), whose
+/// wave64 sums the paired form replays exactly.
+pub(crate) const WATER_PAIRS: &str = "5dc3b25986622949,6f225b641c5b0708";
+
+/// `VICTORY_WAVE_PAIRS_ONLY` as it holds for this run: the programs
+/// translated in the paired wave64 form. Try 6.22: unset means the water's
+/// two programs ([`WATER_PAIRS`], with `VICTORY_WAVE_PAIRS_FP32` defaulting to
+/// `non-ieee-rne-ftz`); set it to another list, or empty or `none` for none.
+pub(crate) fn wave_pairs_only() -> String {
+    std::env::var("VICTORY_WAVE_PAIRS_ONLY").unwrap_or_else(|_| WATER_PAIRS.to_owned())
 }
 
 /// A container translated with the wave-wide form allowed when its hash is
@@ -243,8 +253,7 @@ fn translate_listed(c: &[u8]) -> Result<HostShader, String> {
     let wide = list.iter().any(|h| hash.starts_with(h.as_str()));
     static PAIRS: OnceLock<Vec<String>> = OnceLock::new();
     let pairs = PAIRS.get_or_init(|| {
-        std::env::var("VICTORY_WAVE_PAIRS_ONLY")
-            .unwrap_or_default()
+        wave_pairs_only()
             .split(',')
             .map(|h| h.trim().to_ascii_lowercase())
             .filter(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
