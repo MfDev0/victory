@@ -1914,8 +1914,8 @@ pub(crate) fn let_go_idle() {
     // looked at every two seconds at most.
     let targets_due = target_sweep() > 0 && {
         let now = crate::host::now_ms();
-        let at = TARGETS_AT.load(Relaxed);
-        now.saturating_sub(at) >= 2_000 && TARGETS_AT.compare_exchange(at, now, Relaxed, Relaxed).is_ok()
+        let at = TARGET_LOOK_AT.load(Relaxed);
+        now.saturating_sub(at) >= 2_000 && TARGET_LOOK_AT.compare_exchange(at, now, Relaxed, Relaxed).is_ok()
     };
     let over_budget = video.is_some_and(|[budget, used, ..]| budget > 0 && used > budget);
     // For the trail (`crate::host::trail`): how many went, their bytes,
@@ -1991,7 +1991,7 @@ pub(crate) static SWEEP_618: [std::sync::atomic::AtomicU64; 6] = [const { std::s
 
 /// When [`let_go_idle`] last looked at render targets (`crate::host::now_ms`).
 #[cfg(windows)]
-static TARGETS_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static TARGET_LOOK_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Try 6.18: how long a texture let go once and made again must be unused
 /// before the sweep lets it go again, in milliseconds
