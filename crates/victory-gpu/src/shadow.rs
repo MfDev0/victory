@@ -5802,12 +5802,20 @@ fn lookup_tables(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
                 crate::host::name(&on_card, || {
                     format!("title buffer {:#x}+{len:#x}, shaders' side{}", key.0, if in_pc { " in the PC's memory" } else { " on the card" })
                 });
-                tracing::info!(
-                    start = format_args!("{:#x}", key.0),
-                    len,
-                    in_pc,
-                    "a buffer's host copy is in the card's memory (in_pc: its shaders' side in the PC's, compared on the card)"
-                );
+                // The first 64, then every 256th: with
+                // `VICTORY_CARD_BUFFERS_MIN_KB=64` nearly every title buffer
+                // comes here.
+                static SAID: AtomicU64 = AtomicU64::new(0);
+                let said = SAID.fetch_add(1, Ordering::Relaxed);
+                if said < 64 || said % 256 == 0 {
+                    tracing::info!(
+                        start = format_args!("{:#x}", key.0),
+                        len,
+                        in_pc,
+                        made = said + 1,
+                        "a buffer's host copy is in the card's memory (in_pc: its shaders' side in the PC's, compared on the card)"
+                    );
+                }
                 let card = Card {
                     staging: buffer,
                     before: Mutex::default(),

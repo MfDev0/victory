@@ -1334,6 +1334,19 @@ function Set-RunEnv {
             [Environment]::SetEnvironmentVariable($name, $(if ($want) { $kv[1] } else { $null }), 'Process')
         }
     }
+    # 6.22: every title buffer of 64 KiB and more gets a copy in the card's
+    # memory (VICTORY_CARD_BUFFERS_MIN_KB=64, as ScarlettPort's Stable
+    # preset): the small ones are nearly all there are and few bytes, and in
+    # the PC's memory every load and store a shader makes on them crosses the
+    # bus (fxceless measured, RTX 3060 12 GB: the title's lists 68.0 -> 49.8
+    # ms of card time a frame). The copies stay inside the card buffer cap.
+    # Not with the hybrid (H: small buffers are the title's own memory
+    # there), not in plain mode, and not over a VICTORY_CARD_BUFFERS_MIN_MB or
+    # _MIN_KB set before VIctory Try started (_MIN_KB=0 turns it off).
+    if ($null -eq $script:UserAll['VICTORY_CARD_BUFFERS_MIN_KB']) {
+        $minKb = ($null -eq $script:UserAll['VICTORY_CARD_BUFFERS_MIN_MB']) -and ($null -eq $script:UserAll['VICTORY_INPLACE']) -and $c.hybrid -ne '1' -and $c.plain -ne '1'
+        [Environment]::SetEnvironmentVariable('VICTORY_CARD_BUFFERS_MIN_KB', $(if ($minKb) { '64' } else { $null }), 'Process')
+    }
     # 4.4: the picture fixes. Ambient light (Belobug/VIctory-Belobug-AMD):
     # the game's light that bounces around comes from ray-traced probes that
     # do not run here, so whatever the sun did not reach was black; a soft
