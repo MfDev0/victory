@@ -568,6 +568,23 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.21 ("from the 4070 fork"; fxceless/victory-fork up to 9a9091d):
+   - Taken by cherry-pick (fx author kept; messages `fx <commit>: ...`):
+     d9049b4, 59750d7, 3382ad9, 2c6bc78, #1376, #1380, a42b627 (#1312),
+     30c1466, 0a40a00, 4c60466, b1d777a (by hand where it met ours), 62a8d51,
+     f9e0371, 3221ac4, 0e006f0, 81d54b0 (#1407), 8a32d0b (#1419), 3ab5c12,
+     b63b465, 50c79c3, e3307c7, a918163, 4966cd6, 17533c5, bcc5421, 1170216,
+     1320dfd, 9a9091d. Kept ours: `merge_runs()` 16384, the workers in
+     `pipeline/make.rs`, `bounds_pipeline`.
+   - `pipeline::builder_runs`: only with `VICTORY_BVH_BUILDER=1` (fx 4966cd6
+     made it the default; 0.2-3 fps on his 4070); `intersect::no_hit` on
+     while it is off, and `lower::descriptor_data` reads 0 then too (the five
+     RT computes translate without `VICTORY_SKIP_RT`).
+   - `make::water_light_left_out`: not when `VICTORY_WAVE_PAIRS_ONLY` lists
+     both `WATER_LIGHT` hashes (the paired form).
+   - try.ps1: `VICTORY_DENY_PIPELINES_FILE` = rt-off-hashes.txt.
+   - Skipped: 3461f52 (GPU detile, needs fx's staging pool), ff1776b (ours has
+     `VICTORY_DUMP_FAILED`), a7ee5df (`VICTORY_SPREAD_LEAN`, off in fx).
    6.20 ("a clean log"; every WARN of the 6.18 report):
    - try.ps1 `Set-AllOut`: on cards under 8 GB, `VICTORY_CARD_BUFFERS_MB=512`
      (a fifth of the card before) and no 35% BAR windows (20% as normally).

@@ -66,6 +66,12 @@ filled textures a minute (650-750 MB) at its 1 s Critical idle; placeholders
       while the card is past its budget; no slot, no list, twin unheld.
 - [x] Curtain 1.5 s (`VICTORY_JOIN_HOLD_MS`).
 - [x] Log: `texture sweep (6.18)` line; `PLACEHOLDER_KINDS`.
+6.21 ("from the 4070 fork"):
+- [x] fxceless/victory-fork up to 9a9091d ported (28 commits); the BVH
+      builder kept off; the five RT computes translate by default; the deny
+      list as a file; water light opt-in through VICTORY_WAVE_PAIRS_ONLY.
+- Next: card copies 1,805 MB against the 1,031 MB limit (`shadow::card_limits`);
+  write-watch asking 66.7 ms (`watch::ask_once` in `host::submit`).
 6.20 ("a clean log"):
 - [x] Every WARN of the 6.18 report: card budgets on small cards (all-out),
       5 untranslated RT computes, CB off 256, raw view off 16, a CB's
