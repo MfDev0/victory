@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.25'
+$TryVersion = '6.26'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live, tried when the fork itself cannot be
@@ -72,11 +72,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = ''; tidy = ''; meter = ''; beside = ''; dlss = ''; fg = ''; fps = ''; movies = ''; fullscreen = ''; mousecap = ''; imeen = ''; look = ''; dlss_dl = ''; menu_seen = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = ''; tidy = ''; meter = ''; beside = ''; dlss = ''; fg = ''; fps = ''; movies = ''; fullscreen = ''; mousecap = ''; imeen = ''; look = ''; dlss_dl = ''; sl_dir = ''; menu_seen = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin', 'tidy', 'meter', 'beside', 'dlss', 'fg', 'fps', 'movies', 'fullscreen', 'mousecap', 'imeen', 'look', 'dlss_dl', 'menu_seen')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin', 'tidy', 'meter', 'beside', 'dlss', 'fg', 'fps', 'movies', 'fullscreen', 'mousecap', 'imeen', 'look', 'dlss_dl', 'sl_dir', 'menu_seen')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -1012,7 +1012,6 @@ $SlTag = 'v2.14.16'
 $SlDlls = @('sl.interposer.dll', 'sl.common.dll', 'sl.dlss.dll', 'sl.dlss_g.dll', 'sl.reflex.dll', 'sl.pcl.dll', 'nvngx_dlss.dll', 'nvngx_dlssg.dll')
 function Sl-Root { return Join-Path $TryHome 'nvidia-sdk\Streamline' }
 function Sl-Bin { return Join-Path (Sl-Root) 'bin\x64' }
-function Sl-Missing { $b = Sl-Bin; return @($SlDlls | Where-Object { -not (Test-Path -LiteralPath (Join-Path $b $_)) }) }
 # Bytes First..Last of a URL (nv's scripts\get-nvidia-sdks.ps1).
 function Get-Range([string]$Url, [long]$First, [long]$Last) {
     $q = [Net.HttpWebRequest]::Create($Url)
@@ -1080,61 +1079,164 @@ function Get-FromZip([string]$Url, [string]$Want, [string]$Into) {
     }
     $got
 }
-function Ensure-Dlss {
-    if ((Sl-Missing).Count -gt 0) {
-        # 6.25: a failed download is tried again by itself after 6 hours (a
-        # dropped connection no longer keeps DLSS off until DL or U).
-        $failedAt = 0
-        if ($script:Config.dlss_dl -match '^failed(:(\d+))?$') { $failedAt = $(if ($Matches[2]) { [int64]$Matches[2] } else { 0 }) }
-        $nowS = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-        if ($script:Config.dlss_dl -like 'failed*' -and -not $script:FsrRetry -and ($nowS - $failedAt) -lt 6 * 3600) { return $null }
-        Step "Downloading NVIDIA DLSS (Streamline $SlTag from NVIDIA's GitHub, about 70 MB, once)"
-        $url = "https://github.com/NVIDIA-RTX/Streamline/releases/download/$SlTag/streamline-sdk-$SlTag.zip"
-        $names = ($SlDlls | ForEach-Object { [regex]::Escape($_) }) -join '|'
-        $want = "(^|/)bin/x64/($names|[^/]*license[^/]*\.txt)$|^([^/]+/)?license\.txt$"
-        try { [void](Get-FromZip $url $want (Sl-Root)) }
-        catch { Say "taking the files out of NVIDIA's archive in place did not work ($($_.Exception.Message))" }
-        if ((Sl-Missing).Count -gt 0) {
-            # The whole archive then (263 MB).
-            Say 'getting the whole archive instead (263 MB) ...'
-            $sdk = Split-Path (Sl-Root)
-            $zip = Join-Path $sdk "streamline-sdk-$SlTag.zip"
-            $into = Join-Path $sdk 'streamline-unpacked'
-            try {
-                New-Item -ItemType Directory -Force -Path $sdk | Out-Null
-                if (Download $url $zip) {
-                    Expand-Archive -Path $zip -DestinationPath $into -Force -ErrorAction Stop
-                    $found = Get-ChildItem $into -Recurse -Filter 'sl.interposer.dll' | Where-Object { $_.FullName -match '\\bin\\x64\\sl\.interposer\.dll$' -and $_.FullName -notmatch '\\development\\' } | Select-Object -First 1
-                    if ($found) {
-                        $top = Split-Path (Split-Path (Split-Path $found.FullName))
-                        New-Item -ItemType Directory -Force (Sl-Bin) | Out-Null
-                        Get-ChildItem (Join-Path $top 'bin\x64') -File | Where-Object { $SlDlls -contains $_.Name -or $_.Name -match 'license.*\.txt$' } | Copy-Item -Destination (Sl-Bin) -Force
-                        Copy-Item (Join-Path $top 'license.txt') (Sl-Root) -Force -ErrorAction SilentlyContinue
-                    }
-                }
-            } catch { Bad "could not unpack NVIDIA's archive: $_" }
-            Remove-Item $into -Recurse -Force -ErrorAction SilentlyContinue
-            Remove-Item $zip -Force -ErrorAction SilentlyContinue
-        }
-        if ((Sl-Missing).Count -gt 0) {
-            Bad "could not get NVIDIA's DLSS files: the game upscales as before (tried again by itself in 6 hours; DL or U tries now)"
-            $script:Config.dlss_dl = "failed:$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"; Save-Config
-            return $null
-        }
-        Say "NVIDIA's licences: $(Join-Path (Sl-Root) 'license.txt') and the *license*.txt files in $(Sl-Bin)"
-    }
-    # NVIDIA's signature on the interposer, every run (the layer checks it
-    # again before loading it).
-    $dll = Join-Path (Sl-Bin) 'sl.interposer.dll'
+# 6.25: an NVIDIA Streamline already on this PC is looked for first and,
+# signed by NVIDIA and at least $SlTag, used where it is: nothing is
+# downloaded. One found older is updated (the new set goes into VIctory
+# Try's folder; the old one is left alone). Only with none found at all is
+# it downloaded. Where: VICTORY_STREAMLINE_DIR set before Try started, the
+# folder used last time, Try's own, Get-NVIDIA-DLSS.cmd's (nvidia-sdk in
+# the source, here and in other VIctory folders such as VIctory-NVIDIA's,
+# beside the game, in the user's folders, Downloads, Desktop, Documents and
+# at the top of every drive), an unpacked streamline-sdk-*, the engine's
+# own default and the game's folder.
+$SlVersion = [version]($SlTag.TrimStart('v'))
+function Sl-Has([string]$Dir) {
+    if (-not $Dir -or -not (Test-Path -LiteralPath (Join-Path $Dir 'sl.interposer.dll'))) { return $false }
+    return @($SlDlls | Where-Object { -not (Test-Path -LiteralPath (Join-Path $Dir $_)) }).Count -eq 0
+}
+# The Streamline version of a folder: sl.interposer.dll's file version is
+# Streamline's (2.14.16.0 for v2.14.16, NVIDIA's interposer resource.h).
+function Sl-Version([string]$Dir) {
     try {
-        $sig = Get-AuthenticodeSignature -LiteralPath $dll
-        if ($sig.Status -ne 'Valid' -or "$($sig.SignerCertificate.Subject)" -notmatch 'NVIDIA') {
-            Bad "NVIDIA's sl.interposer.dll is not signed by NVIDIA ($($sig.Status)): DLSS not used (delete $(Sl-Root) to get it again)"
-            return $null
+        $v = (Get-Item -LiteralPath (Join-Path $Dir 'sl.interposer.dll') -ErrorAction Stop).VersionInfo
+        return [version]::new($v.FileMajorPart, $v.FileMinorPart, $v.FileBuildPart)
+    } catch { return [version]'0.0.0' }
+}
+function Sl-Signed([string]$Dir) {
+    try {
+        $sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $Dir 'sl.interposer.dll')
+        return $sig.Status -eq 'Valid' -and "$($sig.SignerCertificate.Subject)" -match 'NVIDIA'
+    } catch { return $false }
+}
+# The places looked at first, at every start: a folder set before Try
+# started, the one used last time, Try's own.
+function Sl-Known { return @(@($script:UserAll['VICTORY_STREAMLINE_DIR'], $script:Config.sl_dir, (Sl-Bin)) | Where-Object { $_ } | Select-Object -Unique) }
+function Sl-Places {
+    $c = $script:Config
+    $list = [Collections.Generic.List[string]]::new()
+    foreach ($d in @(@(Sl-Known) + @((Join-Path $Src 'nvidia-sdk\Streamline\bin\x64'), "C:\dev\sdk\streamline-sdk-$SlTag\bin\x64"))) { if ($d) { $list.Add($d) } }
+    $roots = @($env:USERPROFILE, (Join-Path "$env:USERPROFILE" 'Downloads'), (Join-Path "$env:USERPROFILE" 'Desktop'), (Join-Path "$env:USERPROFILE" 'Documents'), $TryHome)
+    if ($c.game_dir) {
+        $list.Add($c.game_dir)
+        $roots += Split-Path $c.game_dir
+    }
+    try { $roots += @([IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq 'Fixed' -and $_.IsReady } | ForEach-Object { $_.RootDirectory.FullName }) } catch {}
+    foreach ($root in ($roots | Where-Object { $_ } | Select-Object -Unique)) {
+        $list.Add((Join-Path $root 'nvidia-sdk\Streamline\bin\x64'))
+        foreach ($d in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)) {
+            $list.Add((Join-Path $d.FullName 'nvidia-sdk\Streamline\bin\x64'))
+            if ($d.Name -like 'streamline*') {
+                $list.Add((Join-Path $d.FullName 'bin\x64'))
+                $list.Add((Join-Path $d.FullName "$($d.Name)\bin\x64"))
+            }
         }
-    } catch { Bad "could not check the signature of NVIDIA's files: DLSS not used ($_)"; return $null }
-    if ($script:Config.dlss_dl -ne 'ok') { $script:Config.dlss_dl = 'ok'; Save-Config }
-    return Sl-Bin
+    }
+    return @($list | Select-Object -Unique)
+}
+# The best Streamline on this PC: every file there, signed by NVIDIA, the
+# newest; @{ Dir; Version } or $null.
+function Find-Streamline([switch]$Known) {
+    $best = $null
+    foreach ($dir in $(if ($Known) { Sl-Known } else { Sl-Places })) {
+        if (-not (Sl-Has $dir)) { continue }
+        $v = Sl-Version $dir
+        if ($best -and $v -le $best.Version) { continue }
+        if (-not (Sl-Signed $dir)) { Say "NVIDIA Streamline in $dir is not signed by NVIDIA: not used"; continue }
+        $best = @{ Dir = $dir; Version = $v }
+    }
+    return $best
+}
+# NVIDIA's files out of their release into a new folder, which then takes
+# the place of Try's own; $true when the new set is all there.
+function Get-Streamline {
+    $sdk = Split-Path (Sl-Root)
+    $stage = Join-Path $sdk 'Streamline.new'
+    $stageBin = Join-Path $stage 'bin\x64'
+    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    Step "Downloading NVIDIA DLSS (Streamline $SlTag from NVIDIA's GitHub, about 70 MB, once)"
+    $url = "https://github.com/NVIDIA-RTX/Streamline/releases/download/$SlTag/streamline-sdk-$SlTag.zip"
+    $names = ($SlDlls | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    $want = "(^|/)bin/x64/($names|[^/]*license[^/]*\.txt)$|^([^/]+/)?license\.txt$"
+    try { [void](Get-FromZip $url $want $stage) }
+    catch { Say "taking the files out of NVIDIA's archive in place did not work ($($_.Exception.Message))" }
+    if (-not (Sl-Has $stageBin)) {
+        # The whole archive then (263 MB).
+        Say 'getting the whole archive instead (263 MB) ...'
+        $zip = Join-Path $sdk "streamline-sdk-$SlTag.zip"
+        $into = Join-Path $sdk 'streamline-unpacked'
+        try {
+            if (Download $url $zip) {
+                Expand-Archive -Path $zip -DestinationPath $into -Force -ErrorAction Stop
+                $found = Get-ChildItem $into -Recurse -Filter 'sl.interposer.dll' | Where-Object { $_.FullName -match '\\bin\\x64\\sl\.interposer\.dll$' -and $_.FullName -notmatch '\\development\\' } | Select-Object -First 1
+                if ($found) {
+                    $top = Split-Path (Split-Path (Split-Path $found.FullName))
+                    New-Item -ItemType Directory -Force $stageBin | Out-Null
+                    Get-ChildItem (Join-Path $top 'bin\x64') -File | Where-Object { $SlDlls -contains $_.Name -or $_.Name -match 'license.*\.txt$' } | Copy-Item -Destination $stageBin -Force
+                    Copy-Item (Join-Path $top 'license.txt') $stage -Force -ErrorAction SilentlyContinue
+                }
+            }
+        } catch { Bad "could not unpack NVIDIA's archive: $_" }
+        Remove-Item $into -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item $zip -Force -ErrorAction SilentlyContinue
+    }
+    if (-not (Sl-Has $stageBin)) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue; return $false }
+    try {
+        Remove-Item -LiteralPath (Sl-Root) -Recurse -Force -ErrorAction Stop
+    } catch {
+        if (Test-Path -LiteralPath (Sl-Root)) { Bad "could not replace $(Sl-Root) (a game still running?): $_"; return $false }
+    }
+    Move-Item -LiteralPath $stage -Destination (Sl-Root)
+    return Sl-Has (Sl-Bin)
+}
+function Ensure-Dlss {
+    $c = $script:Config
+    # The known places first (no search of the disks at every start), then
+    # everywhere when none of them has a Streamline new enough.
+    $found = Find-Streamline -Known
+    if (-not $found -or $found.Version -lt $SlVersion) {
+        Say 'looking for an NVIDIA Streamline already on this PC ...'
+        $found = Find-Streamline
+    }
+    if ($found -and $found.Version -ge $SlVersion) {
+        if ($found.Dir -ne $c.sl_dir) {
+            Say "NVIDIA Streamline $($found.Version) found in $($found.Dir): used from there, nothing downloaded"
+            $c.sl_dir = $found.Dir
+        }
+        if ($c.dlss_dl -ne 'ok') { $c.dlss_dl = 'ok' }
+        Save-Config
+        return $found.Dir
+    }
+    # A failed download is tried again by itself after 6 hours (DL or U
+    # try at once); an older Streamline found is used meanwhile.
+    $failedAt = 0
+    if ($c.dlss_dl -match '^failed(:(\d+))?$') { $failedAt = $(if ($Matches[2]) { [int64]$Matches[2] } else { 0 }) }
+    $nowS = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $wait = $c.dlss_dl -like 'failed*' -and -not $script:FsrRetry -and ($nowS - $failedAt) -lt 6 * 3600
+    if ($found) {
+        Say "NVIDIA Streamline $($found.Version) found in $($found.Dir): older than $SlTag, $(if ($wait) { 'used as it is (the update is tried again later)' } else { 'updating it' })"
+    } else {
+        Say "NVIDIA Streamline: none on this PC$(if ($wait) { ' (the download is tried again later)' } else { ', downloading it' })"
+    }
+    if (-not $wait) {
+        if (Get-Streamline) {
+            Say "NVIDIA Streamline $(Sl-Version (Sl-Bin)) in $(Sl-Bin)"
+            Say "NVIDIA's licences: $(Join-Path (Sl-Root) 'license.txt') and the *license*.txt files in $(Sl-Bin)"
+            $fresh = Find-Streamline -Known
+            if ($fresh -and $fresh.Version -ge $SlVersion) {
+                $c.sl_dir = $fresh.Dir; $c.dlss_dl = 'ok'; Save-Config
+                return $fresh.Dir
+            }
+            Bad "NVIDIA's new files did not pass the checks (signature or version)"
+        }
+        $c.dlss_dl = "failed:$nowS"; Save-Config
+        if (-not $found) { Bad "could not get NVIDIA's DLSS files: the game upscales as before (tried again by itself in 6 hours; DL or U tries now)" }
+    }
+    if ($found) {
+        Say "using NVIDIA Streamline $($found.Version) from $($found.Dir) meanwhile"
+        return $found.Dir
+    }
+    return $null
 }
 # The card with the most memory, by its driver's name.
 function Card-Name {

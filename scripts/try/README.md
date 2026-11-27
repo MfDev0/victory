@@ -596,6 +596,15 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      `VICTORY_DUALSENSE` (unset auto, 0 off, 1 both), `VICTORY_RAW_VIEW_CLAMP`
      (=0 off), `VICTORY_HELPER_PRIORITY` (=0 off). `VICTORY_KEYS` and
      `VICTORY_KEYS_FILE` in every build; `VICTORY_WINDOW_MAX=WxH`.
+   6.26 ("found, not fetched"): `Ensure-Dlss` looks first in `Sl-Known`
+   (`VICTORY_STREAMLINE_DIR` set before Try, config `sl_dir`, Try's own),
+   then, when none is new enough, in `Sl-Places` (nvidia-sdk in `$Src`,
+   `C:\dev\sdk\streamline-sdk-<tag>`, the game's folder, and
+   `nvidia-sdk\Streamline\bin\x64` / `streamline*\bin\x64` one level under
+   the user folders, the game's parent, `$TryHome` and every fixed drive).
+   Used in place when all 8 DLLs are there, NVIDIA-signed, and
+   sl.interposer.dll's file version >= `$SlTag`; older: `Get-Streamline`
+   into `Streamline.new`, swapped in whole; failed: the older one meanwhile.
    6.25 ("the world's light"; nv's ambient estimate, our cutscene look):
    - `VICTORY_CUTSCENE_LOOK` (**LOOK**; unset auto, `world`, `ours`): auto
      counts the title's upscaler resets (camera cuts; noted once a frame by

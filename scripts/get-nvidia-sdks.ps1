@@ -102,10 +102,31 @@ function Get-FromZip([string]$Url, [string]$Want, [string]$Into) {
 }
 
 Write-Host "NVIDIA Streamline $StreamlineTag with DLSS and frame generation, from github.com/NVIDIA-RTX/Streamline (about 70 MB):"
+# Try 6.25: files already there are checked, not fetched again: all eight
+# there, signed by NVIDIA and at least this version (sl.interposer.dll's file
+# version is Streamline's) is enough. An older or unsigned set is replaced.
+function Sl-Version([string]$Dir) {
+    try {
+        $v = (Get-Item -LiteralPath (Join-Path $Dir 'sl.interposer.dll') -ErrorAction Stop).VersionInfo
+        return [version]::new($v.FileMajorPart, $v.FileMinorPart, $v.FileBuildPart)
+    } catch { return [version]'0.0.0' }
+}
+function Sl-Signed([string]$Dir) {
+    try {
+        $sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $Dir 'sl.interposer.dll')
+        return $sig.Status -eq 'Valid' -and "$($sig.SignerCertificate.Subject)" -match 'NVIDIA'
+    } catch { return $false }
+}
+$wanted = [version]($StreamlineTag.TrimStart('v'))
 $missing = @($dlls | Where-Object { -not (Test-Path (Join-Path $bin $_)) })
-if (-not $missing) {
-    Write-Host "  all there already: $bin"
+$have = Sl-Version $bin
+if (-not $missing -and $have -ge $wanted -and (Sl-Signed $bin)) {
+    Write-Host "  all there already, NVIDIA-signed, version $have`: $bin (nothing downloaded)"
 } else {
+    if (-not $missing) {
+        Write-Host "  there, but $(if ($have -lt $wanted) { "version $have, older than $wanted" } else { 'not signed by NVIDIA' }): updating it"
+        foreach ($d in $dlls) { Remove-Item -LiteralPath (Join-Path $bin $d) -Force -ErrorAction SilentlyContinue }
+    }
     $url = "https://github.com/NVIDIA-RTX/Streamline/releases/download/$StreamlineTag/streamline-sdk-$StreamlineTag.zip"
     $names = ($dlls | ForEach-Object { [regex]::Escape($_) }) -join '|'
     $want = "(^|/)bin/x64/($names|[^/]*license[^/]*\.txt)$|^([^/]+/)?license\.txt$"
