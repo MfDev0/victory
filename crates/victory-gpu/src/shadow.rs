@@ -953,6 +953,98 @@ pub(crate) fn masked_patch_now() -> bool {
 /// submissions that sent one.
 pub(crate) static PATCHED: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
 
+/// `VICTORY_PATCH_LEAN`: 0 off (the default), 1 on, 2 in turn (`alt`).
+pub(crate) fn patch_lean_mode() -> u8 {
+    static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| match std::env::var("VICTORY_PATCH_LEAN").as_deref() {
+        Ok("1") => 1,
+        Ok("alt") => 2,
+        _ => 0,
+    })
+}
+
+/// Whether the masked patch runs lean (`VICTORY_PATCH_LEAN=1`; off by
+/// default; `alt`: twenty seconds with, twenty without, in turn, each
+/// change said in the log). Only with the masked patch on
+/// ([`masked_patch_now`]).
+///
+/// Why: with the masked patch on, card_before went from 5-8 to 15-31 ms a
+/// frame (run 362's in-run split, ON against off at equal draws), and the
+/// ranges sent up from 6,500-17,400 to 18,800-26,300 a frame: the merge no
+/// longer gives up, so every page under the cap still goes up run by run
+/// (up to `VICTORY_MERGE_RUNS` copies of a few bytes each a submission,
+/// each a CopyBufferRegion, a changed range, a note in `sent` and a hash
+/// run), and the patch's own runs (some 130,000 a frame) were each turned
+/// into a hash run and sorted. Three changes, each exact:
+/// - a page with more than `VICTORY_PATCH_PAGE_RUNS` changed runs (32 by
+///   default) goes up as patch words whatever the cap leaves: the same
+///   bytes, set after the flights by the same dispatch;
+/// - the pieces a patch touched are hashed again from one span per 64 KiB
+///   page (a page is one piece: both are cut at 64 KiB of title memory),
+///   not from every run: the same pieces;
+/// - the buffer of the patch's words is kept for the next patch once its
+///   submission has run (`crate::host`), not made and destroyed each time.
+pub(crate) fn patch_lean_now() -> bool {
+    match patch_lean_mode() {
+        0 => false,
+        1 => true,
+        _ => {
+            static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+            let on = (EPOCH.get_or_init(std::time::Instant::now).elapsed().as_secs() / 20) % 2 == 1;
+            static LAST: AtomicU8 = AtomicU8::new(2);
+            if LAST.swap(u8::from(on), Ordering::Relaxed) != u8::from(on) {
+                tracing::info!(
+                    "the masked patch runs lean from now (VICTORY_PATCH_LEAN=alt): {}",
+                    if on {
+                        "ON, pages of many runs patched, patched pieces hashed by page, the words' buffer kept"
+                    } else {
+                        "off, as usual"
+                    }
+                );
+            }
+            on
+        }
+    }
+}
+
+/// [`patch_lean_now`]: a page with more changed runs than this is patched
+/// (`VICTORY_PATCH_PAGE_RUNS`, 1 to 4096; 32 by default).
+fn patch_page_runs() -> usize {
+    static RUNS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *RUNS.get_or_init(|| {
+        std::env::var("VICTORY_PATCH_PAGE_RUNS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .map_or(32, |n| n.clamp(1, 4096))
+    })
+}
+
+/// Since the last frame line: pages patched for [`patch_lean_now`] that
+/// the cap would have sent run by run, and their runs.
+pub(crate) static PATCH_LEAN: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+
+/// Since the last frame line: buffers of patch words made, and kept ones
+/// used again, while [`patch_lean_now`] (`crate::host`).
+pub(crate) static PATCH_LEAN_BUFFERS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+
+/// `ranges` (offsets in a copy of title memory from `start` on, in order,
+/// none overlapping) as one span per 64 KiB piece they start in, from the
+/// first one's start to the furthest end: the pieces the spans hold are
+/// exactly the pieces the ranges hold ([`patch_lean_now`]): the ranges of
+/// one span all start in its first piece, so the pieces they hold run
+/// from that piece to the piece of the furthest end without a gap.
+pub(crate) fn piece_spans(start: usize, ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize, usize)> = Vec::new();
+    for &(a, b) in ranges {
+        let piece = (start + a) / PIECE;
+        match out.last_mut() {
+            Some(last) if last.0 == piece => last.2 = last.2.max(b),
+            _ => out.push((piece, a, b)),
+        }
+    }
+    out.into_iter().map(|(_, a, b)| (a, b)).collect()
+}
+
 /// The words of a masked patch for the changed bytes `runs` (offset, bytes;
 /// in order, offsets in `title`) of a page at offset `at` of the copy,
 /// `title` holding the page's new bytes: appended to `out`, one word per
@@ -1032,7 +1124,11 @@ pub(crate) fn card_patches(sent_as: u64) -> Vec<(Arc<Shadow>, Vec<PatchWord>, Ve
             }
             taken
         };
-        out.push((shadow.clone(), folded(taken.words), joined(taken.ranges)));
+        // The runs are only hashed again (`Host::card_before`): lean, one
+        // span per piece ([`piece_spans`]), the same pieces.
+        let runs = joined(taken.ranges);
+        let runs = if patch_lean_now() { piece_spans(shadow.start as usize, &runs) } else { runs };
+        out.push((shadow.clone(), folded(taken.words), runs));
     }
     out
 }
@@ -2482,6 +2578,50 @@ mod masked_patch_tests {
         let mut out = Vec::new();
         patch_words(0, &[1, 2, 3, 4, 5, 6], &[(1, 2), (5, 1)], &mut out);
         assert_eq!(out, vec![[0, 0x00ff_ff00, 0x0003_0200], [4, 0x0000_ff00, 0x0000_0600]]);
+    }
+
+    /// `VICTORY_PATCH_LEAN`: the spans per piece hold exactly the pieces the
+    /// patch's runs hold, whatever the copy's start, for runs that cross a
+    /// piece's end, lie alone in a piece, or crowd one, and far fewer of them.
+    #[test]
+    fn piece_spans_hold_the_pieces_of_the_runs() {
+        use super::{PIECE, joined, piece_spans, pieces_of};
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |below: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % below as u64) as usize
+        };
+        let pieces = |start: usize, ranges: &[(usize, usize)]| {
+            let mut all: Vec<usize> = ranges.iter().flat_map(|&(a, b)| pieces_of(start, a, b)).collect();
+            all.sort_unstable();
+            all.dedup();
+            all
+        };
+        for start in [0usize, 4, 65532, 0x1234_5678, 0x7fff_0010] {
+            for _ in 0..50 {
+                let len = 40 * PIECE;
+                let mut ranges = Vec::new();
+                let mut at = next(64);
+                while at < len - 64 {
+                    let long = next(10) == 0;
+                    let n = 1 + next(if long { 3 * PIECE } else { 6 });
+                    let end = (at + n).min(len);
+                    ranges.push((at, end));
+                    let far = next(4) == 0;
+                    at = end + 1 + next(if far { 2 * PIECE } else { 12 });
+                }
+                let ranges = joined(ranges);
+                let spans = piece_spans(start, &ranges);
+                assert_eq!(pieces(start, &spans), pieces(start, &ranges), "start {start:#x}");
+                assert!(spans.len() <= ranges.len());
+            }
+        }
+        // A page of thousands of runs is one span.
+        let crowd: Vec<(usize, usize)> = (0..4000).map(|i| (5 * PIECE + 16 * i, 5 * PIECE + 16 * i + 3)).collect();
+        assert_eq!(piece_spans(0, &crowd), vec![(5 * PIECE, 5 * PIECE + 16 * 3999 + 3)]);
+        assert!(piece_spans(0, &[]).is_empty());
     }
 }
 
@@ -4333,10 +4473,20 @@ impl Shadow {
                     // which only the submitting thread writes.
                     let held = unsafe { std::slice::from_raw_parts_mut(self.data.add(at), n) };
                     let runs = joined_over(changed_runs(title, held), merge_gap());
-                    if runs.len() > *runs_left {
+                    // Lean ([`patch_lean_now`]): a page of many runs is
+                    // patched under the cap too.
+                    let lean = runs.len() <= *runs_left
+                        && runs.len() > patch_page_runs()
+                        && masked_patch_now()
+                        && patch_lean_now();
+                    if runs.len() > *runs_left || lean {
                         // Past the cap: the page's exact changed bytes as a
                         // masked patch ([`masked_patch_now`]), no settle.
                         if masked_patch_now() && at + n <= u32::MAX as usize {
+                            if lean {
+                                PATCH_LEAN[0].fetch_add(1, Ordering::Relaxed);
+                                PATCH_LEAN[1].fetch_add(runs.len() as u64, Ordering::Relaxed);
+                            }
                             let exact = changed_runs(title, held);
                             self.card_patched(at, title, &exact);
                             for &(r, m) in &exact {

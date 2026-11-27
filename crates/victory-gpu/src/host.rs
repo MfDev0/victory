@@ -2795,7 +2795,14 @@ struct CardWork {
     /// The fetch inside flights ([`inflight_fetch`]), if it is on and was
     /// made.
     inflight: Option<CardInflight>,
+    /// With `VICTORY_PATCH_LEAN` (`crate::shadow::patch_lean_now`): buffers
+    /// of masked patch words whose submissions have run (buffer, mapping,
+    /// bytes), for the next patches; at most [`PATCH_POOL_MOST`].
+    patch_pool: Vec<(ID3D12Resource, usize, u64)>,
 }
+
+/// The most buffers of patch words [`CardWork::patch_pool`] keeps.
+const PATCH_POOL_MOST: usize = 4;
 
 /// What the fetch inside flights needs ([`inflight_fetch`], [`CARD_FETCH`]).
 struct CardInflight {
@@ -3296,8 +3303,9 @@ struct CardPlan {
     /// submission has run.
     _synced: Vec<std::sync::Arc<crate::shadow::Shadow>>,
     /// The masked patch's words ([`MASKED_PATCH`]), read by the plan's
-    /// list: alive until the submission has run.
-    _patch: Option<ID3D12Resource>,
+    /// list: alive until the submission has run (buffer, mapping, bytes;
+    /// lean, it goes back to [`CardWork::patch_pool`] then).
+    patch: Option<(ID3D12Resource, usize, u64)>,
     /// The lists of ours the plan recorded (whether the compare, the
     /// list), given back by `Host::card_done`.
     lists: Vec<(bool, Prelude)>,
@@ -5732,6 +5740,17 @@ fn late_line(frames: f64) {
                 p[2] as f64 / frames,
                 p[3] as f64 / frames
             );
+            if crate::shadow::patch_lean_mode() != 0 {
+                let lean = [0, 1].map(|i| crate::shadow::PATCH_LEAN[i].swap(0, Ordering::Relaxed) as f64 / frames);
+                let made = [0, 1].map(|i| crate::shadow::PATCH_LEAN_BUFFERS[i].swap(0, Ordering::Relaxed) as f64 / frames);
+                tracing::info!(
+                    "the masked patch lean (VICTORY_PATCH_LEAN), per frame: {:.1} pages under the cap patched for their many runs                      ({:.0} runs that would have gone up one by one); buffers of words {:.1} made, {:.1} kept ones used again",
+                    lean[0],
+                    lean[1],
+                    made[0],
+                    made[1]
+                );
+            }
         }
     }
     {
@@ -6362,6 +6381,7 @@ impl Host {
                 taken: 0,
                 out: 0,
                 inflight: if inflight_fetch() { self.make_card_inflight(RESULTS) } else { None },
+                patch_pool: Vec::new(),
             })
         }
     }
@@ -6601,12 +6621,31 @@ impl Host {
         }
         // The patches' words in one buffer the card reads (PC memory), each
         // copy's from its first word on.
-        let mut patch_buffer: Option<ID3D12Resource> = None;
+        let mut patch_buffer: Option<(ID3D12Resource, usize, u64)> = None;
         let mut patch_at: Vec<(Arc<crate::shadow::Shadow>, u32, u32)> = Vec::new();
         if !patches.is_empty() {
             let words: usize = patches.iter().map(|(_, w, _)| w.len()).sum();
-            match (work.patch_pso.is_some(), self.shared_buffer((words * 12).max(16) as u64)) {
-                (true, Some((buffer, data))) => {
+            let bytes = (words * 12).max(16) as u64;
+            // Lean: a kept buffer that holds them, else one made a power of
+            // two large (at least 64 KiB), so that it serves later patches.
+            let lean = crate::shadow::patch_lean_now();
+            let kept = if lean { work.patch_pool.iter().position(|p| p.2 >= bytes) } else { None };
+            let buffer = match kept {
+                Some(at) => {
+                    crate::shadow::PATCH_LEAN_BUFFERS[1].fetch_add(1, Ordering::Relaxed);
+                    Some(work.patch_pool.swap_remove(at))
+                }
+                None => {
+                    let size = if lean { bytes.next_power_of_two().max(64 << 10) } else { bytes };
+                    if lean {
+                        crate::shadow::PATCH_LEAN_BUFFERS[0].fetch_add(1, Ordering::Relaxed);
+                    }
+                    self.shared_buffer(size).map(|(buffer, data)| (buffer, data as usize, size))
+                }
+            };
+            match (work.patch_pso.is_some(), buffer) {
+                (true, Some((buffer, data, size))) => {
+                    let data = data as *mut u8;
                     name(&buffer, || "masked patch words".into());
                     let mut first = 0u32;
                     for (shadow, w, _) in &patches {
@@ -6618,7 +6657,7 @@ impl Host {
                         first += w.len() as u32;
                     }
                     crate::shadow::PATCHED[3].fetch_add(1, Ordering::Relaxed);
-                    patch_buffer = Some(buffer);
+                    patch_buffer = Some((buffer, data as usize, size));
                 }
                 _ => fail(format_args!("no memory or pipeline for the masked patch of host copies in the card's memory (VICTORY_MASKED_PATCH)")),
             }
@@ -6704,7 +6743,7 @@ impl Host {
                     // The masked patches first: each copy from the common
                     // state to unordered access, its words, then back (the
                     // copies below promote it again).
-                    if let (Some(words), Some(pso)) = (&patch_buffer, &work.patch_pso) {
+                    if let (Some((words, _, _)), Some(pso)) = (&patch_buffer, &work.patch_pso) {
                         list.SetComputeRootSignature(&work.root);
                         list.SetPipelineState(pso);
                         list.SetComputeRootUnorderedAccessView(3, work.differs.0.GetGPUVirtualAddress());
@@ -6825,7 +6864,7 @@ impl Host {
             ranges: Vec::new(),
             check: None,
             _synced: dirty.into_iter().map(|(shadow, _)| shadow).collect(),
-            _patch: patch_buffer,
+            patch: patch_buffer,
             lists: used,
             sent_as,
             inflight: false,
@@ -6977,6 +7016,13 @@ impl Host {
         };
         for (check, list) in plan.lists {
             if check { work.check.push(list) } else { work.sync.push(list) }
+        }
+        // The patch's words are read: the buffer serves a later patch.
+        if crate::shadow::patch_lean_mode() != 0
+            && let Some(kept) = plan.patch
+            && work.patch_pool.len() < PATCH_POOL_MOST
+        {
+            work.patch_pool.push(kept);
         }
         work.out = work.out.saturating_sub(1);
         // With the relay other plans may be on the card, their results
