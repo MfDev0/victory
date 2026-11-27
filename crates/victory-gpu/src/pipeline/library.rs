@@ -46,6 +46,21 @@
 //! with a 64 MB file written past the system's cache, mapped and replaced:
 //! 16,352 of 16,384 pages read zeros with the handle closed, none with it
 //! open (the test below). `VICTORY_LIBRARY_HANDLE=0`: closed, as before.
+//!
+//! A save no longer renames the new library over a file this run has
+//! mapped: it is left beside it as [`NEXT_FILE`], which the next start
+//! takes ([`Blob::of`]). RX 6600 / 6700 XT players (issues #84, #78) lost
+//! the device with the file replaced under the mapping twice in that run;
+//! with the handle open the old pages should still read, but nothing
+//! needs the replacement during a run, so it is not risked.
+//! `VICTORY_LIBRARY_REPLACE_MAPPED=1`: renamed over it, as before.
+//!
+//! On AMD cards mesh pipelines are made one at a time ([`made_alone`]):
+//! the same reports had three mesh+pixel pipelines being made at once,
+//! each for 1.8 s, when the device was removed with nothing of ours on the
+//! card. Other pipelines, and loads from the library, still overlap.
+//! `VICTORY_MESH_MAKE_ONE=0`: overlapping, as before; `=1`: one at a time
+//! on every card.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -506,6 +521,56 @@ fn one_call() -> Option<MutexGuard<'static, ()>> {
         .then(|| CALLING.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
+/// Whether mesh pipelines are made one at a time on `device` (see the
+/// module's notes): on AMD cards unless `VICTORY_MESH_MAKE_ONE=0`, on every
+/// card with `=1`.
+pub(crate) fn mesh_one_at_a_time(device: &ID3D12Device) -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        let switch = std::env::var("VICTORY_MESH_MAKE_ONE").ok();
+        let on = one_at_a_time_for(switch.as_deref(), || amd(device));
+        tracing::info!(on, "mesh pipelines made one at a time (VICTORY_MESH_MAKE_ONE)");
+        on
+    })
+}
+
+/// Whether `device` is an AMD card's (the host's adapter, not the console's).
+fn amd(device: &ID3D12Device) -> bool {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, IDXGIAdapter1, IDXGIFactory4};
+    // SAFETY: plain queries.
+    unsafe {
+        CreateDXGIFactory2::<IDXGIFactory4>(DXGI_CREATE_FACTORY_FLAGS(0))
+            .and_then(|f| f.EnumAdapterByLuid::<IDXGIAdapter1>(device.GetAdapterLuid()))
+            .and_then(|a| a.GetDesc1())
+            .is_ok_and(|d| d.VendorId == 0x1002)
+    }
+}
+
+/// The switch's value (`None`: unset), and whether the card is AMD's.
+fn one_at_a_time_for(switch: Option<&str>, amd: impl FnOnce() -> bool) -> bool {
+    match switch {
+        Some("0") => false,
+        Some("1") => true,
+        _ => amd(),
+    }
+}
+
+/// Runs `make`, alone among the makes that are also `alone`.
+pub(crate) fn made_alone<T>(alone: bool, make: impl FnOnce() -> T) -> T {
+    static MAKING: Mutex<()> = Mutex::new(());
+    let _one = alone.then(|| MAKING.lock().unwrap_or_else(|e| e.into_inner()));
+    make()
+}
+
+/// Whether a save may rename the new library over the library's file,
+/// which this run has `mapped`: not by default (see the module's notes);
+/// `VICTORY_LIBRARY_REPLACE_MAPPED=1` does, as before.
+fn replaces_mapped(mapped: bool) -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    !mapped
+        || *ON.get_or_init(|| std::env::var_os("VICTORY_LIBRARY_REPLACE_MAPPED").is_some_and(|v| v == "1"))
+}
+
 const LIBRARY_FILE: &str = "host-pipelines.bin";
 /// A library the driver refused, kept as it was ([`open`]).
 const REJECTED_FILE: &str = "host-pipelines.rejected.bin";
@@ -913,11 +978,18 @@ pub(crate) fn save(now: bool) {
     // What was made while this save held the library alone.
     store_later(library);
     let used: Vec<String> = USED.lock().unwrap_or_else(|e| e.into_inner()).iter().flatten().cloned().collect();
-    let library_written = if bytes > 0 { replace_library(dir, &tmp) } else { Ok(()) };
+    let in_use = VIEW[0].load(Ordering::Relaxed) != 0;
+    let library_written = if bytes == 0 {
+        Ok(())
+    } else if replaces_mapped(in_use) {
+        replace_library(dir, &tmp)
+    } else {
+        std::fs::rename(&tmp, dir.join(NEXT_FILE))
+    };
     if bytes > 0 && library_written.is_ok() {
         // In place unless the system refused and the new one waits beside it.
         let in_place = !dir.join(NEXT_FILE).exists();
-        if in_place && VIEW[0].load(Ordering::Relaxed) != 0 {
+        if in_place && in_use {
             REPLACED[1].store(crate::host::now_ms(), Ordering::Relaxed);
             REPLACED[0].fetch_add(1, Ordering::Relaxed);
         }
@@ -1055,6 +1127,46 @@ mod tests {
         assert_eq!(map["def"], 2);
     }
     use super::*;
+
+    #[test]
+    fn mesh_makes_are_one_at_a_time_on_amd_unless_switched() {
+        assert!(one_at_a_time_for(None, || true));
+        assert!(!one_at_a_time_for(None, || false));
+        assert!(!one_at_a_time_for(Some("0"), || true));
+        assert!(one_at_a_time_for(Some("1"), || false));
+        assert!(one_at_a_time_for(Some("yes"), || true));
+    }
+
+    #[test]
+    fn made_alone_makes_do_not_overlap() {
+        use std::sync::atomic::AtomicUsize;
+        static NOW: AtomicUsize = AtomicUsize::new(0);
+        static MOST: AtomicUsize = AtomicUsize::new(0);
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    for _ in 0..20 {
+                        made_alone(true, || {
+                            let n = NOW.fetch_add(1, Ordering::SeqCst) + 1;
+                            MOST.fetch_max(n, Ordering::SeqCst);
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                            NOW.fetch_sub(1, Ordering::SeqCst);
+                        });
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(MOST.load(Ordering::SeqCst), 1);
+        assert_eq!(made_alone(false, || 7), 7);
+    }
+
+    #[test]
+    fn a_library_not_mapped_is_replaced() {
+        assert!(replaces_mapped(false));
+    }
 
     #[test]
     fn names_change_with_what_goes_into_the_pipeline() {
