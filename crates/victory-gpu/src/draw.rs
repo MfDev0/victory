@@ -1873,7 +1873,8 @@ impl State {
         };
         let address = match &view {
             Some(crate::descriptor::View::Constant(address, _)) => *address,
-            Some(v) => crate::descriptor::host::buffer_range(v).map_or(0, |range| range.0),
+            // (fx 9a9091d: a ray-tracing structure view's address is its Location)
+            Some(v) => crate::descriptor::host::view_address(v).unwrap_or(0),
             None => 0,
         };
         if address == 0 {
