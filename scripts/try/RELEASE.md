@@ -1,3 +1,20 @@
+VIctory Try 6.28 "his engine, our report" (N switches to trustno1-coder's VIctory-NVIDIA, his full code)
+- N now switches between our engine (still the default) and trustno1-coder's VIctory-NVIDIA engine: his full code as he has it, not a port. VIctory Try downloads his newest main, builds it with his own command (cargo build --release --locked -p victory) and starts the game with his own launcher (his scripts\play-foxhound.ps1) and his settings. None of our engine's settings are used with it
+- Only one thing of ours goes on top of his code: the report fix (scripts\try\nvidia-report-patch.txt, 8 small commits), so a run on his engine makes the same report as ours:
+  - the VIctory Try version at the top of the log
+  - the shaders that do not translate and the pipelines the card refused are saved (failed-shaders-nvidia, in the report zip)
+  - running out of memory is said in the log, with its size, Windows' commit, the free RAM and what to do
+  - a root signature the card refuses is logged with the card's reason
+  - safer crash reports (the stack walk checks memory before it reads it)
+- If the report fix does not go onto his newest code (he changed the same lines), it goes onto the commit it was made on (d12eb1b); if nothing with it builds, his code is built alone and the log says so
+- The 12 modes work on his engine too: console, DLSS (Ultra Performance too), frame gen (F), fps cap (C: none is his default, or 60, 120, 30) and EXTREME (X: his EXTREME: no cap, bigger worker pools on 24+ threads, the game at High priority). His worker-pool tuning for 16 and 24+ threads is on, as in his PLAY_FRAMEGEN.cmd
+- His F1 menu works as he made it. What it saves (console, DLSS, frame gen, fps) comes back into our menu after the run
+- NVIDIA's files: the Streamline found or downloaded by VIctory Try (6.26) is given to his launcher, so nothing is downloaded twice
+- His shader cache is kept apart from ours (cache-nvidia). Every shader is translated and every pipeline is made with the game closed (his "victory shaders" and "victory warm --used"), as with the AvatarManz engine
+- The report zip says which engine ran (try-version.txt), and settings.txt has the switches his launcher ran with
+- The older engines (AvatarManz, the 8 GB one) moved to NO in the full list. When his engine is not in use, TIDY removes its folders (N builds it again)
+- Not measured here: there is no Windows here to run or build it on. His code itself is unchanged, and the report fix's changes were checked line by line against his code. If his engine does not build with the fix, it is built without it
+
 VIctory Try 6.27 "twelve modes" (every DLSS setting for Series X and Series S)
 - The menu now has 12 modes: every DLSS setting for both consoles. 1-6 are Series X, 7-12 Series S, each with DLAA, DLSS Quality, Balanced, Performance, Ultra Performance and DLSS off
 - A ">" marks the mode you are on now

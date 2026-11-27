@@ -596,6 +596,20 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      `VICTORY_DUALSENSE` (unset auto, 0 off, 1 both), `VICTORY_RAW_VIEW_CLAMP`
      (=0 off), `VICTORY_HELPER_PRIORITY` (=0 off). `VICTORY_KEYS` and
      `VICTORY_KEYS_FILE` in every build; `VICTORY_WINDOW_MAX=WxH`.
+   6.28 ("his engine, our report"): engine `nvidia` (`EngineNv`; N
+   toggles own <-> nvidia, NO cycles avm/8gb). `Update-EngineNv` clones
+   `$EngineNvUrl` main into `victory-nvidia`; `Build-EngineNv` checks his
+   head out, `git am -3` our `scripts/try/nvidia-report-patch.txt` (read
+   from refs/remotes/origin/fork by `Nv-Patch`), falls back to
+   `$EngineNvBase` and then his code alone, and builds with his command into
+   his `target\release`. `Run-InOwnWindow` runs `run-nvidia.ps1`, which
+   calls his `scripts\play-foxhound.ps1` with options from `Nv-RunSpec`
+   (`run-nvidia.json`); `Nv-SyncMenu` takes his F1 menu's choices back.
+   The patch is `git format-patch d12eb1b..` of: run.rs version line
+   (0f3d957), refused pipeline dumps (91a1575), root signature refusals
+   (0fd37a4), checked stack walk (329e1f1), failed shader dumps, OOM log
+   (6e2c856). Not in it: cf86454 (refusal reasons; HostPipeline::new's
+   returns differ in his code).
    6.27 ("twelve modes"): `Quick-Menu` lists `$ModeDlss` x 2 consoles
    (1-6 Series X, 7-12 Series S; `Set-Mode` sets console + dlss only);
    F/C/X cycle fg, fps and allout in place and redraw; R resets and

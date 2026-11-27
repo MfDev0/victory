@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.27'
+$TryVersion = '6.28'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live, tried when the fork itself cannot be
@@ -50,6 +50,18 @@ if ($env:VICTORY_TRY_AVM -eq 'avatarmanz') {
     $EngineAvmBranch = 'main'
     $EngineAvmName = 'AvatarManz engine (avatarmanz/VIctory-7900XTX main)'
 }
+# 6.28: VIctory-NVIDIA, trustno1-coder's engine as he has it: his newest
+# main, built with his own command and started by his own
+# scripts\play-foxhound.ps1 with his settings, with only our report fix on
+# top (scripts\try\nvidia-report-patch.txt: the Try version, failed shaders
+# and refused pipelines saved, out of memory, root signature refusals and
+# safer crash stacks in the log), so its report reads like this fork's.
+# N switches to it and back; this fork's engine stays the default.
+$EngineNvUrl = 'https://github.com/trustno1-coder/VIctory-NVIDIA.git'
+$EngineNvBranch = 'main'
+# The commit of his the report fix was made on: built when the fix does not
+# go onto his newest.
+$EngineNvBase = 'd12eb1b23da4cad2f551a3dd49e82a87e564122a'
 $MinGitUrl = 'https://github.com/git-for-windows/git/releases/download/v2.56.1.windows.1/MinGit-2.56.1-64-bit.zip'
 $TryHome = Join-Path $env:LOCALAPPDATA 'VIctoryTry'
 $Src = Join-Path $TryHome 'victory'
@@ -58,6 +70,7 @@ $Src8 = Join-Path $TryHome 'victory-8gb'
 $Target8 = Join-Path $TryHome 'target-8gb'
 $SrcA = Join-Path $TryHome 'victory-avm'
 $TargetA = Join-Path $TryHome 'target-avm'
+$SrcN = Join-Path $TryHome 'victory-nvidia'
 $ConfigPath = Join-Path $TryHome 'config.json'
 $LogDir = Join-Path $TryHome 'logs'
 $BackupDir = Join-Path $TryHome 'backup'
@@ -72,11 +85,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = ''; tidy = ''; meter = ''; beside = ''; dlss = ''; fg = ''; fps = ''; movies = ''; fullscreen = ''; mousecap = ''; imeen = ''; look = ''; dlss_dl = ''; sl_dir = ''; menu_seen = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = ''; tidy = ''; meter = ''; beside = ''; dlss = ''; fg = ''; fps = ''; movies = ''; fullscreen = ''; mousecap = ''; imeen = ''; look = ''; dlss_dl = ''; sl_dir = ''; menu_seen = ''; builtn = ''; nv_fix = ''; nv_shaders = ''; nv_warm = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin', 'tidy', 'meter', 'beside', 'dlss', 'fg', 'fps', 'movies', 'fullscreen', 'mousecap', 'imeen', 'look', 'dlss_dl', 'sl_dir', 'menu_seen')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin', 'tidy', 'meter', 'beside', 'dlss', 'fg', 'fps', 'movies', 'fullscreen', 'mousecap', 'imeen', 'look', 'dlss_dl', 'sl_dir', 'menu_seen', 'builtn', 'nv_fix', 'nv_shaders', 'nv_warm')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -443,10 +456,15 @@ function Engine8-Exe { return Join-Path $Target8 'release\victory.exe' }
 function Engine8 { return $script:Config.engine -eq '8gb' }
 function EngineAvm-Exe { return Join-Path $TargetA 'diag\victory.exe' }
 function EngineAvm { return $script:Config.engine -eq 'avm' }
-# This fork's own engine: neither of the others.
-function OwnEngine { return -not (Engine8) -and -not (EngineAvm) }
-function Victory-Exe { if (EngineAvm) { return EngineAvm-Exe } elseif (Engine8) { return Engine8-Exe } else { return Ours-Exe } }
-function Engine-Name { if (EngineAvm) { return 'avm' } elseif (Engine8) { return '8GB' } else { return 'own' } }
+# 6.28: trustno1-coder's VIctory-NVIDIA, built where his scripts look.
+function EngineNv-Exe { return Join-Path $SrcN 'target\release\victory.exe' }
+function EngineNv { return $script:Config.engine -eq 'nvidia' }
+# This fork's own engine: none of the others.
+function OwnEngine { return -not (Engine8) -and -not (EngineAvm) -and -not (EngineNv) }
+# The engines the quick menu's modes are for.
+function MenuEngine { return (OwnEngine) -or (EngineNv) }
+function Victory-Exe { if (EngineNv) { return EngineNv-Exe } elseif (EngineAvm) { return EngineAvm-Exe } elseif (Engine8) { return Engine8-Exe } else { return Ours-Exe } }
+function Engine-Name { if (EngineNv) { return 'nv' } elseif (EngineAvm) { return 'avm' } elseif (Engine8) { return '8GB' } else { return 'own' } }
 
 function Build {
     Step 'Building VIctory (the first build takes a while; later ones are quicker)'
@@ -590,6 +608,9 @@ function Tidy-Disk([bool]$sizes) {
     if (-not (Engine8)) {
         foreach ($p in @($Src8, $Target8, (Join-Path $TryHome 'cache-8gb'))) { $freed += Remove-Folder $p 'the 8 GB engine is not in use (N builds it again)' }
     }
+    if (-not (EngineNv)) {
+        foreach ($p in @($SrcN, (Join-Path $TryHome 'cache-nvidia'), (Join-Path $TryHome 'failed-shaders-nvidia'))) { $freed += Remove-Folder $p 'the VIctory-NVIDIA engine is not in use (N builds it again)' }
+    }
     $freed += Keep-Newest $LogDir 'game-*.log' 10
     $freed += Keep-Newest $BackupDir 'catez-*.bundle' 2
     foreach ($d in @(Get-ChildItem -LiteralPath $TryHome -Directory -Filter 'report-*' -ErrorAction SilentlyContinue)) { $freed += Remove-Folder $d.FullName 'a report folder left half made' }
@@ -703,6 +724,17 @@ function Build-Engine8 {
 function Ensure-Engine([bool]$update) {
     if (OwnEngine) {
         if ($update -or -not (Test-Path (Ours-Exe))) { return (Build-All) }
+        return $true
+    }
+    if (EngineNv) {
+        $new = $true
+        if ($update -or -not (Test-Path (EngineNv-Exe))) { $new = Update-EngineNv } else { $new = $false }
+        if ($new) { $null = Build-EngineNv }
+        if (Test-Path (EngineNv-Exe)) { return $true }
+        Bad 'no VIctory-NVIDIA engine to run: running this fork''s engine instead (N switches engines)'
+        $script:Config.engine = 'own'
+        Save-Config
+        if (-not (Test-Path (Ours-Exe))) { return (Build-All) }
         return $true
     }
     if (EngineAvm) {
@@ -843,6 +875,275 @@ function Build-EngineAvm {
     return $true
 }
 
+# ------------------------------------------------------------- VIctory-NVIDIA engine (6.28)
+
+function GN {
+    $out = @(& $script:Git -C $SrcN -c core.autocrlf=false -c advice.detachedHead=false @args 2>&1 | ForEach-Object { "$_" })
+    $script:GCode = $LASTEXITCODE
+    return $out
+}
+
+# Our report fix (scripts\try\nvidia-report-patch.txt of the newest fork
+# downloaded: this fork's source folder is not checked out while another
+# engine is in use), written to VIctory Try's folder; and its fingerprint,
+# so a new fix builds again.
+function Nv-Patch {
+    $to = Join-Path $TryHome 'nvidia-report-patch.txt'
+    $lines = @(G show 'refs/remotes/origin/fork:scripts/try/nvidia-report-patch.txt')
+    if ($script:GCode -eq 0 -and $lines.Count -gt 10) {
+        try { [IO.File]::WriteAllText($to, (($lines -join "`n") + "`n"), [Text.Encoding]::ASCII) } catch {}
+    } else {
+        $here = Join-Path $Src 'scripts\try\nvidia-report-patch.txt'
+        if (Test-Path -LiteralPath $here) { Copy-Item -LiteralPath $here -Destination $to -Force -ErrorAction SilentlyContinue }
+    }
+    return $to
+}
+function Nv-PatchKey {
+    $p = Nv-Patch
+    if (-not (Test-Path -LiteralPath $p) -or $env:VICTORY_TRY_NV_PLAIN -eq '1') { return 'none' }
+    try { return (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.Substring(0, 12).ToLower() } catch { return 'none' }
+}
+
+# Downloads trustno1-coder's engine (or its news). $true: new, to be built;
+# $false: built already; $null: nothing to build.
+function Update-EngineNv {
+    Step 'Getting the VIctory-NVIDIA engine (trustno1-coder/VIctory-NVIDIA: his full code)'
+    if ((Test-Path $SrcN) -and -not (Test-Path (Join-Path $SrcN '.git'))) { Remove-Item -Recurse -Force $SrcN }
+    if (-not (Test-Path $SrcN)) {
+        & $script:Git -c core.autocrlf=false clone -q --single-branch --branch $EngineNvBranch $EngineNvUrl $SrcN
+        if ($LASTEXITCODE -ne 0) { Bad 'could not download the VIctory-NVIDIA engine: check the internet connection'; return $null }
+    }
+    $null = GN remote set-url origin $EngineNvUrl
+    $null = GN fetch -q origin "+refs/heads/${EngineNvBranch}:refs/remotes/origin/engine"
+    if ($script:GCode -ne 0) { Say 'could not reach the VIctory-NVIDIA engine: using what was downloaded before' }
+    $head = (GN rev-parse -q --verify refs/remotes/origin/engine) | Select-Object -First 1
+    if (-not $head) { Bad "the VIctory-NVIDIA engine download is broken: delete $SrcN and press U"; return $null }
+    $script:KeyN = "enginenv:$head+$(Nv-PatchKey)"
+    if (($script:KeyN -eq $script:Config.builtn) -and (Test-Path (EngineNv-Exe))) { Say 'no changes since last time'; return $false }
+    return $true
+}
+
+# His newest code with our report fix on top, built with his command (his
+# README and play-foxhound.ps1: cargo build --release --locked -p victory,
+# into target\release in his folder, where his scripts look). When the fix
+# does not go onto his newest code: onto the commit it was made on; when
+# nothing with it builds: his code alone (the report is then thinner).
+function Build-EngineNv {
+    $head = (GN rev-parse -q --verify refs/remotes/origin/engine) | Select-Object -First 1
+    Step 'Building the VIctory-NVIDIA engine (his code; the first build takes a while, later ones are quicker)'
+    $tc = Join-Path $SrcN 'rust-toolchain.toml'
+    $null = GN checkout -q -f -B try $head
+    if (Test-Path $tc) {
+        $m = Select-String -LiteralPath $tc -Pattern '^\s*channel\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if ($m) {
+            $channel = $m.Matches[0].Groups[1].Value
+            Say "Rust $channel"
+            & rustup toolchain install $channel --profile minimal --target x86_64-pc-windows-msvc 2>&1 | ForEach-Object { "$_" } | Out-Host
+        }
+    }
+    $patch = Nv-Patch
+    $tries = @()
+    if ((Nv-PatchKey) -ne 'none') {
+        $tries += , @($head, $true)
+        if (-not $head.StartsWith($EngineNvBase)) { $tries += , @($EngineNvBase, $true) }
+    }
+    $tries += , @($head, $false)
+    $log = Join-Path $LogDir 'build.log'
+    $code = 1
+    foreach ($t in $tries) {
+        $at = $t[0]; $withFix = $t[1]
+        $null = GN am --abort
+        $null = GN checkout -q -f -B try $at
+        if ($script:GCode -ne 0) { Say "his commit $($at.Substring(0, 7)) is not in the download: skipped"; continue }
+        $null = GN clean -fdq
+        if ($withFix) {
+            $null = GN -c 'user.name=VIctory Try' -c 'user.email=try@localhost' am -3 -q $patch
+            if ($script:GCode -ne 0) {
+                $null = GN am --abort
+                Say "our report fix does not go onto his commit $($at.Substring(0, 7)) (he changed the same lines)"
+                continue
+            }
+        }
+        $line = (GN log -1 --format='%h %ad %s' --date=short $at) | Select-Object -First 1
+        Say "engine: $line"
+        Say $(if ($withFix) { 'with our report fix on top (the same report as this fork''s engine)' } else { 'his code alone, without our report fix' })
+        $env:CARGO_TARGET_DIR = Join-Path $SrcN 'target'
+        Push-Location $SrcN
+        try {
+            & cargo build --release --locked -p victory 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
+            $code = $LASTEXITCODE
+        } finally { Pop-Location; $env:CARGO_TARGET_DIR = $Target }
+        if ($code -eq 0 -and (Test-Path (EngineNv-Exe))) {
+            $script:Config.builtn = $script:KeyN
+            $script:Config.nv_fix = $(if ($withFix) { $at.Substring(0, 10) } else { 'none' })
+            $script:Config.nv_shaders = ''
+            $script:Config.nv_warm = ''
+            Save-Config
+            Say 'the VIctory-NVIDIA engine is built'
+            return $true
+        }
+        Bad "that did not build (code $code)$(if ($withFix) { ': trying without our fix' })"
+    }
+    Bad "the VIctory-NVIDIA engine did not build. The full output is in $log"
+    $lines = @(Get-Content -LiteralPath $log -ErrorAction SilentlyContinue)
+    $first = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^error') { $first = $i; break } }
+    if ($first -lt 0) { $first = [Math]::Max(0, $lines.Count - 25) }
+    if ($lines.Count -gt 0) { $lines[$first..([Math]::Min($lines.Count - 1, $first + 24))] | ForEach-Object { Write-Host ('    ' + $_) } }
+    return $false
+}
+
+# What his launcher needs from VIctory Try: the paths his
+# scripts\play-foxhound.ps1 keeps (game, cache, NVIDIA's files), the rest
+# given to it as its own options (-SeriesS, -Dlss, -FrameGen, -Fps, -Res)
+# and -More. His settings are all his; ours are not used. What the user
+# set before VIctory Try started stays (through -More).
+function Set-EngineNvEnv {
+    $c = $script:Config
+    Get-ChildItem Env: | Where-Object { $_.Name -like 'VICTORY_*' } | ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" -ErrorAction SilentlyContinue }
+    foreach ($k in $script:UserAll.Keys) { [Environment]::SetEnvironmentVariable($k, $script:UserAll[$k], 'Process') }
+    $env:RUST_BACKTRACE = '1'
+    if ($null -eq $script:UserAll['VICTORY_GAME_DIR']) { $env:VICTORY_GAME_DIR = $c.game_dir }
+    if ($null -eq $script:UserAll['VICTORY_CACHE_DIR']) { $env:VICTORY_CACHE_DIR = Join-Path $TryHome 'cache-nvidia' }
+    if ($null -eq $script:UserAll['VICTORY_DUMP_FAILED']) { $env:VICTORY_DUMP_FAILED = Join-Path $TryHome 'failed-shaders-nvidia' }
+    $env:VICTORY_TRY_VERSION = $TryVersion
+    $env:VICTORY_TRY_RUNNING = '1'
+    $mode = $(if ($c.dlss) { $c.dlss } else { 'quality' })
+    $gen = Rtx-Gen
+    $script:NvDlss = $false
+    if ($null -ne $script:UserAll['VICTORY_STREAMLINE_DIR']) { $script:NvDlss = $mode -ne 'off' }
+    elseif ($mode -eq 'off') { Say 'DLSS: off (the game''s own upscaling)' }
+    elseif ($gen -lt 20) { Say "DLSS: needs a GeForce RTX card (this PC: $(if (Card-Name) { Card-Name } else { 'unknown' })): the game's own upscaling" }
+    else {
+        $bin = Ensure-Dlss
+        if ($bin) {
+            $env:VICTORY_STREAMLINE_DIR = $bin; $script:NvDlss = $true
+            if ($c.fg -ne 'none' -and $gen -ge 40 -and (Hags-State) -eq 'off') { Bad 'frame generation needs hardware-accelerated GPU scheduling: Windows Settings > System > Display > Graphics > Change default graphics settings, turn it on, restart the PC' }
+        }
+        else { Say 'DLSS: NVIDIA''s files are not there (DL tries the download again): the game''s own upscaling' }
+    }
+    Say "engine: VIctory-NVIDIA (trustno1-coder), his code$(if ($c.nv_fix -and $c.nv_fix -ne 'none') { ' + our report fix' } else { ' alone' }), started by his play-foxhound.ps1   (N: back to this fork's engine)"
+    Say "mode: $(Mode-Line), $(Mode-Line2)"
+    Say 'in the game: F1 his settings menu, F3 his stats panel'
+}
+
+# His play-foxhound.ps1's options and -More for this run: the mode from the
+# menu, and what his play-gta6-framegen.ps1 adds (worker pools for 16/24+
+# threads, placed order; EXTREME: no cap, bigger pools, High priority).
+function Nv-RunSpec($c) {
+    $opts = [ordered]@{}
+    if ($c.console -eq 'series-s') { $opts.SeriesS = $true }
+    $opts.Res = $(if ($c.res -eq '4k') { '4k' } else { '1440' })
+    $mode = $(if ($c.dlss) { $c.dlss } else { 'quality' })
+    $more = [ordered]@{}
+    if (-not $script:NvDlss) { $opts.Dlss = 'off' }
+    elseif ($mode -eq 'ultraperformance') { $opts.Dlss = 'performance'; $more.VICTORY_DLSS_MODE = 'ultraperformance' }
+    else { $opts.Dlss = $mode }
+    if ($c.fg -match '^[2-6]$') { $opts.FrameGen = $true; $opts.FrameGenX = [int]$c.fg }
+    elseif ($c.fg -eq 'none') { $opts.NoFrameGenReady = $true }
+    $opts.Fps = $(if (AllOut) { 1000 } else { switch ($c.fps) { '60' { 60 } '120' { 120 } '30' { 30 } default { 1000 } } })
+    $cpus = [Environment]::ProcessorCount
+    if ($env:GTA6_NO_TUNE -ne '1') {
+        $more.VICTORY_PLACED_ORDER = '1'
+        if ($cpus -ge 24) { $more.VICTORY_THIN_THREADS = '12'; $more.VICTORY_UNDER_THREADS = '8'; $more.VICTORY_LAND_THREADS = '8' }
+        elseif ($cpus -ge 16) { $more.VICTORY_THIN_THREADS = '12'; $more.VICTORY_UNDER_THREADS = '8'; $more.VICTORY_LAND_THREADS = '6' }
+        if ((AllOut) -and $cpus -ge 24) { $more.VICTORY_LAND_THREADS = '12'; $more.VICTORY_PIPELINE_WORKERS = '4' }
+    }
+    # (His script clears every other VICTORY_ switch: these come through -More.)
+    $more.VICTORY_TRY_VERSION = $TryVersion
+    $more.VICTORY_DUMP_FAILED = $env:VICTORY_DUMP_FAILED
+    foreach ($k in $script:UserAll.Keys) { if ($k -like 'VICTORY_*') { $more[$k] = [string]$script:UserAll[$k] } }
+    return [ordered]@{
+        play = (Join-Path $SrcN 'scripts\play-foxhound.ps1')
+        game = $c.game_exe
+        exe = (EngineNv-Exe)
+        high = [bool](AllOut)
+        opts = $opts
+        more = $more
+    }
+}
+
+# Writes the files the game window runs with his launcher: run-nvidia.json
+# (the run's options) and run-nvidia.ps1. Returns the runner's path.
+function Nv-Runner($c) {
+    $runner = Join-Path $TryHome 'run-nvidia.ps1'
+    $json = Join-Path $TryHome 'run-nvidia.json'
+    $script:NvJson = $json
+    $text = @'
+param([string]$Json, [string]$Log, [string]$CodeFile)
+try { $Host.UI.RawUI.WindowTitle = 'VIctory - game output (VIctory-NVIDIA engine)' } catch {}
+Write-Host '== VIctory Try @V@ - game output, VIctory-NVIDIA engine (his play-foxhound.ps1)' -ForegroundColor Cyan
+Write-Host '   The menu is in the VIctory Try window. This window closes by itself when the game stops.'
+Write-Host ''
+$j = Get-Content -LiteralPath $Json -Raw | ConvertFrom-Json
+$opts = @{}
+foreach ($p in $j.opts.PSObject.Properties) { $opts[$p.Name] = $p.Value }
+$more = @{}
+foreach ($p in $j.more.PSObject.Properties) { $more[$p.Name] = [string]$p.Value }
+if ($j.high) {
+    $null = Start-Job -ArgumentList $j.exe -ScriptBlock {
+        param($x)
+        $end = (Get-Date).AddMinutes(15)
+        while ((Get-Date) -lt $end) {
+            $p = @(Get-Process victory -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $x })
+            if ($p.Count -gt 0) { $p | ForEach-Object { $_.PriorityClass = 'High' }; break }
+            Start-Sleep -Seconds 2
+        }
+    }
+    Write-Host 'EXTREME: the game goes to High priority once it starts.'
+}
+$code = $null
+try {
+    & $j.play -Exe $j.game -Build release @opts -More $more 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $Log
+    $code = $LASTEXITCODE
+} catch { Write-Host "his launcher stopped: $_" -ForegroundColor Red; $code = 1 }
+Set-Content -LiteralPath $CodeFile -Value ([string]$code) -Encoding ASCII
+exit $code
+'@
+    Set-Content -LiteralPath $runner -Value $text.Replace('@V@', $TryVersion) -Encoding ASCII
+    Set-Content -LiteralPath $json -Value ((Nv-RunSpec $c) | ConvertTo-Json -Depth 4) -Encoding UTF8
+    return $runner
+}
+
+# What his F1 menu saved (victory-settings.txt in his folder): its console,
+# DLSS, frame generation and fps come back into the menu here, and leave his
+# file, so the next run starts with what the menu shows (his other saved
+# switches stay, as his launcher applies them).
+function Nv-SyncMenu {
+    $c = $script:Config
+    $file = Join-Path $SrcN 'victory-settings.txt'
+    if (-not (Test-Path -LiteralPath $file)) { return }
+    $keep = @(); $got = @{}
+    foreach ($line in @(Get-Content -LiteralPath $file -ErrorAction SilentlyContinue)) {
+        if ($line -match '^\s*(VICTORY_MENU_(CONSOLE|DLSS|FRAMEGEN|FPS|RES))\s*=(.*)$') { $got[$Matches[1]] = $Matches[3].Trim() } else { $keep += $line }
+    }
+    if ($got.Count -eq 0) { return }
+    $v = $got['VICTORY_MENU_CONSOLE']
+    if ($v -eq 'series-s' -or $v -eq 'series-x') { if ($c.console -ne $v) { $c.console = $v; $c.console_auto = '5.6'; $c.console_user = '1' } }
+    $v = $got['VICTORY_MENU_DLSS']
+    if (@('off', 'dlaa', 'quality', 'balanced', 'performance', 'ultraperformance') -contains $v) {
+        if (-not ($v -eq 'performance' -and $c.dlss -eq 'ultraperformance')) { $c.dlss = $(if ($v -eq 'quality') { '' } else { $v }) }
+    }
+    $v = $got['VICTORY_MENU_FRAMEGEN']
+    if ($v -match '^[2-6]$') { $c.fg = $v } elseif ($v -eq '0' -and $c.fg -match '^[2-6]$') { $c.fg = '' }
+    $v = $got['VICTORY_MENU_FPS']
+    if ($v -match '^\d+$' -and -not (AllOut)) { $c.fps = $(switch ([int]$v) { 60 { '60' } 120 { '120' } 30 { '30' } default { '' } }) }
+    $v = $got['VICTORY_MENU_RES']
+    if ($v -eq '4k') { $c.res = '4k' } elseif ($v -eq '1440' -or $v -eq '1080to1440') { $c.res = '' }
+    try { Set-Content -LiteralPath $file -Value $keep -Encoding ASCII } catch {}
+    Save-Config
+    Say "his F1 menu's choices kept: $(Mode-Line), $(Mode-Line2)"
+}
+
+# The settings his launcher ran with (the first line of its own log, in
+# %LOCALAPPDATA%\victory\logs), for the report.
+function Nv-LastSwitches([datetime]$since) {
+    $dir = Join-Path $env:LOCALAPPDATA 'victory\logs'
+    $f = Get-ChildItem -LiteralPath $dir -Filter 'foxhound-*.log' -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $since } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $f) { return '' }
+    return (Get-Content -LiteralPath $f.FullName -TotalCount 1 -ErrorAction SilentlyContinue)
+}
+
 # The PC's memory in MB: [RAM, RAM + page file (the commit limit)], or 0s.
 function Ram-Info {
     try {
@@ -923,13 +1224,13 @@ function Set-EngineAvmEnv {
 # build: a few minutes) and every pipeline earlier runs drew with made
 # ("victory warm --used", quick when there is nothing new). The game then
 # compiles nothing it has met before while you play.
-function Prepare-Avm([string]$why) {
+function Prepare-Avm([string]$why, [string]$exe = '', [string]$builtName = 'builta', [string]$shadersName = 'avm_shaders', [string]$warmName = 'avm_warm') {
     $c = $script:Config
-    $exe = EngineAvm-Exe
+    if (-not $exe) { $exe = EngineAvm-Exe }
     $pdir = Join-Path $env:VICTORY_CACHE_DIR 'pipelines'
     $log = Join-Path $LogDir 'prepare.log'
     $cores = [Environment]::ProcessorCount
-    if ("$($c.avm_shaders)" -ne "$($c.builta)") {
+    if ("$($c[$shadersName])" -ne "$($c[$builtName])") {
         Step "Translating every shader of the game with it closed ($why)"
         Say 'Once per build: a few minutes. Stopping it is fine (the game translates the rest itself).'
         Push-Location $TryHome
@@ -938,12 +1239,12 @@ function Prepare-Avm([string]$why) {
             $code = $LASTEXITCODE
         } finally { Pop-Location }
         if ($code -eq 0) { Say 'every shader translated' } else { Bad "translating stopped (code $code; output in $log)" }
-        $c.avm_shaders = $c.builta
+        $c[$shadersName] = $c[$builtName]
         Save-Config
     }
     $early = Join-Path $pdir 'early-pipelines.txt'
-    $stamp = "$($c.builta)|$(if (Test-Path -LiteralPath $early) { (Get-Item -LiteralPath $early).Length } else { 0 })"
-    if ((Test-Path -LiteralPath $early) -and "$($c.avm_warm)" -ne $stamp) {
+    $stamp = "$($c[$builtName])|$(if (Test-Path -LiteralPath $early) { (Get-Item -LiteralPath $early).Length } else { 0 })"
+    if ((Test-Path -LiteralPath $early) -and "$($c[$warmName])" -ne $stamp) {
         Step 'Making the pipelines earlier runs drew with, with the game closed'
         Say 'Quick when there is nothing new; the first time after a build or driver update takes longer.'
         # (Each worker is a process with its own compiler: a third of the
@@ -954,7 +1255,7 @@ function Prepare-Avm([string]$why) {
             $code = $LASTEXITCODE
         } finally { Pop-Location }
         if ($code -eq 0) { Say 'pipelines made' } else { Bad "making pipelines stopped (code $code; output in $log)" }
-        $c.avm_warm = $stamp
+        $c[$warmName] = $stamp
         Save-Config
     }
 }
@@ -2127,6 +2428,13 @@ function Run-Game {
             Say "VIctory: the AvatarManz engine, built from $line"
         }
     }
+    if (EngineNv) {
+        $built = ''
+        if ("$($c.builtn)" -match '^enginenv:([0-9a-f]{7,40})') {
+            $line = (GN log -1 --format='%h %ad %s' --date=short $Matches[1]) | Select-Object -First 1
+            Say "VIctory: the VIctory-NVIDIA engine (trustno1-coder), built from $line$(if ($c.nv_fix -and $c.nv_fix -ne 'none') { ' + our report fix' } else { ', without our report fix' })"
+        }
+    }
     if (Engine8) {
         $built = ''
         if ("$($c.built8)" -match '^engine8:([0-9a-f]{7,40})') {
@@ -2153,7 +2461,7 @@ function Run-Game {
     Say "command: victory.exe run `"$($c.game_exe)`" --execute --console $($c.console)   (VICTORY_GAME_DIR=$($c.game_dir))"
     Say 'To stop: close the game window.'
     # (6.9: none of this fork's settings for the AvatarManz engine.)
-    if (-not (EngineAvm)) { Set-RunEnv }
+    if (-not (EngineAvm) -and -not (EngineNv)) { Set-RunEnv }
     # 6.16: failed shaders older than 3 days go (each run and prepare saves
     # its own again; recent ones stay for the report).
     if ((OwnEngine) -and $script:Config.tidy -ne 'off' -and $env:VICTORY_DUMP_FAILED -and (Test-Path -LiteralPath $env:VICTORY_DUMP_FAILED)) {
@@ -2162,6 +2470,7 @@ function Run-Game {
     }
     Tune-PC
     if (EngineAvm) { Set-EngineAvmEnv; Prepare-Avm 'new build or new pipelines' }
+    elseif (EngineNv) { Set-EngineNvEnv; Prepare-Avm 'new build or new pipelines' (EngineNv-Exe) 'builtn' 'nv_shaders' 'nv_warm' }
     elseif (Engine8) { Set-Engine8Env }
     elseif ("$($c.prepared)" -ne "$($c.built_key)") { Prepare-Shaders 'new build' }
     elseif ((OwnEngine) -and "$($c.shaders_all)" -ne "$($c.built_key)" -and $env:VICTORY_TRY_ALL_SHADERS -ne '0') { Prepare-Shaders 'every shader of the game, once per build' }
@@ -2184,6 +2493,7 @@ function Run-Game {
     }
     Say 'New places compile their pipelines while you play (things may be missing for a while); after you close the game they are all compiled, and the next launch has them from the start.'
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $script:RunStart = Get-Date
     $log = Join-Path $LogDir "game-$stamp.log"
     # 4.3: the game's output (the rendering lines) goes to a window of its
     # own; this one keeps the menu, versions and settings.
@@ -2191,6 +2501,15 @@ function Run-Game {
     $code = $null
     if ($env:VICTORY_TRY_ONE_WINDOW -ne '1') {
         $code = Run-InOwnWindow $c $log
+    }
+    if ($null -eq $code -and (EngineNv)) {
+        # His launcher in this window (a PowerShell of its own: it ends with exit).
+        $runner = Nv-Runner $c
+        Push-Location $TryHome
+        try {
+            & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -File $runner $script:NvJson $log "$log.exit"
+            $code = $LASTEXITCODE
+        } finally { Pop-Location; Remove-Item -LiteralPath "$log.exit" -Force -ErrorAction SilentlyContinue }
     }
     if ($null -eq $code) {
         Push-Location $TryHome
@@ -2210,6 +2529,10 @@ function Run-Game {
     # game is closed: the next launch shows it from the start.
     if ((OwnEngine) -and "$($c.recipes)" -ne (Recipes-Size)) { Prepare-Shaders 'new pipelines from this run' }
     if (EngineAvm) { Prepare-Avm 'new pipelines from this run' }
+    if (EngineNv) {
+        Nv-SyncMenu
+        Prepare-Avm 'new pipelines from this run' (EngineNv-Exe) 'builtn' 'nv_shaders' 'nv_warm'
+    }
 }
 
 # The game in a window of its own ('VIctory - game output'), with its output
@@ -2230,11 +2553,17 @@ function Run-InOwnWindow($c, [string]$log) {
         'exit $code'
     )
     try {
-        Set-Content -LiteralPath $runner -Value $lines -Encoding ASCII
-        Remove-Item -LiteralPath $codeFile -Force -ErrorAction SilentlyContinue
         $ps = (Get-Process -Id $PID).Path
         $q = { param($v) '"' + ([string]$v).Replace('"', '') + '"' }
-        $argLine = "-NoProfile -ExecutionPolicy Bypass -File $(& $q $runner) $(& $q (Victory-Exe)) $(& $q $c.game_exe) $(& $q $c.console) $(& $q $log) $(& $q $codeFile)"
+        Remove-Item -LiteralPath $codeFile -Force -ErrorAction SilentlyContinue
+        if (EngineNv) {
+            # 6.28: his launcher (scripts\play-foxhound.ps1) starts the game.
+            $runner = Nv-Runner $c
+            $argLine = "-NoProfile -ExecutionPolicy Bypass -File $(& $q $runner) $(& $q $script:NvJson) $(& $q $log) $(& $q $codeFile)"
+        } else {
+            Set-Content -LiteralPath $runner -Value $lines -Encoding ASCII
+            $argLine = "-NoProfile -ExecutionPolicy Bypass -File $(& $q $runner) $(& $q (Victory-Exe)) $(& $q $c.game_exe) $(& $q $c.console) $(& $q $log) $(& $q $codeFile)"
+        }
         $p = Start-Process -FilePath $ps -ArgumentList $argLine -WorkingDirectory $TryHome -PassThru
     } catch {
         Bad "could not open the game output window ($_): the game runs in this window"
@@ -2455,10 +2784,16 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
     try {
         New-Item -ItemType Directory -Force -Path $stage | Out-Null
         Copy-Item -LiteralPath $log -Destination $stage
-        $engineLine = $(if (EngineAvm) { "engine: AvatarManz ($($c.builta)) $EngineAvmUrl $EngineAvmBranch" } elseif (Engine8) { "engine: 8 GB ($($c.built8))" } else { "engine: ours ($($c.built_key))" })
+        $engineLine = $(if (EngineNv) { "engine: VIctory-NVIDIA ($($c.builtn)) $EngineNvUrl $EngineNvBranch, report fix: $(if ($c.nv_fix) { $c.nv_fix } else { 'none' })" } elseif (EngineAvm) { "engine: AvatarManz ($($c.builta)) $EngineAvmUrl $EngineAvmBranch" } elseif (Engine8) { "engine: 8 GB ($($c.built8))" } else { "engine: ours ($($c.built_key))" })
         # 6.9: the settings the run had (every VICTORY_ one) and the PC's memory.
         $ram = Ram-Info
         $envLines = @(Get-ChildItem Env: | Where-Object { $_.Name -like 'VICTORY_*' } | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" })
+        # 6.28: his launcher sets its own switches: the line its log starts with.
+        if (EngineNv) {
+            $his = Nv-LastSwitches $script:RunStart
+            $envLines += @('', '# VIctory-NVIDIA: what his play-foxhound.ps1 ran with', $(if ($his) { $his } else { '(its log was not found)' }))
+            if ($script:NvJson -and (Test-Path -LiteralPath $script:NvJson)) { Copy-Item -LiteralPath $script:NvJson -Destination $stage -ErrorAction SilentlyContinue }
+        }
         Set-Content -LiteralPath (Join-Path $stage 'settings.txt') -Value (@("ram_mb=$($ram[0]) commit_limit_mb=$($ram[1]) card_mb=$(Card-Vram) threads=$([Environment]::ProcessorCount)") + $envLines) -Encoding ASCII
         $prep = Join-Path $LogDir 'prepare.log'
         if (Test-Path -LiteralPath $prep) { Copy-Item -LiteralPath $prep -Destination $stage }
@@ -2595,7 +2930,9 @@ if (OwnEngine) {
     Say '6.11: shader stutter: the pipeline library is read into memory ahead on 16 GB PCs too (it was skipped: every pipeline in play waited on the disk), every shader of the game translated once per build with the game closed; joined submissions, copy-back split finer over the cores (lepotane), anisotropic filtering keeps point mips (AvatarManz).'
     Say '6.10: this fork''s engine again (the base stays; the others'' fixes come into it): AMD''s PC FidelityFX upscaler makes the picture (FSR 3.1 on NVIDIA; T switches), sharper own upscaler without blocks on lit surfaces, shaders AMD''s compiler made are read, the game''s debug shaders stored without packing too.'
 }
-if (EngineAvm) {
+if (EngineNv) {
+    Say '6.28: the VIctory-NVIDIA engine: trustno1-coder''s full code as he has it (his newest, his build command, his launcher and settings), with only our report fix on top, so its report reads like this fork''s. N goes back to this fork''s engine.'
+} elseif (EngineAvm) {
     Say '6.9: the AvatarManz engine (PortWatch #1 and #2, 16-22 fps on their cards): renderer patches, list calls on eight threads, textures on their own queue, every shader translated and every pipeline made with the game closed (no compiling while you play). N switches to this fork''s engine.'
 } elseif (Engine8) {
     Say 'engine: the 8 GB NVIDIA engine (soldsawn/victory-nvidia-8gb). N goes back to this fork''s engine.'
@@ -2609,11 +2946,39 @@ if (EngineAvm) {
 function Show-Commands {
     $c = $script:Config
     $on = { param($b) if ($b) { 'ON ' } else { 'off' } }
+    if (EngineNv) {
+        $rows = @(
+            @('Enter', 'Run again', '', 'start the game again with the settings below'),
+            @('U', 'Update', '', 'download his newest code, put our report fix on it, build it, then run the game'),
+            @('N', 'Engine', $(Engine-Name), 'nv: trustno1-coder''s VIctory-NVIDIA (his code + our report fix); N: back to this fork''s'),
+            @('V', 'Version', '', 'show which Try and VIctory version you have'),
+            @('G', 'Game paths', '', 'ask again where the game folder and game_scarlett_master.exe are'),
+            @('C', 'Console', $(if ($c.console -eq 'series-s') { 'S  ' } else { 'X  ' }), 'Series S (faster, softer) or Series X (2560x1440)'),
+            @('R', 'Output size', $(if ($c.res -eq '4k') { '4K ' } else { '1440' }), 'Series X: 2560x1440 (his) or the stock 3840x2160'),
+            @('DL', 'NVIDIA DLSS', $(switch ($c.dlss) { 'balanced' { 'B  ' } 'performance' { 'P  ' } 'ultraperformance' { 'UP ' } 'dlaa' { 'AA ' } 'off' { 'off' } default { 'Q  ' } }), 'RTX cards: Quality, Balanced, Performance, Ultra Performance, DLAA, off'),
+            @('FG', 'Frame generation', $(switch ($c.fg) { 'none' { 'off' } '' { 'rdy' } default { $c.fg + 'x ' } }), 'RTX 40/50: ready (his F1 menu turns it on), 2x, 3x, 4x, off'),
+            @('FPS', 'Frame cap', $(Fps-Name), 'none (his default), 60, 120, 30'),
+            @('MAX', 'EXTREME', $(& $on (AllOut)), 'his EXTREME: no cap, bigger worker pools on 24+ threads, the game at High priority'),
+            @('J', 'Saved game', '', 'continue or new game (from the very beginning), bring a save back, ask before launch on/off'),
+            @('P', 'Prepare again', '', 'translate every shader and make every pipeline again with the game closed'),
+            @('S', 'Reports folder', '', "where report zips are saved: $(Reports-Dir)"),
+            @('E', 'Open reports', '', 'open the reports folder in Explorer'),
+            @('Q', 'Quit', '', 'close VIctory Try')
+        )
+        Write-Host ''
+        Write-Host '  ============== COMMANDS, VIctory-NVIDIA engine (type the key, then Enter) ==============' -ForegroundColor Cyan
+        Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f 'KEY', 'COMMAND', 'NOW', 'WHAT IT DOES') -ForegroundColor Cyan
+        foreach ($r in $rows) { Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3]) }
+        Write-Host '  =========================================================================================' -ForegroundColor Cyan
+        Write-Host '  Switches (N, C, R, DL, FG, FPS, MAX) flip at once and are saved; Enter then runs the game with them.'
+        Write-Host '  In the game: F1 his settings menu (what it saves comes back here), F3 his stats panel.'
+        return
+    }
     if (EngineAvm) {
         $rows = @(
             @('Enter', 'Run again', '', 'start the game again with the settings below'),
             @('U', 'Update', '', 'download the newest engine, build it, then run the game'),
-            @('N', 'Engine', $(Engine-Name), 'own: this fork''s (default, the others'' fixes ported in); avm: AvatarManz/Belobug''s; 8GB: soldsawn''s'),
+            @('N', 'Engine', $(Engine-Name), 'own: this fork''s (default); N: trustno1-coder''s VIctory-NVIDIA (his code + our report fix); NO: AvatarManz''s, soldsawn''s 8GB'),
             @('V', 'Version', '', 'show which Try and VIctory version you have'),
             @('G', 'Game paths', '', 'ask again where the game folder and game_scarlett_master.exe are'),
             @('C', 'Console', $(if ($c.console -eq 'series-s') { 'S  ' } else { 'X  ' }), 'Series S (renders 1280x720 to 1080p: faster, the one for 6 GB cards) or Series X'),
@@ -2642,7 +3007,7 @@ function Show-Commands {
     $rows = @(
         @('Enter', 'Run again', '', 'start the game again with the settings below'),
         @('U', 'Update', '', 'download the newest VIctory, build it, then run the game'),
-        @('N', 'Engine', $(Engine-Name), 'own: this fork''s (default, the others'' fixes ported in); avm: AvatarManz/Belobug''s; 8GB: soldsawn''s'),
+        @('N', 'Engine', $(Engine-Name), 'own: this fork''s (default); N: trustno1-coder''s VIctory-NVIDIA (his code + our report fix); NO: AvatarManz''s, soldsawn''s 8GB'),
         @('V', 'Version', '', 'show which Try and VIctory version you have'),
         @('G', 'Game paths', '', 'ask again where the game folder and game_scarlett_master.exe are'),
         @('C', 'Console', $(if ($c.console -eq 'series-s') { 'S  ' } else { 'X  ' }), 'Xbox Series S (renders 1280x720 and scales up: faster) or Series X (full size)'),
@@ -2684,7 +3049,7 @@ function Show-Commands {
         Write-Host ('  {0,-6} {1,-18} {2,-4}  {3}' -f $r[0], $r[1], $r[2], $r[3])
     }
     Write-Host '  ====================================================================================' -ForegroundColor Cyan
-    Write-Host '  Switches (N, C, R, F, B, M, H, A, L, O, W, K, T, DL, FG, FPS, MOV, FS, MOUSE, LOOK, Y, X, Z, D, MAX) flip at once and are saved; Enter then runs the game with them.'
+    Write-Host '  Switches (N, NO, C, R, F, B, M, H, A, L, O, W, K, T, DL, FG, FPS, MOV, FS, MOUSE, LOOK, Y, X, Z, D, MAX) flip at once and are saved; Enter then runs the game with them.'
     Write-Host '  In the game: F1 opens the settings menu (frame generation, DLSS, fullscreen, mouse), F3 the numbers box.'
 }
 
@@ -2755,7 +3120,12 @@ function Fg-Name {
     switch ($script:Config.fg) { 'none' { 'off' } '' { 'ready (F1)' } default { "$($script:Config.fg)x" } }
 }
 function Fps-Name {
-    switch ($script:Config.fps) { '120' { '120' } 'max' { 'none' } '30' { '30' } default { '60' } }
+    # (VIctory-NVIDIA's own default is no cap: 60 is asked for there.)
+    if (EngineNv) { switch ($script:Config.fps) { '60' { '60' } '120' { '120' } '30' { '30' } default { 'none' } } }
+    else { switch ($script:Config.fps) { '120' { '120' } 'max' { 'none' } '30' { '30' } default { '60' } } }
+}
+function Engine-Line {
+    if (EngineNv) { 'VIctory-NVIDIA (his code + our report)' } else { 'ours (MfDev0/victory)' }
 }
 function Mode-Now {
     $c = $script:Config
@@ -2780,6 +3150,7 @@ function Quick-Menu([int]$TimeoutS = 0) {
         Write-Host ''
         Write-Host '  ================================================'
         Write-Host "    GTA VI - VIctory Try $TryVersion"
+        Write-Host "    engine: $(Engine-Line)"
         Write-Host "    now: $(Mode-Line)"
         Write-Host "         $(Mode-Line2)"
         Write-Host '  ================================================'
@@ -2797,6 +3168,7 @@ function Quick-Menu([int]$TimeoutS = 0) {
         Write-Host ('    ' + "X. EXTREME: $(if ($c.allout -eq '1') { 'on' } else { 'off' })".PadRight(26) + 'R. Recommended')
         Write-Host ('    ' + 'A. All settings'.PadRight(26) + 'U. Update')
         Write-Host ('    ' + 'P. Prepare again'.PadRight(26) + 'Q. Quit')
+        Write-Host ('    ' + "N. Engine: $(if (EngineNv) { 'switch to ours' } else { 'switch to VIctory-NVIDIA' })")
         Write-Host '  ------------------------------------------------'
         Write-Host '    > is the mode now. Series X: 1440p, sharper.'
         Write-Host '    Series S: lighter, for 8 GB cards and less.'
@@ -2807,11 +3179,18 @@ function Quick-Menu([int]$TimeoutS = 0) {
         Write-Host ''
         if ($TimeoutS -gt 0) { Write-Host "  (no key in $TimeoutS seconds: the game starts)" }
         Write-Host -NoNewline '  Type 1-12 or a letter, then Enter: '
-        $pick = Read-Choice @('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', 'F', 'C', 'X', 'R', 'A', 'U', 'P', 'Q') $TimeoutS
+        $pick = Read-Choice @('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', 'F', 'C', 'X', 'R', 'N', 'A', 'U', 'P', 'Q') $TimeoutS
         $TimeoutS = 0
         switch ($pick) {
             'F' { $c.fg = $(switch ($c.fg) { '' { '2' } '2' { '3' } '3' { '4' } '4' { 'none' } default { '' } }) }
-            'C' { $c.fps = $(switch ($c.fps) { '' { '120' } '120' { 'max' } 'max' { '30' } default { '' } }) }
+            'C' { $c.fps = $(if (EngineNv) { switch ($c.fps) { '60' { '120' } '120' { '30' } '30' { '' } default { '60' } } } else { switch ($c.fps) { '' { '120' } '120' { 'max' } 'max' { '30' } default { '' } } }) }
+            'N' {
+                # 6.28: this fork's engine <-> trustno1-coder's (built the first time: a while).
+                $c.engine = $(if (EngineNv) { 'own' } else { 'nvidia' })
+                Save-Config
+                $null = Ensure-Engine $false
+                Say "engine: $(Engine-Line)"
+            }
             'X' { $c.allout = $(if ($c.allout -eq '1') { '' } else { '1' }); if ($c.allout -eq '1') { $c.plain = '' } }
             'R' { Reset-Recommended; Say 'settings: the recommended ones (the console is kept)' }
             default { return $pick }
@@ -2834,7 +3213,7 @@ function Is-Mode([string]$Pick) { return $Pick -match '^([1-9]|1[0-2])$' }
 # The menu first, as nv's cmd shows it, once the game is known (not after
 # U handed over to a newer VIctory Try: that was picked from the menu).
 $startPick = ''
-if ((OwnEngine) -and $script:Config.game_exe -and -not $handoff -and $env:VICTORY_TRY_NO_MENU -ne '1') {
+if ((MenuEngine) -and $script:Config.game_exe -and -not $handoff -and $env:VICTORY_TRY_NO_MENU -ne '1') {
     $startPick = Quick-Menu 8
     if (Is-Mode $startPick) { Set-Mode $startPick; $startPick = '' }
     elseif ($startPick -eq 'Q') { exit 0 }
@@ -2843,7 +3222,7 @@ while ($true) {
     if ($startPick) { $pick = $startPick; $startPick = '' }
     else {
         Run-Game
-        $pick = $(if (OwnEngine) { Quick-Menu } else { 'A' })
+        $pick = $(if (MenuEngine) { Quick-Menu } else { 'A' })
     }
     $k = ''
     if (Is-Mode $pick) { Set-Mode $pick; continue }
@@ -2890,7 +3269,7 @@ while ($true) {
             'Y' { $c.fxspeed = $(if ($c.fxspeed -eq 'off') { '' } else { 'off' }) }
             'DL' { $script:FsrRetry = $true; $c.dlss = $(switch ($c.dlss) { 'balanced' { 'performance' } 'performance' { 'ultraperformance' } 'ultraperformance' { 'dlaa' } 'dlaa' { 'off' } 'off' { '' } default { 'balanced' } }) }
             'FG' { $c.fg = $(switch ($c.fg) { '' { '2' } '2' { '3' } '3' { '4' } 'none' { '' } default { 'none' } }) }
-            'FPS' { $c.fps = $(switch ($c.fps) { '120' { 'max' } 'max' { '30' } '30' { '' } default { '120' } }) }
+            'FPS' { $c.fps = $(if (EngineNv) { switch ($c.fps) { '60' { '120' } '120' { '30' } '30' { '' } default { '60' } } } else { switch ($c.fps) { '120' { 'max' } 'max' { '30' } '30' { '' } default { '120' } } }) }
             'MOV' { $c.movies = $(if ($c.movies -eq 'skip') { '' } else { 'skip' }) }
             'FS' { $c.fullscreen = $(if ($c.fullscreen -eq '1') { '' } else { '1' }) }
             'MOUSE' { $c.mousecap = $(if ($c.mousecap -eq '1') { '' } else { '1' }) }
@@ -2901,7 +3280,8 @@ while ($true) {
             'C' { $c.console = $(if ($c.console -eq 'series-s') { 'series-x' } else { 'series-s' }); $c.console_auto = '5.6'; $c.console_user = '1' }
             'D' { Reset-Recommended; $c = $script:Config }
             'MAX' { $c.allout = $(if ($c.allout -eq '1') { '' } else { '1' }) }
-            'N' { $c.engine = $(switch ($c.engine) { 'avm' { '8gb' } '8gb' { 'own' } default { 'avm' } }); $null = Ensure-Engine $false }
+            'N' { $c.engine = $(if (OwnEngine) { 'nvidia' } else { 'own' }); $null = Ensure-Engine $false }
+            'NO' { $c.engine = $(switch ($c.engine) { 'avm' { '8gb' } '8gb' { 'own' } default { 'avm' } }); $null = Ensure-Engine $false }
             default { $switched = $false }
         }
         if ($switched) {
@@ -2916,7 +3296,7 @@ while ($true) {
     }
     if ($k -eq 'Q') { exit 0 }
     if ($k -eq 'G') { while (-not (Ask-Game $true)) {} }
-    if ($k -eq 'P') { $script:Config.prepared = ''; $script:Config.recipes = ''; $script:Config.shaders_all = ''; $script:Config.avm_shaders = ''; $script:Config.avm_warm = '' }
+    if ($k -eq 'P') { $script:Config.prepared = ''; $script:Config.recipes = ''; $script:Config.shaders_all = ''; $script:Config.avm_shaders = ''; $script:Config.avm_warm = ''; $script:Config.nv_shaders = ''; $script:Config.nv_warm = '' }
     if ($k -eq 'U') {
         $script:FsrRetry = $true
         $changed = Update-Source
