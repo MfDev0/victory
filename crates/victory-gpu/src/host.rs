@@ -4096,15 +4096,20 @@ fn touches(ranges: &[(usize, usize)], from: usize, to: usize) -> bool {
 /// `ranges` with `more`, in order, joined where they overlap or touch.
 fn join_ranges(ranges: &mut Vec<(usize, usize)>, more: impl IntoIterator<Item = (usize, usize)>) {
     ranges.extend(more.into_iter().filter(|r| r.0 < r.1));
+    merge_ranges(ranges);
+}
+
+/// Join valid ranges in place so the next flight can reuse their storage.
+fn merge_ranges(ranges: &mut Vec<(usize, usize)>) {
     ranges.sort_unstable();
-    let mut out: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
-    for &(from, to) in ranges.iter() {
-        match out.last_mut() {
-            Some(last) if from <= last.1 => last.1 = last.1.max(to),
-            _ => out.push((from, to)),
+    ranges.dedup_by(|next, previous| {
+        if next.0 <= previous.1 {
+            previous.1 = previous.1.max(next.1);
+            true
+        } else {
+            false
         }
-    }
-    *ranges = out;
+    });
 }
 
 /// Whether anything is in the air.
@@ -5858,11 +5863,13 @@ mod late_tests {
     /// range that only touches another's end does not touch it.
     #[test]
     fn ranges_touch_where_they_overlap() {
-        let mut ranges = Vec::new();
+        let mut ranges = Vec::with_capacity(8);
+        let storage = ranges.as_ptr();
         join_ranges(&mut ranges, [(40, 50), (10, 20), (20, 25), (45, 60), (7, 7)]);
         assert_eq!(ranges, [(10, 25), (40, 60)]);
         join_ranges(&mut ranges, [(25, 40)]);
         assert_eq!(ranges, [(10, 60)]);
+        assert_eq!(ranges.as_ptr(), storage);
         let ranges = [(10usize, 25usize), (40, 60), (100, 101)];
         for (from, to, hit) in [
             (0, 10, false),
@@ -7741,15 +7748,20 @@ impl Host {
             // What is still in the air, from the flights that are.
             written.clear();
             *lists = 0;
-            let mut ranges = Vec::new();
             for item in items.iter() {
                 if let Late::Run(flight) = item {
                     *lists += flight.order.len().max(1);
-                    ranges.extend(flight.back.iter().flat_map(|(_, r)| r.iter().copied()));
-                    ranges.extend(flight.texture_back_ranges.iter().copied());
+                    written.extend(
+                        flight
+                            .back
+                            .iter()
+                            .flat_map(|(_, ranges)| ranges.iter().copied())
+                            .chain(flight.texture_back_ranges.iter().copied())
+                            .filter(|&(from, to)| from < to),
+                    );
                 }
             }
-            join_ranges(written, ranges);
+            merge_ranges(written);
             *settling = false;
             // The landed lists are reset, and what queues hold looked at,
             // by the helper thread (they take locks a waiter may hold).
@@ -11115,13 +11127,8 @@ impl Batch {
         let ahead = self.refreshes.len() > 1;
         if ahead {
             let started = std::time::Instant::now();
-            let ranges: Vec<(usize, usize)> = self
-                .refreshes
-                .iter()
-                .filter(|r| !r.0.unwatched())
-                .map(|r| (r.1, r.2))
-                .collect();
-            crate::watch::ask_ahead(&ranges);
+            let ranges = self.refreshes.iter().filter(|r| !r.0.unwatched()).map(|r| (r.1, r.2));
+            crate::watch::ask_ahead(ranges);
             preparing(0, started.elapsed().as_micros() as u64);
         }
         if wide_refresh() && self.refreshes.len() >= 4 {

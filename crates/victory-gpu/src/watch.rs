@@ -75,7 +75,7 @@ struct Journal {
     /// Page ranges asked ahead for a submission's refreshes ([`ask_ahead`])
     /// and the asking that did: `writes` answers for a range inside one
     /// from the journal, without another kernel call.
-    ahead: Vec<(usize, usize)>,
+    ahead: Ahead,
     ahead_asked: u64,
     /// Askings of [`writes`] in the kernel now, with the journal let go:
     /// their pages and tickets (Try 6.6).
@@ -87,12 +87,60 @@ struct Journal {
     kept: bool,
 }
 
+/// Page ranges `[a, b)` asked ahead, by start, each as asked (none merged).
+/// Whether one of them holds a range is asked at every refresh of a
+/// submission (thousands a frame) and at every range of [`ask_once`], where
+/// a scan of all of them made the submission's asking quadratic in its
+/// ranges. `reach[i]` is the furthest end of `ranges[..=i]`, so "some range
+/// with `a <= first` ends at `last` or later", which is "one range holds
+/// `[first, last)`", is one binary search. From ZigZagBoi1/ScarlettPort
+/// 50a9f7c (FictionHub); the answers are the same as the scan's.
+struct Ahead {
+    ranges: Vec<(usize, usize)>,
+    reach: Vec<usize>,
+}
+
+impl Ahead {
+    const fn new() -> Ahead {
+        Ahead {
+            ranges: Vec::new(),
+            reach: Vec::new(),
+        }
+    }
+
+    /// Whether one range asked holds all of `[first, last)`.
+    fn holds(&self, first: usize, last: usize) -> bool {
+        let i = self.ranges.partition_point(|&(a, _)| a <= first);
+        i > 0 && self.reach[i - 1] >= last
+    }
+
+    fn push(&mut self, range: (usize, usize)) {
+        let i = self.ranges.partition_point(|&r| r <= range);
+        self.ranges.insert(i, range);
+        self.reach.truncate(i);
+        let mut far = i.checked_sub(1).map_or(0, |i| self.reach[i]);
+        for &(_, b) in &self.ranges[i..] {
+            far = far.max(b);
+            self.reach.push(far);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.ranges.clear();
+        self.reach.clear();
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+}
+
 static JOURNAL: Mutex<Journal> = Mutex::new(Journal {
     asked: 0,
     written: BTreeMap::new(),
     sub: BTreeMap::new(),
     found: Vec::new(),
-    ahead: Vec::new(),
+    ahead: Ahead::new(),
     ahead_asked: 0,
     asking: Vec::new(),
     ticket: 0,
@@ -113,11 +161,16 @@ const AHEAD_MAX: usize = (1 << 30) / PAGE;
 /// submissions refresh thousands of host copies (6,664 askings a frame,
 /// 456 ms, in run 14). Ranges that are not write-watched, or lie alone, are
 /// left to `writes`.
-pub(crate) fn ask_ahead(ranges: &[(usize, usize)]) {
+pub(crate) fn ask_ahead(ranges: impl Iterator<Item = (usize, usize)>) {
+    // The submission's one asking stands ([`ask_once`]): no second plan is
+    // built (ScarlettPort #44, ifBars: a refresh no longer collects and
+    // sorts a range list it then drops).
+    if JOURNAL.lock().unwrap_or_else(|e| e.into_inner()).kept {
+        return;
+    }
     let mut pieces: Vec<(usize, usize)> = ranges
-        .iter()
         .filter(|r| r.0 < r.1)
-        .map(|&(start, end)| (start / PAGE, end.div_ceil(PAGE)))
+        .map(|(start, end)| (start / PAGE, end.div_ceil(PAGE)))
         .collect();
     if pieces.len() < 2 {
         return;
@@ -237,7 +290,7 @@ pub(crate) fn ask_once(ranges: &[(usize, usize)]) {
         look_at_holes(HOLES_A_LOOK);
     }
     ask_once_end();
-    ask_ahead(ranges);
+    ask_ahead(ranges.iter().copied());
     let mut j = quiet(JOURNAL.lock().unwrap_or_else(|e| e.into_inner()));
     let j = &mut *j;
     if j.ahead.is_empty() {
@@ -264,7 +317,7 @@ pub(crate) fn ask_once(ranges: &[(usize, usize)]) {
             continue;
         }
         let (first, last) = (start / PAGE, end.div_ceil(PAGE));
-        if !j.ahead.iter().any(|&(a, b)| a <= first && last <= b) && ask_kernel(j, first, last) {
+        if !j.ahead.holds(first, last) && ask_kernel(j, first, last) {
             j.ahead.push((first, last));
         }
     }
@@ -515,8 +568,7 @@ pub(crate) fn asked(start: usize, end: usize) -> Option<(u64, Vec<(usize, u64)>)
     let (first, last) = (start / PAGE, end.div_ceil(PAGE));
     let j = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
     j.ahead
-        .iter()
-        .any(|&(a, b)| a <= first && last <= b)
+        .holds(first, last)
         .then(|| (j.ahead_asked, j.written.range(first..last).map(|(&p, &w)| (p, w)).collect()))
 }
 
@@ -555,7 +607,7 @@ fn writes_as(start: usize, end: usize, guarded: bool, light: u8) -> Option<(u64,
     let ticket = {
         let mut j = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
         // Asked ahead with the submission's other ranges: the journal has it.
-        if j.ahead.iter().any(|&(a, b)| a <= first && last <= b) {
+        if j.ahead.holds(first, last) {
             return Some((
                 j.ahead_asked,
                 j.written
@@ -1381,7 +1433,7 @@ fn nothing_noted(start: usize, end: usize, base: usize, copied: &[u64]) -> bool 
     }
     let j = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
     // The bits first, then the journal, both under its lock ([`published`]).
-    let by_bits = !j.ahead.iter().any(|&(a, b)| a <= first && last <= b);
+    let by_bits = !j.ahead.holds(first, last);
     if by_bits && !published(&j, first * PAGE, last * PAGE) {
         return false;
     }
@@ -1427,7 +1479,7 @@ pub(crate) fn unchanged_known(start: usize, end: usize, base: usize, copied: &[u
         if !j.written.range(first..last).all(|(&page, &write)| write <= taken[page - first]) {
             return false;
         }
-        j.ahead.iter().any(|&(a, b)| a <= first && last <= b)
+        j.ahead.holds(first, last)
     };
     if ahead {
         return true;
@@ -3197,5 +3249,41 @@ mod mapping_tests {
         drop(changing);
         reader.join().unwrap();
         assert!(read.load(Ordering::SeqCst));
+    }
+}
+
+#[cfg(test)]
+mod ahead_tests {
+    use super::Ahead;
+
+    /// [`Ahead::holds`] answers as the scan it replaced, whatever order the
+    /// ranges come in.
+    #[test]
+    fn holds_answers_as_a_scan() {
+        let mut seed = 0x9e37_79b9_u64;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        for _ in 0..50 {
+            let mut ahead = Ahead::new();
+            let mut plain: Vec<(usize, usize)> = Vec::new();
+            for _ in 0..40 {
+                let a = next(200);
+                let r = (a, a + 1 + next(30));
+                ahead.push(r);
+                plain.push(r);
+                for _ in 0..20 {
+                    let f = next(240);
+                    let l = f + 1 + next(20);
+                    let scan = plain.iter().any(|&(a, b)| a <= f && l <= b);
+                    assert_eq!(ahead.holds(f, l), scan, "{plain:?} [{f}, {l})");
+                }
+            }
+            ahead.clear();
+            assert!(ahead.is_empty() && !ahead.holds(0, 1));
+        }
     }
 }
