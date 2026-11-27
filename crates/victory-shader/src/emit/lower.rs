@@ -577,11 +577,15 @@ fn lane_uniform(p: &Program, st: &Structured, all: &[bool]) -> HashSet<Value> {
                         Operand::Vector { reg, dwords } => {
                             // every dword of the operand the instruction reads (not the old value
                             // of a higher-numbered destination register that IR keeps for guards)
+                            // A relative move reads the register `M0` past this one, and a
+                            // swap or a relative store keeps or moves old values: for those
+                            // every register read from this one on counts, as before.
+                            let whole = name.starts_with("v_movrel") || name.starts_with("v_swap");
                             let end = reg.saturating_add(dwords);
                             let read: Vec<Value> = inst
                                 .reads
                                 .iter()
-                                .filter(|r| matches!(r.0, Reg::V(x) if x >= reg && x < end))
+                                .filter(|r| matches!(r.0, Reg::V(x) if x >= reg && (whole || x < end)))
                                 .map(|r| r.1)
                                 .collect();
                             !read.is_empty() && read.iter().all(|x| same.contains(x))
