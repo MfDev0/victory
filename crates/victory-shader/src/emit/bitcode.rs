@@ -111,11 +111,41 @@ pub(crate) enum Cast {
     Bitcast = 11,
 }
 
+/// The fast-math flags the 32-bit float binary operations carry with
+/// `opt::FAST`, as LLVM 3.7 bitcode writes them: 1 unsafe algebra (which
+/// in 3.7 implies all the others), 2 no NaNs, 4 no infinities, 8 no signed
+/// zeros, 16 allow reciprocal. `VICTORY_SHADER_FAST_BITS` (a number) picks
+/// them; unset, 1 (every flag, as the HLSL compiler writes a non-precise
+/// operation). With unsafe algebra or no-NaNs/no-infinities a driver may
+/// take an operation's result as never NaN or infinite and fold a later
+/// test of it (`fcmp uno`, a compare against infinity) to a constant; 24
+/// (no signed zeros, reciprocal) keeps NaN and infinity tests but may also
+/// keep the driver from fusing or reassociating (not measured). Part of the
+/// translation (the switch scan of `build.rs` keys the cache on it).
+fn fast_math_bits() -> u64 {
+    static BITS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *BITS.get_or_init(|| {
+        std::env::var("VICTORY_SHADER_FAST_BITS")
+            .ok()
+            .and_then(|v| {
+                let v = v.trim();
+                match v.strip_prefix("0x") {
+                    Some(h) => u64::from_str_radix(h, 16).ok(),
+                    None => v.parse().ok(),
+                }
+            })
+            .map_or(1, |b| b & 0x1F)
+    })
+}
+
 /// Compare predicates: floats 0-15, integers 32-41.
 pub(crate) mod pred {
     // FALSE and TRUE are not emitted: WARP removes its device on them (and
     // DXC folds them away), so constant compares lower as constants.
-    #[allow(dead_code)]
+    // The NaN tests are made on the bits too (`lower.rs`, `is_nan_f32`;
+    // fx b1d777a), which fast-math operands cannot fold away: ORD, UNO and
+    // the unordered ones but UGE stay for the bitcode's own folds.
+    #![allow(dead_code)]
     pub const FALSE: u8 = 0;
     pub const OEQ: u8 = 1;
     pub const OGT: u8 = 2;
@@ -124,7 +154,6 @@ pub(crate) mod pred {
     pub const OLE: u8 = 5;
     // Not emitted: the AMD D3D12 driver treats it as UNE, so `v_cmp_lg`
     // lowers as OLT | OGT instead.
-    #[allow(dead_code)]
     pub const ONE: u8 = 6;
     pub const ORD: u8 = 7;
     pub const UNO: u8 = 8;
@@ -134,7 +163,6 @@ pub(crate) mod pred {
     pub const ULT: u8 = 12;
     pub const ULE: u8 = 13;
     pub const UNE: u8 = 14;
-    #[allow(dead_code)]
     pub const TRUE: u8 = 15;
     pub const EQ: u8 = 32;
     pub const NE: u8 = 33;
@@ -829,7 +857,9 @@ impl Module {
         }
         w.exit();
 
-        let fast = super::shader_opt() & opt::FAST != 0;
+        // Not in unit tests: their expected bitcode is the plain one.
+        let fast = !cfg!(test) && super::shader_opt() & opt::FAST != 0;
+        let fast_bits = fast_math_bits();
         w.enter(FUNCTION_BLOCK, 4);
         w.record(1, &[layout.len() as u64]);
         let mut inst_id = base;
@@ -846,8 +876,8 @@ impl Module {
                 match &inst.op {
                     // A 32-bit float result takes the unsafe-algebra flag
                     // (bit 0 of the optional fourth field) with `opt::FAST`.
-                    Op::Bin(op, a, b) if fast && self.types[inst.ty.0 as usize] == TypeDef::Float => {
-                        w.record(2, &[rel(*a), rel(*b), *op as u64, 1])
+                    Op::Bin(op, a, b) if fast && fast_bits != 0 && self.types[inst.ty.0 as usize] == TypeDef::Float => {
+                        w.record(2, &[rel(*a), rel(*b), *op as u64, fast_bits])
                     }
                     Op::Bin(op, a, b) => w.record(2, &[rel(*a), rel(*b), *op as u64]),
                     Op::Cast(op, v) => w.record(3, &[rel(*v), u64::from(inst.ty.0), *op as u64]),

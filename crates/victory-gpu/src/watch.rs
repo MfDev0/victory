@@ -1858,6 +1858,22 @@ fn open_here(g: &mut Guards, start: usize, end: usize) -> bool {
     // Held for a copy-back (`crate::lazy`): its own protection back first,
     // which the guard's own below then replaces.
     crate::lazy::release(start, end.saturating_sub(start));
+    // One block (most opens; fx b1d777a): no range walk.
+    if start >= end {
+        return false;
+    }
+    let (first, last) = (start / BLOCK, end.div_ceil(BLOCK));
+    if first + 1 == last {
+        if g.protected.remove(&first) {
+            g.clean.remove(&first);
+            PUBLISHED.clear(first);
+            let mut old = 0;
+            // SAFETY: a block we made read-only.
+            unsafe { VirtualProtect((first * BLOCK) as *const _, BLOCK, PAGE_READWRITE, &mut old) };
+            return true;
+        }
+        return false;
+    }
     let blocks: Vec<usize> = g
         .protected
         .range(start / BLOCK..end.div_ceil(BLOCK))

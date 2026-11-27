@@ -381,7 +381,11 @@ fn with_read<R>(size: usize, f: impl FnOnce(&mut [u8]) -> R) -> R {
     READ.with(|read| {
         let mut read = read.borrow_mut();
         if read.len() < size {
-            read.resize(size, 0);
+            // A new block of zeroed pages, the old one let go first: a
+            // resize would copy the old contents over and write the zeros
+            // (the contents are not kept anyway).
+            *read = Vec::new();
+            *read = vec![0; size];
         }
         f(&mut read[..size])
     })
@@ -1620,6 +1624,14 @@ fn staging(resource: This, texture: &ID3D12Resource) -> Option<Arc<Staging>> {
 }
 
 /// Shared body of [`Staging::refresh_unlocked`], separated for unit tests.
+/// Whether a never-filled texture whose pages are not all there is read
+/// through `copy_mapped` (missing pages as zeros) instead of staying empty
+/// until a later refresh (fork #1392; `VICTORY_NO_WAIT_PARTIAL=0`: as before).
+fn no_wait_partial() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_NO_WAIT_PARTIAL").is_none_or(|v| v != "0"))
+}
+
 fn refresh_unlocked_with(
     memory: *const u8,
     last: &mut Last,
@@ -1639,7 +1651,7 @@ fn refresh_unlocked_with(
         // If the staging buffer was never filled, a partly mapped streamed
         // texture would otherwise stay all zeros forever when `no_wait()`
         // misses the remap lock. Read mapped pages via `copy_mapped` instead.
-        if last.hash.is_none() {
+        if last.hash.is_none() && no_wait_partial() {
             crate::host::copy_mapped(read.as_mut_ptr(), memory, size, false);
             if read.iter().any(|&b| b != 0) {
                 last.hash = Some(blake3::hash(read));

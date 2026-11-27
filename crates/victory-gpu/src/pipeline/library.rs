@@ -518,7 +518,7 @@ const EARLY_FILE: &str = "early-pipelines.txt";
 /// many launches (see [`crashes`]).
 const CRASHED_FILE: &str = "crashed-pipelines.txt";
 /// Title pipelines listed for an early start, at most.
-const EARLY_MAX: usize = 8192;
+const EARLY_MAX: usize = 32768;
 
 /// Whether the library came from this cache's file (not rejected: the same
 /// adapter and driver as when it was saved).

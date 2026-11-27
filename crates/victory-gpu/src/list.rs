@@ -1137,6 +1137,9 @@ extern "system" fn copy_buffer_region(
         && let Some(to) = buffer_range(dst, dst_offset, len)
         && let Some(from) = buffer_range(src, src_offset, len)
         && let Ok(len) = usize::try_from(len)
+        // Where shaders wrote the source (`VICTORY_CARD_FILLS`): on the card,
+        // in order (`crate::host::HostList::card_copy`; fx b1d777a).
+        && !list.card_copy(to as usize, from as usize, len)
     {
         buffer_copy(list, to, from, len);
     }

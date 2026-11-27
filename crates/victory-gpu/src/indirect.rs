@@ -611,7 +611,7 @@ fn record_clamp_with(
 
 /// Whether the clamp of a title's indirect command (`bound`, `bound_ahead`)
 /// ends with `dst`'s transition alone, without the wait for every earlier
-/// shader write that came with it (`VICTORY_CLAMP_LEAN=1`; off by default;
+/// shader write that came with it (`VICTORY_CLAMP_LEAN`; on by default, `0` off;
 /// `alt`: twenty seconds with, twenty without, in turn, each change said in
 /// the log). The first barrier, which orders the title's argument and count
 /// passes before the clamp reads them, stays as it is.
@@ -636,7 +636,8 @@ fn clamp_lean() -> bool {
     match *MODE.get_or_init(|| match std::env::var("VICTORY_CLAMP_LEAN").as_deref() {
         Ok("1") => 1,
         Ok("alt") => 2,
-        _ => 0,
+        Ok("0") => 0,
+        _ => 1,
     }) {
         0 => false,
         1 => true,
@@ -655,7 +656,7 @@ fn clamp_lean() -> bool {
     }
 }
 
-/// Whether indirect draws are clamped a window at a time (`VICTORY_CLAMP_WINDOW=1`; off by default; `alt`: twenty
+/// Whether indirect draws are clamped a window at a time (`VICTORY_CLAMP_WINDOW`; on by default, `0` off; `alt`: twenty
 /// seconds with, twenty without, in turn, each change said in the log). After Marvisak/VIctory #3197 (Slay326),
 /// ported onto this clamp: a window is one pass of the clamp's gather mode whose table the CPU fills while the
 /// list is recorded.
@@ -682,7 +683,8 @@ pub(crate) fn clamp_window() -> bool {
     match *MODE.get_or_init(|| match std::env::var("VICTORY_CLAMP_WINDOW").as_deref() {
         Ok("1") => 1,
         Ok("alt") => 2,
-        _ => 0,
+        Ok("0") => 0,
+        _ => 1,
     }) {
         0 => false,
         1 => true,
@@ -961,7 +963,8 @@ pub(crate) fn gather_segments() -> bool {
     match *MODE.get_or_init(|| match std::env::var("VICTORY_GATHER_SEGMENTS").as_deref() {
         Ok("1") => 1,
         Ok("alt") => 2,
-        _ => 0,
+        Ok("0") => 0,
+        _ => 1,
     }) {
         0 => false,
         1 => true,
@@ -987,7 +990,8 @@ pub(crate) fn gather_dispatches() -> bool {
     match *MODE.get_or_init(|| match std::env::var("VICTORY_GATHER_DISPATCHES").as_deref() {
         Ok("1") => 1,
         Ok("alt") => 2,
-        _ => 0,
+        Ok("0") => 0,
+        _ => 1,
     }) {
         0 => false,
         1 => true,

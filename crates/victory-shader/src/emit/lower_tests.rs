@@ -740,3 +740,11 @@ fn first_lane_read_of_uniform_lds_load_lowers_on_wave32() {
         "per-lane ds_read_b32 must still require all lanes, got: {err}"
     );
 }
+
+#[test]
+fn paired_lowering_scope_restores_on_unwind() {
+    assert!(!super::PAIRED.get());
+    let failed = std::panic::catch_unwind(|| super::with_paired_lanes(|| panic!("translation panic")));
+    assert!(failed.is_err());
+    assert!(!super::PAIRED.get());
+}
