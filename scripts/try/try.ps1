@@ -15,12 +15,14 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.16'
+$TryVersion = '6.17'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
-# Other places the fork may live (renamed to CAtez, or a backup copy), tried
-# when the fork itself cannot be reached.
-$MirrorUrls = @('https://github.com/MfDev0/CAtez.git', 'https://github.com/MfDev0/CAtez-backup.git')
+# Other places the fork may live, tried when the fork itself cannot be
+# reached. 6.17: first ctz, the fork's own copy outside the fork network
+# (a repository of its own, not a GitHub fork: it stays when VIctory's
+# repository or the forks it came from go), then the older names.
+$MirrorUrls = @('https://github.com/MfDev0/ctz.git', 'https://github.com/MfDev0/CAtez.git', 'https://github.com/MfDev0/CAtez-backup.git')
 $UpstreamUrl = 'https://github.com/Marvisak/VIctory.git'
 # 5.9: the 8 GB NVIDIA engine, soldsawn's build of fxceless/victory-fork (the
 # community's main line): measured on an RTX 4060 Laptop 8 GB at 8-10 fps
@@ -70,11 +72,11 @@ function Bad([string]$msg) { Write-Host ('  ' + $msg) -ForegroundColor Red }
 function Load-Config {
     # console: series-x, the profile the fork's base (fxceless/victory-gta6)
     # renders the world with on NVIDIA (RTX 3080, 3070 Ti, 4070).
-    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = ''; tidy = ''; meter = '' }
+    $c = @{ game_dir = ''; game_exe = ''; built_key = ''; added = ''; console = 'series-x'; base = ''; fast = ''; loop = ''; prepared = ''; recipes = ''; wide = ''; wavewide = ''; new38 = ''; lazy = ''; res = ''; plain = ''; boost = ''; between = ''; hybrid = ''; ambient = ''; levels = ''; opt = ''; shadowfix = ''; gpucopy = ''; defaults = ''; reports = ''; vram = ''; console_auto = ''; console_user = ''; engine = ''; built8 = ''; igpu = ''; igpu_set = ''; rebar = ''; inflight = ''; temporal = ''; save_ask = ''; save_last = ''; slots = ''; fxspeed = ''; low = ''; builta = ''; engine69 = ''; avm_shaders = ''; avm_warm = ''; rt = ''; ports = ''; safe = ''; unlock = ''; texcap = ''; engine610 = ''; fsr_dl = ''; shaders_all = ''; allout = ''; barwin = ''; copyfetch = ''; trim = ''; mig613 = ''; widehash = ''; ahead = ''; standin = ''; tidy = ''; meter = ''; beside = '' }
     if (Test-Path $ConfigPath) {
         try {
             $j = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json
-            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin', 'tidy', 'meter')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+            foreach ($k in @('game_dir', 'game_exe', 'built_key', 'added', 'console', 'base', 'fast', 'loop', 'prepared', 'recipes', 'wide', 'wavewide', 'new38', 'lazy', 'res', 'plain', 'boost', 'between', 'hybrid', 'ambient', 'levels', 'opt', 'shadowfix', 'gpucopy', 'defaults', 'reports', 'vram', 'console_auto', 'console_user', 'engine', 'built8', 'igpu', 'igpu_set', 'rebar', 'inflight', 'temporal', 'save_ask', 'save_last', 'slots', 'fxspeed', 'low', 'builta', 'engine69', 'avm_shaders', 'avm_warm', 'rt', 'ports', 'safe', 'unlock', 'texcap', 'engine610', 'fsr_dl', 'shaders_all', 'allout', 'barwin', 'copyfetch', 'trim', 'mig613', 'widehash', 'ahead', 'standin', 'tidy', 'meter', 'beside')) { if ($j.$k) { $c[$k] = [string]$j.$k } }
         } catch {}
     }
     # Try 3.0 moved to the victory-gta6 base: start once on Series X.
@@ -1190,6 +1192,17 @@ function Set-RunEnv {
     foreach ($k in @('VICTORY_ASYNC_SUBMIT', 'VICTORY_ASYNC_PRESENT')) {
         if ($null -eq $script:UserAll[$k]) { [Environment]::SetEnvironmentVariable($k, $(if ($script:AheadFromTry) { '1' } else { $null }), 'Process') }
     }
+    # 6.17: the pass over the game's descriptor heap (the records it copies
+    # into its view heap itself, 25,000-30,000 new ones a frame in the 6.15
+    # report: 22-39 ms a frame) on a thread of its own, beside the preparing
+    # of the submission, instead of on the submitting thread before it. The
+    # card stood idle 68-112 ms a frame behind that thread. The engine has
+    # had this as VICTORY_SYNC_BESIDE (off unless set); done before any list
+    # of the submission goes to the card. Off again by itself if a run loses
+    # the card (see Check-Run); config.json beside=off.
+    $script:BesideFromTry = ($null -eq $script:UserAll['VICTORY_SYNC_BESIDE']) -and $c.beside -ne 'off'
+    if ($null -eq $script:UserAll['VICTORY_SYNC_BESIDE']) { [Environment]::SetEnvironmentVariable('VICTORY_SYNC_BESIDE', $(if ($script:BesideFromTry) { '1' } else { $null }), 'Process') }
+    Say "frame rate: the descriptor heap pass beside the preparing (6.17) $(if ($env:VICTORY_SYNC_BESIDE -eq '1') { 'ON' } else { 'off' })"
     $script:CopyFetchFromTry = $c.copyfetch -ne 'off'
     $script:TrimFromTry = $c.trim -ne 'off'
     foreach ($kv in @(@('VICTORY_COPY_FETCH', $script:CopyFetchFromTry), @('VICTORY_TRIM_BARRIERS', $script:TrimFromTry))) {
@@ -1968,6 +1981,10 @@ function Check-Run([string]$log, [string]$stamp, [string]$crashes) {
             # 6.12: all-out mode is the first thing to go back (it fills the card to 99%).
             $c.allout = ''
             Say 'next run: all-out mode is off (the card was filled to its edge; MAX switches it again).'
+        } elseif ($script:BesideFromTry) {
+            # 6.17: the newest change goes next.
+            $c.beside = 'off'
+            Say 'next run: the descriptor heap pass runs on the submitting thread again (6.17 beside off).'
         } elseif ($script:BarWindowsMb -gt 0 -and (& $count 'windows through the BAR') -gt 0) {
             # 6.13: then the memory windows on the card through the BAR.
             $c.barwin = 'off'
@@ -2140,6 +2157,7 @@ if (OwnEngine) {
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
 Tidy-Disk ([bool]$changed)
 if (OwnEngine) {
+    Say '6.17: the fps: the game''s fence wait (monitorx) is patched in place now: it could not be where it lay across two 8-byte words, and took an exception 440,000 times a second (more than a whole processor); the pass over the game''s descriptor heap (22-39 ms a frame) runs beside the preparing instead of before it.'
     Say '6.16: the fps: the textures had filled the card, so the game''s memory windows stayed in the PC''s memory and the card read them across the bus (about 200 ms of card work a frame on a 6 GB laptop card); room on the card is kept for them now and all-out leaves 6% of a small card free. The texture rush no longer goes on and off every second (the same textures uploaded again and again, and faces flicking between skin, white and see-through). The disk: older builds'' shader translations, the other engines and old logs are removed (TIDY shows what takes what). The card''s time is measured in every report.'
     Say '6.13: NVIDIA fixes from the other forks: on PCs under 24 GB of memory the game''s memory windows go straight into the card through Resizable BAR (out-of-memory and the driver crash gone, 1.6-3 -> 10-12 fps on a 16 GB RTX 3060 PC; Indy2l), texture read-backs on their own thread (no more 100-400 ms landing stalls while the world streams), a slow shader is waited for in one frame only (no more freezes while it compiles), compute shaders start compiling as soon as the game makes them, face decorations found by name (no black faces in cutscenes), streamed textures are no longer forgotten when the change list fills, and the card''s buffer compare goes out on its own (D3D12 error 538).'
     Say '6.12: MAX: all-out mode (no caps: every CPU thread but one at high priority, textures up to 99% of the card, the memory guard at 1% free, read from this PC); the ray-tracing light passes that made rooms and reflections white and hazy are left out (fewer pipelines to compile too), and NaN colours no longer spread into black or blocky patches (both from trustno1-coder/VIctory-NVIDIA).'

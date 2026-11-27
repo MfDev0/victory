@@ -242,12 +242,74 @@ fn patches_waits() -> bool {
 static PATCHED: AtomicU64 = AtomicU64::new(0);
 static UNPATCHED: AtomicU64 = AtomicU64::new(0);
 
+/// Try 6.17: where a patch could not be made, so that the next exception there does not try
+/// again (with `VirtualProtect` refused, each try was two more trips into Windows on top of
+/// the exception). A few places: the title has its waits in a handful.
+static UNPATCHABLE: [std::sync::atomic::AtomicUsize; 16] = [const { std::sync::atomic::AtomicUsize::new(0) }; 16];
+
+fn unpatchable(at: usize) -> bool {
+    UNPATCHABLE.iter().any(|a| a.load(Relaxed) == at)
+}
+
+fn mark_unpatchable(at: usize, why: &str, code: &[u8]) {
+    UNPATCHED.fetch_add(1, Relaxed);
+    if let Some(free) = UNPATCHABLE.iter().find(|a| a.load(Relaxed) == 0) {
+        let _ = free.compare_exchange(0, at, Relaxed, Relaxed);
+    }
+    static SAID: AtomicU64 = AtomicU64::new(0);
+    if SAID.fetch_add(1, Relaxed) < 4 {
+        tracing::warn!(
+            at = format_args!("{at:#x}"),
+            in_word = at % 8,
+            code = format_args!("{code:02x?}"),
+            why,
+            "a console wait instruction could not be patched in place: it stays emulated (an exception at every turn)"
+        );
+    }
+}
+
+/// How [`patch`] writes `with` over the instruction `code` at `at`: where the write starts,
+/// its bytes, and how many, all inside one aligned eight-byte word. In turn:
+/// - the instruction whole, if it lies in one word;
+/// - a short jump over it (`jmp $+len`) in its first two bytes, if those lie in one word;
+/// - Try 6.17, for a NOP-like `with` (NOPs, or a `pause` and NOPs): an instruction
+///   `[66/67 prefixes] 0F xx yy` keeps its `0F` and has `xx yy` made `1F C0`, which makes
+///   it `nop eax` (the three-byte NOP), when `xx yy` lie in one word. The 6.15 report had
+///   the title's hot `monitorx` (`0F 01 FA`) start on the last byte of a word: neither of
+///   the first two fitted, and it was emulated 440,000 times a second (patched 1,
+///   unpatched 65,974,989). A thread running it meanwhile meets `0F 01 FA` or `0F 1F C0`.
+///
+/// None if no way fits.
+fn plan(at: usize, code: &[u8], with: &[u8]) -> Option<(usize, [u8; 8], usize)> {
+    let len = with.len();
+    if len == 0 || len > 8 || code.len() != len {
+        return None;
+    }
+    let word = |a: usize, n: usize| a / 8 == (a + n - 1) / 8;
+    let mut bytes = [0u8; 8];
+    if word(at, len) {
+        bytes[..len].copy_from_slice(with);
+        return Some((at, bytes, len));
+    }
+    if len >= 2 && word(at, 2) {
+        bytes[..2].copy_from_slice(&[0xEB, (len as u8).wrapping_sub(2)]);
+        return Some((at, bytes, 2));
+    }
+    let nop_like = with.iter().enumerate().all(|(i, &b)| b == 0x90 || (i == 0 && b == 0xF3));
+    let prefixes = code.iter().take_while(|&&b| b == 0x66 || b == 0x67).count();
+    if nop_like && len == prefixes + 3 && code[prefixes] == 0x0F && word(at + prefixes + 1, 2) {
+        bytes[..2].copy_from_slice(&[0x1F, 0xC0]);
+        return Some((at + prefixes + 1, bytes, 2));
+    }
+    None
+}
+
 /// Writes `with` over the `with.len()` bytes of code at `at` in one store that no other thread
 /// can see half done (a compare-and-swap of the aligned eight bytes holding them), so that a
 /// thread running the same code meanwhile meets the old instruction or the new one, never a
-/// mix. If they lie across an eight-byte boundary, the first two bytes become a short jump over
-/// the rest (`jmp $+len`), when those two lie in one such word. Returns whether the code was
-/// patched; it is left as it was otherwise (and emulated again next time).
+/// mix ([`plan`] says how when the instruction lies across two words). Returns whether the
+/// code was patched; it is left as it was otherwise (and emulated again next time, without
+/// another try).
 ///
 /// # Safety
 /// `at` is the start of an instruction of `with.len()` bytes in loaded code.
@@ -256,16 +318,13 @@ unsafe fn patch(at: usize, with: &[u8]) -> bool {
     use windows_sys::Win32::System::Memory::{PAGE_EXECUTE_READWRITE, VirtualProtect};
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
     let len = with.len();
-    if len == 0 || len > 8 {
+    if len == 0 || len > 8 || unpatchable(at) {
         return false;
     }
-    let jump = [0xEB, (len as u8).wrapping_sub(2)];
-    let (from, bytes): (usize, &[u8]) = if at / 8 == (at + len - 1) / 8 {
-        (at, with)
-    } else if len >= 2 && at / 8 == (at + 1) / 8 {
-        (at, &jump)
-    } else {
-        UNPATCHED.fetch_add(1, Relaxed);
+    // SAFETY: the instruction's bytes, just decoded from loaded code.
+    let code = unsafe { std::slice::from_raw_parts(at as *const u8, len) };
+    let Some((from, bytes, n)) = plan(at, code, with) else {
+        mark_unpatchable(at, "its bytes lie across two eight-byte words in a way no single store covers", code);
         return false;
     };
     let word = from & !7;
@@ -275,20 +334,22 @@ unsafe fn patch(at: usize, with: &[u8]) -> bool {
     // for the patch and given their protection back.
     unsafe {
         if VirtualProtect(word as *const _, 8, PAGE_EXECUTE_READWRITE, &mut old) == 0 {
-            UNPATCHED.fetch_add(1, Relaxed);
+            let error = windows_sys::Win32::Foundation::GetLastError();
+            mark_unpatchable(at, &format!("VirtualProtect refused (error {error})"), code);
             return false;
         }
         let w = AtomicU64::from_ptr(word as *mut u64);
         let before = w.load(Relaxed);
         let mut after = before.to_le_bytes();
         let off = from - word;
-        after[off..off + bytes.len()].copy_from_slice(bytes);
+        after[off..off + n].copy_from_slice(&bytes[..n]);
         let done = w.compare_exchange(before, u64::from_le_bytes(after), Ordering::SeqCst, Relaxed).is_ok();
         VirtualProtect(word as *const _, 8, old, &mut old);
         FlushInstructionCache(GetCurrentProcess(), word as *const _, 8);
         if done {
             PATCHED.fetch_add(1, Relaxed);
         } else {
+            // (Another thread changed the word meanwhile: tried again at the next exception.)
             UNPATCHED.fetch_add(1, Relaxed);
         }
         done
@@ -692,11 +753,29 @@ mod tests {
         // SAFETY: as above.
         assert!(unsafe { patch(at, &[0xF3, 0x90, 0x90]) });
         assert_eq!(code.0[21..26], [0xCC, 0xEB, 0x01, 0xFB, 0xCC]);
-        // its first two bytes across one too: left alone
+        // its first two bytes across one too (6.17): the 0F kept, the rest made `nop eax`
         code.0[31..34].copy_from_slice(&[0x0F, 0x01, 0xFB]);
         let at = code.0.as_mut_ptr() as usize + 31;
         // SAFETY: as above.
-        assert!(!unsafe { patch(at, &[0xF3, 0x90, 0x90]) });
-        assert_eq!(code.0[31..34], [0x0F, 0x01, 0xFB]);
+        assert!(unsafe { patch(at, &[0xF3, 0x90, 0x90]) });
+        assert_eq!(code.0[30..35], [0xCC, 0x0F, 0x1F, 0xC0, 0xCC]);
+    }
+
+    /// Try 6.17: the 6.15 report's `monitorx` on the last byte of a word.
+    #[test]
+    fn a_wait_across_words_is_made_a_three_byte_nop() {
+        let monitorx = [0x0F, 0x01, 0xFA];
+        // in one word, its first two bytes in one word: as before
+        assert_eq!(plan(8, &monitorx, &[0x90; 3]).map(|p| (p.0, p.2)), Some((8, 3)));
+        assert_eq!(plan(14, &monitorx, &[0x90; 3]).map(|p| (p.0, p.1[..2].to_vec())), Some((14, vec![0xEB, 0x01])));
+        // on the last byte of a word: the two after the 0F
+        let (from, bytes, n) = plan(15, &monitorx, &[0x90; 3]).unwrap();
+        assert_eq!((from, &bytes[..n]), (16, &[0x1F, 0xC0][..]));
+        // with an address-size prefix
+        let prefixed = [0x67, 0x0F, 0x01, 0xFA];
+        assert_eq!(plan(23, &prefixed, &[0x90; 4]).map(|p| p.0), Some(25));
+        // not for a write that is no NOP, nor for an instruction of another shape
+        assert_eq!(plan(15, &monitorx, &[0xCC; 3]), None);
+        assert_eq!(plan(15, &[0x48, 0x01, 0xC0], &[0x90; 3]), None);
     }
 }

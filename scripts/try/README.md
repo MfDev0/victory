@@ -568,6 +568,13 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.17 ("no wasted processor"; plan and to-do in `scripts/try/PLAN.md`):
+   - `console_insn::plan`: a `monitorx`/`mwaitx` whose first two bytes lie
+     across an eight-byte word keeps its `0F` and gets `1F C0` (`nop eax`)
+     in one store; places that cannot be patched are not tried again
+     (`UNPATCHABLE`), the first reasons are logged.
+   - Try sets `VICTORY_SYNC_BESIDE=1` (config `beside`; second in the
+     lost-card chain, after all-out); mirror `MfDev0/ctz` first.
    6.16 ("room for windows"; plan and to-do in `scripts/try/PLAN.md`):
    - `VICTORY_WINDOWS_ROOM` (on): the texture queue's room counts what
      windows outside buffers may still take on the card (BAR and card

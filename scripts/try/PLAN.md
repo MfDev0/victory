@@ -1,4 +1,4 @@
-# VIctory Try: plan and to-do (6.10, updated for 6.16)
+# VIctory Try: plan and to-do (6.10, updated for 6.17)
 
 Goal: the whole picture rendered, **20+ fps** on the reporter's PC: RTX 4050
 Laptop (5921 MB, budget about 5153 MB), 12 threads, about 16 GB of RAM,
@@ -48,6 +48,23 @@ below are checked again.
       66afb2b4; parser only so far).
 - [x] Logs: `upscaler PC FidelityFX ...` line at start, providers offered
       and chosen, every 600 upscales how many were jittered (both paths).
+
+## Done in 6.17 ("no wasted processor")
+
+From the 6.15 log again: `console_insn` emulated=67,108,864 patched=1
+unpatched=65,974,989; monitorx 403k-442k exceptions a second, mwaitx 0 (it
+was patched); so the hot monitorx could not be: its first two bytes across a
+word (neither the whole-word store nor the 2-byte jump fits). Descriptor heap
+pass 22-39 ms a frame ("making the host slots" 15-31 ms, 24-30k records)
+on the submitting thread; the card idle 68-112 ms behind it.
+
+- [x] `plan`: `0F xx yy` -> `0F 1F C0` when `xx yy` share a word; failed places
+      remembered (16), first 4 reasons logged.
+- [x] Try: `VICTORY_SYNC_BESIDE=1` (config `beside`).
+- [x] Mirror `MfDev0/ctz` (a standalone repository, not a fork) tried first.
+- Next: the heap-buffers pass (47 ms a frame, about 50,000 slots a pass on the
+  title's thread, F mode); Kelvaroq 0055's snapshot compare of record keys
+  (their decoder differs: port by idea); the 6.16 card meter's table.
 
 ## Done in 6.16 ("room for windows")
 
