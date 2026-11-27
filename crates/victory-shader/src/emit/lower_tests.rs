@@ -960,6 +960,7 @@ fn the_builders_prefix_sum_lowers_and_validates_as_a_spilled_dispatch_x_program(
         out.user_data.iter().any(|u| u.root == counts && u.dword == 0),
         "the program does not take the DispatchX thread count of x"
     );
+    #[cfg(windows)]
     if let Ok(mut v) = super::super::validator::Validator::load(super::super::validator::Validator::default_path().as_deref()) {
         let mut copy = out.dxil.clone();
         v.validate(&mut copy).unwrap_or_else(|e| panic!("DXIL validation failed: {e}"));
