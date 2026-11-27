@@ -1171,13 +1171,17 @@ function Set-RunEnv {
     # the same shaders that differs only in culling, depth test or blend
     # factors: the object is drawn this frame. VICTORY_STAND_IN_FIRST (on in
     # the engine, Kelvaroq 0050's idea) takes it before any wait, so the
-    # frame does not stand still for the compile either. The wait for
-    # pipelines with no stand-in is 250 ms a frame (500 before;
-    # VICTORY_PIPELINE_WAIT_MS sets it). Off again by itself if a run loses
-    # the card (see Check-Run).
+    # frame does not stand still for the compile either. 6.22: no wait for
+    # pipelines with no stand-in either (0 ms a frame; 250 before, 500
+    # before that), as ScarlettPort 0.5.2 after player reports: on a first
+    # run new pipelines come every frame, and each frame stood up to the
+    # whole wait. Their draws are left out until the pipeline is made, a
+    # frame or a few; a dispatch still waits for its compute pipeline
+    # (VICTORY_PIPELINE_COMPUTE_WAIT). VICTORY_PIPELINE_WAIT_MS=250 waits as
+    # before. Off again by itself if a run loses the card (see Check-Run).
     $script:StandInFromTry = $c.standin -ne 'off'
     if ($null -eq $script:UserAll['VICTORY_STAND_IN']) { [Environment]::SetEnvironmentVariable('VICTORY_STAND_IN', $(if ($script:StandInFromTry) { $null } else { '0' }), 'Process') }
-    if ($null -eq $script:UserAll['VICTORY_PIPELINE_WAIT_MS']) { [Environment]::SetEnvironmentVariable('VICTORY_PIPELINE_WAIT_MS', '250', 'Process') }
+    if ($null -eq $script:UserAll['VICTORY_PIPELINE_WAIT_MS']) { [Environment]::SetEnvironmentVariable('VICTORY_PIPELINE_WAIT_MS', '0', 'Process') }
     # 6.14: the card's hashes of copies' pieces by a group of 64 threads a
     # piece instead of one (VICTORY_CARD_HASH_WIDE=1; fork #1014 by
     # martindevbr, made the default in Kelvaroq 0041 by stellarr-studio:
