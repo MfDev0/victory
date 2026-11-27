@@ -10552,7 +10552,8 @@ impl HostList {
                     Step::Fill(..) => 1,
                     Step::Refresh(..) => 2,
                     Step::Run(..) => 3,
-                    Step::Host(..) => 4,
+                    // (Work after the texture check: a host step too.)
+                    Step::Host(..) | Step::AfterTextures(..) => 4,
                     Step::GpuWrite(..) => 5,
                     Step::Texture(..) => 6,
                 },
