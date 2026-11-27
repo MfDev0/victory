@@ -2153,7 +2153,15 @@ $changed = Update-Source
 if ($null -eq $changed) { Bad 'no source to build: check the internet connection'; exit 1 }
 Run-Newer
 if (OwnEngine) {
-    if ($changed -or -not (Test-Path (Ours-Exe))) { if (-not (Build-All)) { exit 1 } }
+    # 6.17: a failed build of a new version no longer stops VIctory Try when
+    # an older build is there: the game runs on it (the build is tried again
+    # at the next start, the version's key not being saved).
+    if ($changed -or -not (Test-Path (Ours-Exe))) {
+        if (-not (Build-All)) {
+            if (-not (Test-Path (Ours-Exe))) { exit 1 }
+            Bad 'the new build FAILED: the game runs on the last working build (older fixes). Send the error above (build.log is in the report).'
+        }
+    }
 } elseif (-not (Ensure-Engine $true)) { exit 1 }
 Tidy-Disk ([bool]$changed)
 if (OwnEngine) {
