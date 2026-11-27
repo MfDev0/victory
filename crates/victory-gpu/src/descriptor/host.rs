@@ -2121,6 +2121,14 @@ impl HostHeap {
         buffers.iter().copied().collect()
     }
 
+    /// Try 6.17: a sixteenth of the title slots holding buffer views, the
+    /// ones after `cursor` in slot order (round to the start again), with
+    /// the cursor moved past them ([`audit_next`]).
+    pub(crate) fn buffer_slots_audit(&self, cursor: &mut Option<u32>) -> Vec<u32> {
+        let buffers = self.buffers.lock().unwrap_or_else(|e| e.into_inner());
+        audit_next(&buffers, cursor)
+    }
+
     /// The title slots whose buffer view was written, or went, since the
     /// last call.
     pub(crate) fn buffer_changes(&self) -> Vec<u32> {
@@ -3332,6 +3340,23 @@ pub(crate) fn table_prints(table: u64, n: u32) -> (u64, u64) {
     (whole, shape)
 }
 
+/// A sixteenth of `set` (at least one, if it holds any): the slots after
+/// `cursor`, round to the start, and the cursor moved to the last one
+/// taken. Sixteen calls in a row take every slot of a set that did not
+/// change meanwhile (Kelvaroq 0055's spread check, stellarr-studio).
+pub(crate) fn audit_next(set: &std::collections::BTreeSet<u32>, cursor: &mut Option<u32>) -> Vec<u32> {
+    use std::ops::Bound::{Excluded, Unbounded};
+    let take = set.len().div_ceil(16);
+    let next: Vec<u32> = match *cursor {
+        Some(last) => set.range((Excluded(last), Unbounded)).chain(set.range(..=last)).take(take).copied().collect(),
+        None => set.iter().take(take).copied().collect(),
+    };
+    if let Some(&last) = next.last() {
+        *cursor = Some(last);
+    }
+    next
+}
+
 /// Whether a buffer view off its buffer's elements gets a copy of its own
 /// bytes (`VICTORY_VIEW_OWN_COPY=0`: it is refused and reads zeros, as
 /// before).
@@ -4516,6 +4541,24 @@ fn null_view(at: D3D12_CPU_DESCRIPTOR_HANDLE) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Try 6.17: sixteen spread checks look at every buffer slot once.
+    #[test]
+    fn sixteen_spread_checks_see_every_buffer_slot() {
+        let set: std::collections::BTreeSet<u32> = (0..100).map(|i| i * 3).collect();
+        let mut cursor = None;
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..16 {
+            let next = super::audit_next(&set, &mut cursor);
+            assert_eq!(next.len(), 7);
+            seen.extend(next);
+        }
+        assert_eq!(seen, set);
+        // A cursor whose slot left the set goes on from the next one.
+        let mut cursor = Some(4);
+        assert_eq!(super::audit_next(&set, &mut cursor)[0], 6);
+        assert!(super::audit_next(&std::collections::BTreeSet::new(), &mut cursor).is_empty());
+    }
 
     /// A full list of changed ranges is made smaller, never emptied: every
     /// change is still covered (edsuuu/VI-BR-PORT 87dc3075).

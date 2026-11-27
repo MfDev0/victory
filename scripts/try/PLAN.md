@@ -61,6 +61,14 @@ on the submitting thread; the card idle 68-112 ms behind it.
 - [x] `plan`: `0F xx yy` -> `0F 1F C0` when `xx yy` share a word; failed places
       remembered (16), first 4 reasons logged.
 - [x] Try: `VICTORY_SYNC_BESIDE=1` (config `beside`).
+- [x] Heap-buffers pass: a sixteenth audited every pass (`audit_next`,
+      `VICTORY_HEAP_AUDIT_SPREAD`); the full pass was the 100-180 ms frames.
+- Found: the frame is the card's (3D 61-85 % busy, busiest CPU thread at
+  most 68 %); title buffers are on the card (81 copies 663 MB, 34 MB in the
+  PC); the bus reads are windows (768 refused for the card, 6.16) and the
+  small in-place ones (78 windows 372 MB, 3,538 buffers 27 MB). The heap pass
+  is ~30k genuinely new records a frame: a cache by record key would need
+  invalidation by host copy and host texture; wait for the card meter.
 - [x] Mirror `MfDev0/CATez` (a standalone repository, not a fork) tried first.
 - Next: the heap-buffers pass (47 ms a frame, about 50,000 slots a pass on the
   title's thread, F mode); Kelvaroq 0055's snapshot compare of record keys

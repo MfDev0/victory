@@ -573,6 +573,9 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      across an eight-byte word keeps its `0F` and gets `1F C0` (`nop eax`)
      in one store; places that cannot be patched are not tried again
      (`UNPATCHABLE`), the first reasons are logged.
+   - `VICTORY_HEAP_AUDIT_SPREAD` (on): the heap pass over buffer views
+     looks at those written plus a sixteenth of all (`audit_next`) every
+     pass, not all of them every sixteenth pass (Kelvaroq 0055).
    - Try sets `VICTORY_SYNC_BESIDE=1` (config `beside`; second in the
      lost-card chain, after all-out); mirror `MfDev0/CATez` first.
    6.16 ("room for windows"; plan and to-do in `scripts/try/PLAN.md`):

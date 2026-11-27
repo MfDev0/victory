@@ -978,7 +978,20 @@ pub(crate) static HEAP_BUFFER_PASSES: AtomicU64 = AtomicU64::new(0);
 type Ranges = std::collections::HashMap<u32, (std::sync::Arc<crate::shadow::Shadow>, u64, u64)>;
 /// (By the heap and its table: a new heap where one was has another table
 /// and none of its ranges; cool_fox 18bdf79.)
-type ByHeap = std::collections::HashMap<(usize, u64), (u64, Ranges)>;
+/// (And, Try 6.17, where its spread check stands: [`heap_audit_spread`].)
+type ByHeap = std::collections::HashMap<(usize, u64), (u64, Ranges, Option<u32>)>;
+
+/// Whether the pass over the heap's buffer views looks at a sixteenth of
+/// them besides those written, every pass, instead of all of them every
+/// sixteenth pass (`VICTORY_HEAP_AUDIT_SPREAD=0`: as before). The same
+/// looks in sixteen passes; in the 6.15 report the sixteenth pass over all
+/// 150,000 views was the frame of 100 to 180 ms of "heap buffers" among
+/// frames of 40 (Kelvaroq 0055, stellarr-studio).
+fn heap_audit_spread() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_HEAP_AUDIT_SPREAD").is_none_or(|v| v != "0"))
+}
+
 static RANGES: std::sync::Mutex<Option<ByHeap>> = std::sync::Mutex::new(None);
 /// Per host heap, for [`State::heap_buffers_marked`]: what the marked pass
 /// keeps (`VICTORY_HEAP_PASS_MARKED`; nothing while that is unset).
@@ -2537,16 +2550,29 @@ impl State {
         // released resource goes stale without a write, and a slot written
         // before its memory had a host copy is only made then.
         let mut kept = RANGES.lock().unwrap_or_else(|e| e.into_inner());
-        let (passes, ranges) = kept
+        let (passes, ranges, cursor) = kept
             .get_or_insert_with(Default::default)
             .entry((std::ptr::from_ref(host) as usize, gpu))
-            .or_insert_with(|| (0, Ranges::new()));
+            .or_insert_with(|| (0, Ranges::new(), None));
         let changed = host.buffer_changes();
-        let slots = if *passes % 16 == 0 {
-            ranges.clear();
+        let slots = if !heap_audit_spread() {
+            if *passes % 16 == 0 {
+                ranges.clear();
+                host.buffer_slots()
+            } else {
+                changed
+            }
+        } else if *passes == 0 {
             host.buffer_slots()
         } else {
-            changed
+            // Those written, and a sixteenth of all in turn (a slot leaves
+            // the set only by a write, which puts it with those written:
+            // nothing stale stays in `ranges`).
+            let mut slots = changed;
+            slots.extend(host.buffer_slots_audit(cursor));
+            slots.sort_unstable();
+            slots.dedup();
+            slots
         };
         *passes += 1;
         // Whether the device was there before the pass: a view that removes
