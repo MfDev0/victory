@@ -93,6 +93,71 @@ fn prep_part(i: usize, since: std::time::Instant) -> std::time::Instant {
     now
 }
 
+/// Microseconds of `Host::card_before` by part, since the frame-rate line
+/// last took them: the ranges given to shaders gathered, the changed
+/// ranges and masked patches taken (the queue-order lock included), the
+/// patch's buffer made or reused and filled, the send list's copies (and
+/// the patch's dispatches) recorded, its hash passes recorded, the compare
+/// list recorded, the send list closed and handed to the card. An
+/// instrument: card_before went from 5-8 to 15-31 ms a frame with the
+/// masked patch on (run 362's in-run split) and no line said where.
+static CARD_BEFORE_PARTS: [std::sync::atomic::AtomicU64; 7] = [const { std::sync::atomic::AtomicU64::new(0) }; 7];
+
+/// Adds the time since `since` to part `i` of [`CARD_BEFORE_PARTS`]; now.
+fn card_part(i: usize, since: std::time::Instant) -> std::time::Instant {
+    let now = std::time::Instant::now();
+    CARD_BEFORE_PARTS[i].fetch_add((now - since).as_micros() as u64, Ordering::Relaxed);
+    now
+}
+
+/// Of the lists' steps (`HostList::run_deferred`), by kind since the
+/// frame-rate line last took them: title copies, fills, refreshes noted,
+/// memory writes of ours (`Step::Run`, with the flush and texture checks
+/// they set off), host steps, ranges given to shaders (with the one copy's
+/// refresh they set off), textures noted; each the count and the
+/// microseconds. Then the flushes of refreshes (count, microseconds,
+/// copies brought up to date; the submission's last flush included) and
+/// the texture checks (count, microseconds). An instrument: "the lists'
+/// steps" was 27-45 ms a frame (run 363) and no line split it.
+#[cfg(feature = "diagnostics")]
+static STEP_KINDS: [[std::sync::atomic::AtomicU64; 2]; 7] =
+    [const { [const { std::sync::atomic::AtomicU64::new(0) }; 2] }; 7];
+#[cfg(feature = "diagnostics")]
+static STEP_FLUSHES: [std::sync::atomic::AtomicU64; 5] = [const { std::sync::atomic::AtomicU64::new(0) }; 5];
+
+/// Times one step of [`STEP_KINDS`] from `.1` until it is dropped (at the
+/// end of the step, `continue` included).
+#[cfg(feature = "diagnostics")]
+struct StepTimed(usize, std::time::Instant);
+
+/// Times a flush (`.0` = 0: [`STEP_FLUSHES`] 0-2, `.1` copies) or a
+/// texture check (`.0` = 3: 3-4) from `.2` until it is dropped.
+#[cfg(feature = "diagnostics")]
+struct FlushTimed(usize, u64, std::time::Instant);
+
+#[cfg(feature = "diagnostics")]
+impl Drop for FlushTimed {
+    fn drop(&mut self) {
+        STEP_FLUSHES[self.0].fetch_add(1, Ordering::Relaxed);
+        STEP_FLUSHES[self.0 + 1].fetch_add(self.2.elapsed().as_micros() as u64, Ordering::Relaxed);
+        if self.0 == 0 {
+            STEP_FLUSHES[2].fetch_add(self.1, Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+impl Drop for StepTimed {
+    fn drop(&mut self) {
+        STEP_KINDS[self.0][0].fetch_add(1, Ordering::Relaxed);
+        // Refreshes noted (some 22,000 a frame, each a map's look) are
+        // counted, not timed: their time is the steps' part less the others.
+        if self.0 != 2 {
+            STEP_KINDS[self.0][1].fetch_add(self.1.elapsed().as_micros() as u64, Ordering::Relaxed);
+        }
+    }
+}
+
 /// Submissions started and not finished yet: lists the card may still be
 /// running, which read the view heap's slots as they run.
 pub(crate) fn submissions_in_flight() -> u64 {
@@ -5697,6 +5762,53 @@ fn late_line(frames: f64) {
              (VICTORY_MERGE_UNWATCHED_MB), no snapshot {snapshot:.1}, too many changed runs {runs_out:.1}; \
              {unjournaled:.0} pages compared with no journal"
         );
+        let card = [0, 1, 2, 3, 4, 5, 6].map(|i| CARD_BEFORE_PARTS[i].swap(0, Ordering::Relaxed) as f64 / 1e3 / frames);
+        tracing::info!(
+            "card_before by part, ms per frame: the ranges given to shaders gathered {:.1}; the changed ranges and masked patches \
+             taken (the queue-order lock's wait included) {:.1}; the patch's buffer made or reused and filled {:.1}; the send list's \
+             copies recorded {:.1}; its hash passes recorded {:.1}; the compare list {:.1}; the send list closed and handed over {:.1}",
+            card[0],
+            card[1],
+            card[2],
+            card[3],
+            card[4],
+            card[5],
+            card[6]
+        );
+        #[cfg(feature = "diagnostics")]
+        {
+            let k = [0, 1, 2, 3, 4, 5, 6].map(|i| {
+                (
+                    STEP_KINDS[i][0].swap(0, Ordering::Relaxed) as f64 / frames,
+                    STEP_KINDS[i][1].swap(0, Ordering::Relaxed) as f64 / 1e3 / frames,
+                )
+            });
+            let f = [0, 1, 2, 3, 4].map(|i| STEP_FLUSHES[i].swap(0, Ordering::Relaxed) as f64 / frames);
+            tracing::info!(
+                "the lists' steps by kind, per frame (count, ms): title copies {:.0} {:.1}; fills {:.0} {:.1}; refreshes noted {:.0} (counted, not timed); \
+                 memory writes of ours (with the flush they set off) {:.0} {:.1}; host steps {:.0} {:.1}; ranges given to shaders (with \
+                 their copy's refresh) {:.0} {:.1}; textures noted {:.0} {:.1}; flushes of refreshes, the submission's last ones \
+                 included: {:.0} in {:.1} ms bringing {:.0} copies up to date; texture checks {:.0} in {:.1} ms",
+                k[0].0,
+                k[0].1,
+                k[1].0,
+                k[1].1,
+                k[2].0,
+                k[3].0,
+                k[3].1,
+                k[4].0,
+                k[4].1,
+                k[5].0,
+                k[5].1,
+                k[6].0,
+                k[6].1,
+                f[0],
+                f[1] / 1e3,
+                f[2],
+                f[3],
+                f[4] / 1e3
+            );
+        }
     }
 }
 
@@ -6400,6 +6512,8 @@ impl Host {
         if !crate::shadow::cards() {
             return None;
         }
+        // Its parts, for the line that splits it ([`CARD_BEFORE_PARTS`]).
+        let mut timed = std::time::Instant::now();
         // The ranges this submission's shaders may write, per copy.
         let mut declared: Vec<(Arc<crate::shadow::Shadow>, Vec<(usize, usize)>)> = Vec::new();
         let indexed = step_index();
@@ -6424,6 +6538,7 @@ impl Host {
                 }
             }
         }
+        timed = card_part(0, timed);
         // With the relay: the order of the queue is held from here until
         // what is taken is on the queue, and the taking is numbered.
         let mut order = relay().then(|| QUEUE_ORDER.lock().unwrap_or_else(|e| e.into_inner()));
@@ -6438,6 +6553,7 @@ impl Host {
         // The masked patches, taken in the same order of the queue
         // (`crate::shadow::masked_patch_now`).
         let patches = crate::shadow::card_patches(sent_as);
+        timed = card_part(1, timed);
         // With fetches on a copy queue (`crate::queue2`, bit 1 of
         // `VICTORY_QUEUE2`): the send's number is signalled on the direct
         // queue behind the send, so that a fetch knows which sends the card
@@ -6507,6 +6623,7 @@ impl Host {
                 _ => fail(format_args!("no memory or pipeline for the masked patch of host copies in the card's memory (VICTORY_MASKED_PATCH)")),
             }
         }
+        timed = card_part(2, timed);
         let mut used: Vec<(bool, Prelude)> = Vec::new();
         // The changed bytes through the copy queue (`VICTORY_QUEUE2` bit
         // 2): the landing buffer they are in, in the order of `dirty`'s
@@ -6565,6 +6682,7 @@ impl Host {
             // live buffers, and the ranges lie in them.
             let recorded = unsafe {
                 (|| -> windows::core::Result<()> {
+                    let timed_list = timed;
                     allocator.Reset()?;
                     list.Reset(allocator, None)?;
                     let timed = crate::cardmeter::begin(list, crate::cardmeter::Kind::Sync);
@@ -6681,14 +6799,17 @@ impl Host {
                             hashes(list, &synced[synced.len() - 1..]);
                         }
                     }
+                    let mut parted = card_part(3, timed_list);
                     if batched {
                         hashes(list, &synced);
                     }
+                    parted = card_part(4, parted);
                     crate::cardmeter::end(list, timed);
                     #[cfg(feature = "diagnostics")]
                     crate::shot::span_end(list, shot_span, 0, || "SYNC LIST (changed bytes go up to the card's copies and are hashed)".to_string());
                     list.Close()?;
                     self.queue.ExecuteCommandLists(&[Some(list.cast()?)]);
+                    card_part(6, parted);
                     Ok(())
                 })()
             };
@@ -6699,6 +6820,7 @@ impl Host {
         }
         numbered();
         drop(order);
+        timed = std::time::Instant::now();
         let mut plan = CardPlan {
             ranges: Vec::new(),
             check: None,
@@ -6829,6 +6951,7 @@ impl Host {
             plan.lists.push((true, check));
         }
         work.out += 1;
+        card_part(5, timed);
         Some(plan)
     }
 
@@ -10363,6 +10486,19 @@ impl HostList {
                 }
             }
             let started = std::time::Instant::now();
+            #[cfg(feature = "diagnostics")]
+            let _timed = StepTimed(
+                match step {
+                    Step::Copy(..) => 0,
+                    Step::Fill(..) => 1,
+                    Step::Refresh(..) => 2,
+                    Step::Run(..) => 3,
+                    Step::Host(..) => 4,
+                    Step::GpuWrite(..) => 5,
+                    Step::Texture(..) => 6,
+                },
+                started,
+            );
             let copied = match step {
                 &Step::Copy(dst, src, len) => {
                     #[cfg(feature = "diagnostics")]
@@ -10889,6 +11025,8 @@ impl Batch {
         if self.due_textures.is_empty() {
             return;
         }
+        #[cfg(feature = "diagnostics")]
+        let _timed = FlushTimed(3, 0, std::time::Instant::now());
         let due = std::mem::take(&mut self.due_textures);
         PARALLEL_CHECKS[0].fetch_add(1, Relaxed);
         PARALLEL_CHECKS[1].fetch_add(due.len() as u64, Relaxed);
@@ -10923,6 +11061,8 @@ impl Batch {
 
     fn flush(&mut self) {
         self.check_textures();
+        #[cfg(feature = "diagnostics")]
+        let _timed = FlushTimed(0, self.refreshes.len() as u64, std::time::Instant::now());
         self.index.clear();
         // One write-watch asking for the copies that lie close together,
         // not one per copy.
