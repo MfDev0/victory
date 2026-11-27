@@ -292,6 +292,14 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
     if p.made.get().is_none() {
         p.asks.fetch_add(1, Ordering::Relaxed);
         start(p, REQUESTED);
+        // fx a42b627 (Exopus, #1312): a dispatch waits for its compute
+        // pipeline until it is made (`VICTORY_PIPELINE_COMPUTE_WAIT=0`: within
+        // the frame's budget, as before): a dispatch dropped for frames leaves
+        // what it computes (skinning, light) missing or stale on screen.
+        if p.graphics.is_none() && compute_waits() {
+            // Made here, or waited for while a worker makes it.
+            p.make();
+        }
         let frame = crate::frame::current();
         // Waited for in the first frame that asks for it only
         // ([`wait_once`]); later frames go on without it.
@@ -306,13 +314,14 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
         // replaces it as soon as it is made. After Kelvaroq 0050
         // (stellarr-studio: "a hit binds immediately, a miss keeps the
         // budget"). `VICTORY_STAND_IN_FIRST=0`: wait first, as before.
-        if stand_in_first()
+        if p.made.get().is_none()
+            && stand_in_first()
             && let Some(made) = stand_in_tier(p, false)
         {
             STAND_INS_FIRST.fetch_add(1, Ordering::Relaxed);
             return Some(made);
         }
-        if first == frame || !wait_once() {
+        if p.made.get().is_none() && (first == frame || !wait_once()) {
             wait(p, frame);
         }
         if p.made.get().is_none() {
@@ -346,6 +355,26 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
         crate::host::first_use(&host.name);
     }
     made
+}
+
+/// Whether a dispatch waits for its compute pipeline until it is made,
+/// whatever the frame's budget ([`wait_budget`]); a draw still waits within
+/// the budget and is dropped while its pipeline is not there.
+///
+/// A dropped draw is drawn again in the next frame. A dropped dispatch may
+/// not be: the title runs some compute passes once, when a scene changes
+/// (a buffer reset or cleared), and what they leave is read for as long as
+/// the scene lasts. In the prison corridor a compute program met for the
+/// first time took 4.4 s to make on a 16 GB machine; its one dispatch was
+/// dropped after the half second of budget, and the windows of the room
+/// before stayed blended over the whole picture for minutes (run 195).
+/// A wait of seconds once (the pipeline library has it on the next run)
+/// against a picture wrong until the scene ends.
+/// On by default; `VICTORY_PIPELINE_COMPUTE_WAIT=0`: within the budget, as
+/// before.
+fn compute_waits() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_PIPELINE_COMPUTE_WAIT").is_none_or(|v| v != "0"))
 }
 
 /// Pipelines made again for the formats bound at a draw, since the start.
