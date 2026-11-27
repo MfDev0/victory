@@ -568,6 +568,16 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.18 ("nothing let go that comes back"; plan and to-do in `scripts/try/PLAN.md`):
+   - `VICTORY_SWEEP_BACK_MS` (30,000): a texture the sweep let go and that
+     was made again waits that long unused before it may go again; the
+     sweep's idle frames are 8 (4 before).
+   - `VICTORY_TARGET_SWEEP` (2): the sweep also lets go of render-target
+     copies nothing holds, unused 30 s, whose title memory is unmapped (1),
+     and those unused two minutes while the card is past its budget (2).
+   - `VICTORY_JOIN_HOLD_MS` 1,500 by default (10,000 before).
+   - A `texture sweep (6.18)` line beside the memory lines, with the
+     placeholders by kind.
    6.17 ("no wasted processor"; plan and to-do in `scripts/try/PLAN.md`):
    - `console_insn::plan`: a `monitorx`/`mwaitx` whose first two bytes lie
      across an eight-byte word keeps its `0F` and gets `1F C0` (`nop eax`)

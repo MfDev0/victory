@@ -4401,6 +4401,7 @@ fn placeholder(format: DXGI_FORMAT, dimension: u32, at: D3D12_CPU_DESCRIPTOR_HAN
         }
     };
     PLACEHOLDERS_SHOWN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    PLACEHOLDER_KINDS[kind].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // SAFETY: a live texture of ours and a slot of our heap.
     unsafe { host.device.CreateShaderResourceView(&textures.0[kind], Some(&desc), at) };
     true
@@ -4414,6 +4415,13 @@ fn placeholder_like(words: &[u32; 10], at: D3D12_CPU_DESCRIPTOR_HANDLE, any: boo
 
 /// Slots given a placeholder since the start.
 pub(crate) static PLACEHOLDERS_SHOWN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Try 6.18: [`PLACEHOLDERS_SHOWN`] by the placeholder given: mid grey
+/// (colour), flat normal, white (one-channel masks). In the 6.17 report
+/// arms and faces showed white or grey for frames while 78,875 slots had
+/// been given one; the line says which kind they were.
+pub(crate) static PLACEHOLDER_KINDS: [std::sync::atomic::AtomicU64; 3] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 3];
 
 /// The three placeholder textures (grey, flat normal, white).
 struct Placeholders([ID3D12Resource; 3]);

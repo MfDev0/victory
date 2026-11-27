@@ -15,7 +15,7 @@
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
-$TryVersion = '6.17'
+$TryVersion = '6.18'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live, tried when the fork itself cannot be

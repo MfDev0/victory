@@ -11433,6 +11433,33 @@ impl Meter {
                     crate::descriptor::host::PLACEHOLDERS_SHOWN.load(Ordering::Relaxed)
                 );
             }
+            // 6.18: what the sweep takes from the card and gives back, in
+            // every build (the 6.17 report showed white and grey arms and
+            // faces with no line saying why).
+            {
+                use crate::resource::{KINDS, SWEEP_618};
+                let p = |i: usize| crate::descriptor::host::PLACEHOLDER_KINDS[i].load(Ordering::Relaxed);
+                let w = |i: usize| SWEEP_618[i].load(Ordering::Relaxed);
+                tracing::info!(
+                    "texture sweep (6.18), since the start: {} host copies of textures the title fills let go ({} MB), {} of them made again ({} MB: \
+                     asked for after they went, each a placeholder until its upload), {} looks that kept a copy that came back \
+                     (VICTORY_SWEEP_BACK_MS); render-target copies let go: {} whose title memory was given up ({} MB), {} unused for two minutes \
+                     with the card past its budget ({} MB), of {} looked at (VICTORY_TARGET_SWEEP); placeholders by kind: grey {}, flat normal {}, white {}",
+                    KINDS[2].load(Ordering::Relaxed),
+                    KINDS[3].load(Ordering::Relaxed) >> 20,
+                    KINDS[4].load(Ordering::Relaxed),
+                    KINDS[5].load(Ordering::Relaxed) >> 20,
+                    w(0),
+                    w(1),
+                    w(2) >> 20,
+                    w(3),
+                    w(4) >> 20,
+                    w(5),
+                    p(0),
+                    p(1),
+                    p(2)
+                );
+            }
             #[cfg(feature = "diagnostics")]
             crate::copystat::log(std::mem::take(&mut self.copy_stats_frames) as f64);
             // (every build since 4.8: which programs the dropped draws were)

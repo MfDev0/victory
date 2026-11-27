@@ -1892,13 +1892,32 @@ pub(crate) fn card_accounting(room: bool, due: [u64; 5], never: Vec<(u64, u64)>,
 #[cfg(windows)]
 pub(crate) fn let_go_idle() {
     use std::sync::atomic::Ordering::Relaxed;
-    const IDLE_FRAMES: u64 = 4;
+    // (6.18: 8, was 4; at 3 frames a second 4 frames were a second and a
+    // half, and a texture seen every other frame went.)
+    const IDLE_FRAMES: u64 = 8;
+    const BACK_FRAMES: u64 = 60;
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if !*ON.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_SWEEP").is_none_or(|v| v != "0")) {
         return;
     }
-    let idle_ms = crate::host::vram_idle_ms(crate::host::host().and_then(|h| h.video_memory()))
-        .min(crate::pressure::idle_cap_ms(true));
+    let video = crate::host::host().and_then(|h| h.video_memory());
+    let idle_ms = crate::host::vram_idle_ms(video).min(crate::pressure::idle_cap_ms(true));
+    // Try 6.18: a texture let go once and asked for again is one the scene
+    // still uses (a character turning away, a room behind the camera); it
+    // waits `sweep_back_ms` before it may go again. In the 6.17 report the
+    // sweep let go 10,000 copies a minute (700-750 MB) on a 6 GB card that
+    // stood past its line, so each frame's textures went after a second
+    // unseen and came back as placeholders, white and grey, until their
+    // upload, which waited for memory with 2,000 others.
+    let back_ms = sweep_back_ms();
+    // Try 6.18, render targets nothing will read again (`target_sweep`):
+    // looked at every two seconds at most.
+    let targets_due = target_sweep() > 0 && {
+        let now = crate::host::now_ms();
+        let at = TARGETS_AT.load(Relaxed);
+        now.saturating_sub(at) >= 2_000 && TARGETS_AT.compare_exchange(at, now, Relaxed, Relaxed).is_ok()
+    };
+    let over_budget = video.is_some_and(|[budget, used, ..]| budget > 0 && used > budget);
     // For the trail (`crate::host::trail`): how many went, their bytes,
     // and the first one.
     let (mut went, mut bytes, mut first) = (0u64, 0u64, None);
@@ -1908,14 +1927,26 @@ pub(crate) fn let_go_idle() {
         // lock held here (`Drop for Resource`).
         let r = unsafe { &*(at as *const Resource) };
         if !fills(&r.desc) || crate::texture::host_wrote(at) {
+            if targets_due {
+                let_go_target(r, over_budget);
+            }
             continue;
         }
         let gone = {
             let mut made = r.host.made.lock().unwrap_or_else(|e| e.into_inner());
+            let back = r.host.gone.load(Relaxed);
             let idle = made.as_ref().is_some_and(|(host, _)| {
-                crate::host::long_ago(r.host.used.load(Relaxed), idle_ms, IDLE_FRAMES)
+                let used = r.host.used.load(Relaxed);
+                crate::host::long_ago(used, idle_ms, IDLE_FRAMES)
                     && std::sync::Arc::strong_count(host) == 1
                     && crate::host::references(&host.texture) == 1
+                    && (!back || {
+                        let long = crate::host::long_ago(used, idle_ms.max(back_ms), IDLE_FRAMES.max(BACK_FRAMES));
+                        if !long {
+                            SWEEP_618[0].fetch_add(1, Relaxed);
+                        }
+                        long
+                    })
             });
             if idle {
                 // Under the lock: the next use must not find the staging
@@ -1946,6 +1977,92 @@ pub(crate) fn let_go_idle() {
                 first.unwrap_or(0)
             )
         });
+    }
+}
+
+/// Try 6.18, for the memory line: since the start, copies of textures the
+/// title fills kept because they came back after being let go
+/// ([`sweep_back_ms`]); host copies of render targets let go
+/// ([`let_go_target`]) whose title memory is no longer mapped, and their
+/// bytes; those let go after two minutes unused while the card stood past
+/// its budget, and their bytes; render targets looked at.
+#[cfg(windows)]
+pub(crate) static SWEEP_618: [std::sync::atomic::AtomicU64; 6] = [const { std::sync::atomic::AtomicU64::new(0) }; 6];
+
+/// When [`let_go_idle`] last looked at render targets (`crate::host::now_ms`).
+#[cfg(windows)]
+static TARGETS_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Try 6.18: how long a texture let go once and made again must be unused
+/// before the sweep lets it go again, in milliseconds
+/// (`VICTORY_SWEEP_BACK_MS`, 30,000; 0: as any other).
+#[cfg(windows)]
+fn sweep_back_ms() -> u64 {
+    static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *N.get_or_init(|| std::env::var("VICTORY_SWEEP_BACK_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(30_000))
+}
+
+/// Try 6.18: which host copies of render targets (and of textures the host
+/// wrote) the sweep lets go (`VICTORY_TARGET_SWEEP`): 0, none (as before
+/// 6.18); 1, those that no list and no slot holds, unused for 30 seconds
+/// and 60 frames, whose title memory is no longer mapped (the title gave the
+/// memory up: nothing can read them again); 2 (the default), those too, and
+/// render targets the title does not fill unused for two minutes and 240
+/// frames while the card stands past its budget. Render-target copies grew
+/// from 385 MB to 1,383 MB over the 6.17 report's five minutes and never
+/// shrank (run 197: 2,319 to 3,075 MB), while the card stood at 5,628 MB of
+/// a 5,153 MB budget and the textures the title fills were let go.
+#[cfg(windows)]
+fn target_sweep() -> u8 {
+    static N: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *N.get_or_init(|| std::env::var("VICTORY_TARGET_SWEEP").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(2))
+}
+
+/// [`let_go_idle`] for a host copy the sweep did not take before
+/// ([`target_sweep`]). The next use makes it anew, as a texture's copy after
+/// the sweep is (empty: what was rendered into it is gone, which only a
+/// title that gave its memory up, or left it unused for minutes, would read).
+#[cfg(windows)]
+fn let_go_target(r: &Resource, over_budget: bool) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let level = target_sweep();
+    let gone = {
+        let mut made = r.host.made.lock().unwrap_or_else(|e| e.into_inner());
+        let Some((host, twin)) = made.as_ref() else {
+            return;
+        };
+        let used = r.host.used.load(Relaxed);
+        if !crate::host::long_ago(used, 30_000, 60)
+            || std::sync::Arc::strong_count(host) != 1
+            || crate::host::references(&host.texture) != 1
+            || twin.as_ref().is_some_and(|t| {
+                std::sync::Arc::strong_count(&t.colour) != 1 || crate::host::references(&t.colour.texture) != 1
+            })
+        {
+            return;
+        }
+        SWEEP_618[5].fetch_add(1, Relaxed);
+        // Its first page: what is there of a texture starts there.
+        let unmapped = r.host.placed.load(Relaxed) && !crate::texture::committed(r.data().cast_const(), 1);
+        let stale = !unmapped
+            && level >= 2
+            && over_budget
+            && !host.filled
+            && crate::host::long_ago(used, 120_000, 240);
+        if !unmapped && !stale {
+            return;
+        }
+        let kind = if unmapped { 1 } else { 3 };
+        SWEEP_618[kind].fetch_add(1, Relaxed);
+        SWEEP_618[kind + 1].fetch_add(host.bytes + twin.as_ref().map_or(0, |t| t.colour.bytes), Relaxed);
+        made.take()
+    };
+    if let Some((host, twin)) = gone {
+        r.host.gone.store(true, Relaxed);
+        crate::host::retire(host);
+        if let Some(twin) = twin {
+            crate::host::retire(twin);
+        }
     }
 }
 

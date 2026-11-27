@@ -1130,15 +1130,19 @@ pub(crate) fn loading_now() -> bool {
 /// Try 6.4, the console's curtain: the Series S version keeps its loading
 /// screen up until what the first shot needs has streamed in. Here the
 /// first world frames after a loading screen are that curtain: for up to
-/// `VICTORY_JOIN_HOLD_MS` (10,000 unless set; 0: none) after the loading
+/// `VICTORY_JOIN_HOLD_MS` (1,500 unless set, 10,000 before 6.18; 0: none) after the loading
 /// screen went, while 300 or more textures picked by index are due, each
 /// pass of the world gets 1.5 s and the loading screen's bytes. The first
 /// seconds of the world run at under a frame a second, and the world then
 /// stands there whole instead of filling in over the first minute (the
 /// 6.2 report entered it with 5,771 textures due).
+/// 6.18: a second and a half. In the 6.17 report it stood 2.8 s at the
+/// world's door on a 6 GB card, a still picture at under a frame a second
+/// that read as four seconds of nothing, and on a card past its line the
+/// textures it waits for wait for memory, not for time.
 fn join_hold_ms() -> u64 {
     static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *N.get_or_init(|| std::env::var("VICTORY_JOIN_HOLD_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(10_000))
+    *N.get_or_init(|| std::env::var("VICTORY_JOIN_HOLD_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(1_500))
 }
 
 /// Try 6.5, the streaming budget of big games: the texture pass of the

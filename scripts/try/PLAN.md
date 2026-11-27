@@ -1,4 +1,4 @@
-# VIctory Try: plan and to-do (6.10, updated for 6.17)
+# VIctory Try: plan and to-do (6.10, updated for 6.18)
 
 Goal: the whole picture rendered, **20+ fps** on the reporter's PC: RTX 4050
 Laptop (5921 MB, budget about 5153 MB), 12 threads, about 16 GB of RAM,
@@ -48,6 +48,31 @@ below are checked again.
       66afb2b4; parser only so far).
 - [x] Logs: `upscaler PC FidelityFX ...` line at start, providers offered
       and chosen, every 600 upscales how many were jittered (both paths).
+
+## Done in 6.18 ("nothing let go that comes back")
+
+From the 6.17 report (RTX 4050 Laptop 6 GB, MAX on, 1280x720 low): world
+0.2-4 fps; the card at most 5,628 MB of a 5,153 MB budget, pressure Critical
+most of the run; the title's lists 140-185 ms of card time a frame. monitorx
+fixed (patched=2 unpatched=0). The sweep let go 8,700-10,900 copies of
+filled textures a minute (650-750 MB) at its 1 s Critical idle; placeholders
+78,875; render-target copies 385 -> 1,383 MB, never let go; the curtain held
+2.8 s at the world's door.
+
+- [x] Sweep: textures that came back wait `VICTORY_SWEEP_BACK_MS` (30 s, 60
+      frames); `IDLE_FRAMES` 8.
+- [x] Sweep: render-target copies (`let_go_target`, `VICTORY_TARGET_SWEEP`),
+      looked at every 2 s: unmapped title memory + 30 s idle, or 2 min idle
+      while the card is past its budget; no slot, no list, twin unheld.
+- [x] Curtain 1.5 s (`VICTORY_JOIN_HOLD_MS`).
+- [x] Log: `texture sweep (6.18)` line; `PLACEHOLDER_KINDS`.
+- Checked: the 5 refused computes are rt-off hashes (deny list); the 5
+  untranslated computes ("a descriptor read only as data", lower.rs) are
+  made at the menu, never bound in the world.
+- Next: the square lights (screen probes at low resolution with the ray
+  passes off? needs the next report's card meter and a capture); the slots
+  written with a texture of another dimension (169,091); the windows BAR
+  (976 MB) against textures on 6 GB cards.
 
 ## Done in 6.17 ("no wasted processor")
 
