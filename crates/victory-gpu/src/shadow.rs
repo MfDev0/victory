@@ -206,14 +206,27 @@ fn card_limits() -> (u64, u64) {
     *LIMITS.get_or_init(|| {
         let env_mb = |name: &str| std::env::var(name).ok().and_then(|v| v.trim().parse::<u64>().ok());
         let vram_budget = crate::host::host().and_then(|h| h.video_memory()).map(|[budget, ..]| budget);
-        let (min_bytes, max_bytes) = resolve_card_limits(
+        let (mut min_bytes, max_bytes) = resolve_card_limits(
             vram_budget,
             env_mb("VICTORY_CARD_BUFFERS_MIN_MB"),
             env_mb("VICTORY_CARD_BUFFERS_MB"),
         );
+        // `VICTORY_CARD_BUFFERS_MIN_KB` (fxceless c36971b2; its reader was
+        // lost when the limits came to scale with the card, the log line
+        // above kept naming it) says the least size in KiB, so that it can
+        // go under 1 MiB: 64 is every title buffer. Copies under 1 MiB are
+        // nearly all there are and few bytes; in the PC's memory every
+        // load, store and atomic a shader does on them crosses the bus
+        // (measured upstream: the title's lists 68.0 -> 49.8 ms of card
+        // time a frame; ScarlettPort's Stable preset sets 64).
+        if let Some(kib) = std::env::var("VICTORY_CARD_BUFFERS_MIN_KB").ok().and_then(|v| v.trim().parse::<u64>().ok())
+            && kib > 0
+        {
+            min_bytes = kib << 10;
+        }
         tracing::info!(
             vram_budget_mb = vram_budget.map(|b| b >> 20),
-            card_buffers_min_mb = min_bytes >> 20,
+            card_buffers_min_kb = min_bytes >> 10,
             card_buffers_max_mb = max_bytes >> 20,
             "card buffer limits"
         );
