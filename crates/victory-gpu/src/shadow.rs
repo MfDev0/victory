@@ -1952,7 +1952,7 @@ mod wide_thread_tests {
 pub(crate) fn ahead_workers() -> &'static Workers {
     static WORKERS: std::sync::OnceLock<Workers> = std::sync::OnceLock::new();
     static STARTED: std::sync::Once = std::sync::Once::new();
-    kept_pool(&WORKERS, &STARTED, "victory-ahead", 3)
+    kept_pool(&WORKERS, &STARTED, "victory-ahead", 7)
 }
 
 /// Runs `jobs` on the kept threads and on this one, and returns when all
