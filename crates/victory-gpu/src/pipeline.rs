@@ -526,7 +526,9 @@ pub(crate) fn builder_off(why: &'static str) {
 #[cfg(windows)]
 pub(crate) fn builder_runs() -> bool {
     static ALLOWED: OnceLock<bool> = OnceLock::new();
-    if !*ALLOWED.get_or_init(|| std::env::var_os("VICTORY_BVH_BUILDER").is_some_and(|v| v == "1")) {
+    // On unless `VICTORY_BVH_BUILDER=0` (since 2026-11-27: the ray-tracing
+    // programs are to be used).
+    if !*ALLOWED.get_or_init(|| std::env::var_os("VICTORY_BVH_BUILDER").is_none_or(|v| v != "0")) {
         return false;
     }
     let mut b = BUILDER.lock().unwrap_or_else(|e| e.into_inner());
