@@ -66,6 +66,18 @@ filled textures a minute (650-750 MB) at its 1 s Critical idle; placeholders
       while the card is past its budget; no slot, no list, twin unheld.
 - [x] Curtain 1.5 s (`VICTORY_JOIN_HOLD_MS`).
 - [x] Log: `texture sweep (6.18)` line; `PLACEHOLDER_KINDS`.
+6.22 ("from ScarlettPort"):
+- [x] ScarlettPort 0.5.0-0.5.3 compared with ours and ported onto our base:
+      no per-frame pipeline wait in Try, 64 KiB card copies in Try, big
+      copies' room, guard sink + wide loads, same host heaps, spread lean,
+      write-watch batch, shared-lock windows, saves without waits, AMD mesh
+      one at a time, library kept while mapped, Belobug #324/#326/#332/#343/
+      #351, out-of-memory line.
+- [x] Water paired form default (WAVE_PAIRS_ONLY + FP32 non-ieee-rne-ftz).
+- [x] 6.21's "card copies 1,805 MB against 1,031 MB": windows + buffers
+      against the buffers' cap; the line splits them now.
+- Next: a game report on 6.22 (pop-in with no pipeline wait; card memory with
+  64 KiB copies; write-watch ms after the batch).
 6.21 ("from the 4070 fork"):
 - [x] fxceless/victory-fork up to 9a9091d ported (28 commits); the BVH
       builder kept off; the five RT computes translate by default; the deny

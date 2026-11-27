@@ -568,6 +568,36 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
    - `VICTORY_CARD_BUFFERS_MIN_MB=2` (4 before).
    - a `GetModuleHandle` of a title DLL that another thread is mapping
      waits for that load instead of being refused.
+   6.22 ("from ScarlettPort"; ZigZagBoi1/ScarlettPort up to 0.5.3, ported
+   onto our base by hand where it did not apply; messages name the commit):
+   - Defaults (each with its way back): `VICTORY_WAVE_PAIRS_ONLY` = the two
+     `WATER_PAIRS` hashes and `VICTORY_WAVE_PAIRS_FP32=non-ieee-rne-ftz`
+     (`=none` / `=off`); `VICTORY_CARD_BIG_ROOM` 256 MB for copies of 16 MiB
+     and more (`=0`); `VICTORY_GUARD_SINK` and `VICTORY_LOADS_WIDE` (shader
+     passes `GUARDS`/`WIDE`, also with `VICTORY_SHADER_OPT=0`; `=0`);
+     `VICTORY_SAME_HOST_HEAPS` (`=0`); `VICTORY_SPREAD_LEAN` (fx a7ee5df;
+     `=0`); `VICTORY_MESH_MAKE_ONE` on AMD hosts (`=0` off, `=1` every card);
+     a save of the pipeline library beside a mapped one goes to
+     `host-pipelines.next` (`VICTORY_LIBRARY_REPLACE_MAPPED=1`);
+     `VICTORY_UNWIND_CHECKS` (`=0`).
+   - try.ps1: `VICTORY_PIPELINE_WAIT_MS=0` (250 before; compute still waits,
+     `VICTORY_PIPELINE_COMPUTE_WAIT`); `VICTORY_CARD_BUFFERS_MIN_KB=64` unless
+     the hybrid, plain mode, or a user's `_MIN_MB`/`_MIN_KB`/`VICTORY_INPLACE`
+     (`_MIN_KB=0` off). `shadow::card_limits` reads `_MIN_KB` again (fx
+     c36971b2).
+   - Taken: sp f059bbf (saves: leftovers removed once, no wait), 50a9f7c,
+     2387034, fbf382d (write-watch), e5faadb (loose windows `RwLock`),
+     1e72650 (same host heaps; Belobug #326, #332, #351), 56a926f (refusal
+     reasons), 6d836e8 (AMD mesh, mapped library), f2bef5f (Belobug #324 size
+     query, #343 stack walk), bc40787 (`oom::Reporting` under copystat's
+     allocator).
+   - Not taken: sp 4c03a59's upscaler fallback (ours takes `ffxDispatch`
+     itself), 5b0288d and 2703ed0 (sp's profiler), cfc3661 (sp's warm),
+     f2bef5f #295 (KBM), 1deb0be (our reserved textures skip the pool already);
+     cool_fox CARD_STEPS, UPLOAD_AHEAD, SHOW_AFTER, WRITE_SITES, RELAY_COPY
+     (built on cool_fox modules ours lacks), MAP_THREADS, THIN; fx 3461f52.
+   - Diagnostics builds compile again (`Step::AfterTextures` in the step
+     timer); the card memory line splits buffers, windows and BAR windows.
    6.21 ("from the 4070 fork"; fxceless/victory-fork up to 9a9091d):
    - Taken by cherry-pick (fx author kept; messages `fx <commit>: ...`):
      d9049b4, 59750d7, 3382ad9, 2c6bc78, #1376, #1380, a42b627 (#1312),
