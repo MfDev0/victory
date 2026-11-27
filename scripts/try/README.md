@@ -574,7 +574,7 @@ runs the newer one, so fixes to VIctory Try itself need no new download.
      in one store; places that cannot be patched are not tried again
      (`UNPATCHABLE`), the first reasons are logged.
    - Try sets `VICTORY_SYNC_BESIDE=1` (config `beside`; second in the
-     lost-card chain, after all-out); mirror `MfDev0/ctz` first.
+     lost-card chain, after all-out); mirror `MfDev0/CATez` first.
    6.16 ("room for windows"; plan and to-do in `scripts/try/PLAN.md`):
    - `VICTORY_WINDOWS_ROOM` (on): the texture queue's room counts what
      windows outside buffers may still take on the card (BAR and card

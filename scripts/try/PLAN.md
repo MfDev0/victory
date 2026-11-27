@@ -61,7 +61,7 @@ on the submitting thread; the card idle 68-112 ms behind it.
 - [x] `plan`: `0F xx yy` -> `0F 1F C0` when `xx yy` share a word; failed places
       remembered (16), first 4 reasons logged.
 - [x] Try: `VICTORY_SYNC_BESIDE=1` (config `beside`).
-- [x] Mirror `MfDev0/ctz` (a standalone repository, not a fork) tried first.
+- [x] Mirror `MfDev0/CATez` (a standalone repository, not a fork) tried first.
 - Next: the heap-buffers pass (47 ms a frame, about 50,000 slots a pass on the
   title's thread, F mode); Kelvaroq 0055's snapshot compare of record keys
   (their decoder differs: port by idea); the 6.16 card meter's table.

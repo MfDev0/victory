@@ -19,10 +19,10 @@ $TryVersion = '6.17'
 $ForkUrl = 'https://github.com/MfDev0/victory.git'
 $Branch = 'arena/59fabb00-victory'
 # Other places the fork may live, tried when the fork itself cannot be
-# reached. 6.17: first ctz, the fork's own copy outside the fork network
+# reached. 6.17: first CATez, the fork's own copy outside the fork network
 # (a repository of its own, not a GitHub fork: it stays when VIctory's
-# repository or the forks it came from go), then the older names.
-$MirrorUrls = @('https://github.com/MfDev0/ctz.git', 'https://github.com/MfDev0/CAtez.git', 'https://github.com/MfDev0/CAtez-backup.git')
+# repository or the forks it came from go), then a backup copy.
+$MirrorUrls = @('https://github.com/MfDev0/CATez.git', 'https://github.com/MfDev0/CAtez-backup.git')
 $UpstreamUrl = 'https://github.com/Marvisak/VIctory.git'
 # 5.9: the 8 GB NVIDIA engine, soldsawn's build of fxceless/victory-fork (the
 # community's main line): measured on an RTX 4060 Laptop 8 GB at 8-10 fps
