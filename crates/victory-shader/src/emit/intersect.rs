@@ -57,16 +57,16 @@ thread_local! {
 /// in every run. (The idea is fork pull request #994's, which asks a host
 /// word at run time; here it is a translation, since the builder's state
 /// does not change during a run of ours.)
-fn no_hit() -> bool {
+pub(super) fn no_hit() -> bool {
     // Tests ask for it themselves; the default below is for runs.
     if cfg!(test) {
         #[cfg(test)]
         return TEST_NO_HIT.get();
     }
-    // Only while the builder is off (`VICTORY_BVH_BUILDER=0`; it runs by
-    // default), and not with `VICTORY_BVH_NO_HIT=0`.
+    // Only while the builder is off (it runs with `VICTORY_BVH_BUILDER=1`
+    // only), and not with `VICTORY_BVH_NO_HIT=0` (fx b1d777a / 4966cd6).
     std::env::var_os("VICTORY_BVH_NO_HIT").is_none_or(|v| v != "0")
-        && std::env::var_os("VICTORY_BVH_BUILDER").is_some_and(|v| v == "0")
+        && std::env::var_os("VICTORY_BVH_BUILDER").is_none_or(|v| v != "1")
 }
 
 /// Where the instruction's node is.

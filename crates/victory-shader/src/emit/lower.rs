@@ -6440,7 +6440,10 @@ impl<'a> Lower<'a> {
                     // five such programs (07c93bfb77fecebb, 002e93a6cc2aa355,
                     // 0e64f14fae060d04, 96ccb14ef981fd85, dbdbf36298727135)
                     // did not translate and their dispatches were dropped.
-                    if intersect::skip_rays() && self.walks_rays() {
+                    // 6.21: also while every ray misses because the builder
+                    // is off ([`intersect::no_hit`], the default again), not
+                    // only with `VICTORY_SKIP_RT=1`.
+                    if (intersect::skip_rays() || intersect::no_hit()) && self.walks_rays() {
                         for k in 0..count {
                             let zero = self.s.m.i32(0);
                             self.write(inst, Reg::S(code + k as u8), zero, None);
