@@ -88,11 +88,18 @@ fn report_zip(path: &str) -> bool {
     !path.contains('/') && path.starts_with("VIctory-report-") && path.ends_with(".zip")
 }
 
+/// `nvidia/`: trustno1-coder's VIctory-NVIDIA with the Try fixes, a workspace of its own,
+/// checked by its own policy (`cd nvidia && cargo run --locked -p xtask -- policy`). Its
+/// allowlist differs from ours (its `scripts/faultbook.py`, its `bcpack-tables.bin` exception).
+fn nvidia_tree(path: &str) -> bool {
+    path.starts_with("nvidia/")
+}
+
 pub fn run(root: &Path, staged: bool) -> Result<()> {
     let files = list_files(root, staged)?;
     let mut violations = Vec::new();
     for path in &files {
-        if EXCEPTIONS.iter().any(|(p, _)| p == path) || report_zip(path) {
+        if EXCEPTIONS.iter().any(|(p, _)| p == path) || report_zip(path) || nvidia_tree(path) {
             continue;
         }
         let content = if staged {

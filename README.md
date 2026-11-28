@@ -11,6 +11,15 @@
 
 huss huss huss huss huss huss
 
+## nvidia/: the VIctory-NVIDIA Try build
+
+`nvidia/` holds trustno1-coder's VIctory-NVIDIA (`63b902f`) with the diner
+face fix, 13 more of its pull requests, FG UNLOCK (3x-6x on RTX 20/30/40,
+from MfDev0/dlss-unlocked-), a crash report zip and a tester menu. It is a
+separate workspace, and this repository's own engine above is unchanged. To
+build it: `cd nvidia`, then `BUILD_VICTORY.cmd`. To test: `TESTER_MENU.cmd`.
+See [nvidia/TRY-NOTES.md](nvidia/TRY-NOTES.md).
+
 ## What this is
 
 A fork of [VIctory](https://github.com/Marvisak/VIctory), which runs the Xbox
