@@ -1970,13 +1970,17 @@ pub(crate) const DYNAMIC: u32 = 1 << 18;
 /// outdoor scenes exhausted dynamic tables (13-22% refused) and dropped draws;
 /// 458,752 (`7 << 16`) eliminates those refusals while keeping `VICTORY_DYNAMIC_SLOTS`
 /// overridable and clamped cleanly to `[DYNAMIC, null / 2]`.
+/// Opt-in in this build (`VICTORY_DYNAMIC_SLOTS=458752`): unset, a capped
+/// heap keeps [`DYNAMIC`] as before PR #1007, so 737,000 title slots stay
+/// 1:1 (a 6 GB card crashed on entering the world with the PRs on).
+#[allow(dead_code)] // (Named by the tests and by VICTORY_DYNAMIC_SLOTS=458752.)
 const DYNAMIC_CAPPED: u32 = 7 << 16;
 
 fn parse_dynamic_slots(count: u32, null: u32, asked: Option<u32>) -> u32 {
     if null < PORTABLE_VIEWS {
         return match asked {
             Some(asked) => asked.clamp(DYNAMIC, (null / 2).max(DYNAMIC)),
-            None => DYNAMIC_CAPPED,
+            None => DYNAMIC,
         };
     }
     let most = asked.unwrap_or(DYNAMIC << 2);
@@ -3166,7 +3170,14 @@ impl HostHeap {
                 };
                 raws.contains(&raw).then(|| {
                     let i = i as u32;
-                    let ok = i < self.count && !self.sampler && tabled_out() && self.tabled_stamp(i) != 0;
+                    // PR #1179 (opt-in, `VICTORY_PR1179=1`): any slot a table ever showed.
+                    let ok = i < self.count
+                        && !self.sampler
+                        && if crate::resource::pr1179() {
+                            tabled_out() && self.tabled_stamp(i) != 0
+                        } else {
+                            self.tabled_lately(i, frame)
+                        };
                     (i, raw, ok, seen_since(self.tabled_stamp(i), cutoff, frame))
                 })
             })
@@ -3210,7 +3221,12 @@ impl HostHeap {
             return;
         }
         let kept = match view_at(key as u32, (key >> 32) as u32) {
-            Some(view) => neutral_for(&view, self.at(index)),
+            // PR #1179 (opt-in): a neutral stand-in instead of a null view.
+            Some(view) if crate::resource::pr1179() => neutral_for(&view, self.at(index)),
+            Some(view) => {
+                null_for(&view, self.at(index));
+                None
+            }
             None => {
                 null_view(self.at(index));
                 None
@@ -3535,8 +3551,11 @@ impl HostHeap {
     /// host cannot.
     pub(crate) fn make_at(&self, index: u32, view: &View) {
         let kept = make_twinned(view, self.at(index), self.twin(index));
-        let stand_in = if kept.is_none() {
+        let stand_in = if kept.is_none() && crate::resource::pr1179() {
             neutral_for(view, self.at(index))
+        } else if kept.is_none() {
+            null_for(view, self.at(index));
+            None
         } else {
             None
         };
@@ -4106,8 +4125,11 @@ impl HostHeap {
             } else {
                 make_twinned(&view, self.at(index), self.twin(index))
             };
-            let stand_in = if kept.is_none() && !self.sampler {
+            let stand_in = if kept.is_none() && !self.sampler && crate::resource::pr1179() {
                 neutral_for(&view, self.at(index))
+            } else if kept.is_none() && !self.sampler {
+                null_for(&view, self.at(index));
+                None
             } else {
                 None
             };
@@ -7232,22 +7254,9 @@ mod dynamic_slots_tests {
     #[test]
     fn dynamic_slots_on_capped_1m_heap() {
         let null = PORTABLE_VIEWS - 1;
-        assert_eq!(parse_dynamic_slots(1_245_184, null, None), DYNAMIC_CAPPED);
-        assert_eq!(parse_dynamic_slots(1_245_184, null, Some(300_000)), 300_000);
-        assert_eq!(parse_dynamic_slots(1_245_184, null, Some(900_000)), null / 2);
-        assert_eq!(parse_dynamic_slots(1_245_184, null, Some(1024)), DYNAMIC);
-        assert_eq!(parse_dynamic_slots(1_245_184, 1 << 21, None), (1u32 << 21) - 1_245_184);
-    }
-}
-
-#[cfg(test)]
-mod dynamic_slots_tests {
-    use super::{DYNAMIC, DYNAMIC_CAPPED, PORTABLE_VIEWS, parse_dynamic_slots};
-
-    #[test]
-    fn dynamic_slots_on_capped_1m_heap() {
-        let null = PORTABLE_VIEWS - 1;
-        assert_eq!(parse_dynamic_slots(1_245_184, null, None), DYNAMIC_CAPPED);
+        // Unset: as before PR #1007; the PR's budget when asked for.
+        assert_eq!(parse_dynamic_slots(1_245_184, null, None), DYNAMIC);
+        assert_eq!(parse_dynamic_slots(1_245_184, null, Some(DYNAMIC_CAPPED)), DYNAMIC_CAPPED);
         assert_eq!(parse_dynamic_slots(1_245_184, null, Some(300_000)), 300_000);
         assert_eq!(parse_dynamic_slots(1_245_184, null, Some(900_000)), null / 2);
         assert_eq!(parse_dynamic_slots(1_245_184, null, Some(1024)), DYNAMIC);

@@ -5572,8 +5572,11 @@ fn grid(kb: Option<u64>) -> u64 {
 }
 
 /// What an ask without a length can read past the end of its 4 MiB cell,
-/// in bytes: 2 MiB unless `VICTORY_WINDOW_REACH_KB` says otherwise (a
-/// multiple of 64, 4096 at the most; 0: nothing, as before).
+/// in bytes: nothing (as before PR #1197) unless `VICTORY_WINDOW_REACH_KB`
+/// says otherwise (a multiple of 64, 4096 at the most; 2048 is the PR's 2 MiB).
+/// Opt-in in this build: every such window grows by the reach, and on a
+/// 6 GB card with ray tracing the card ran out of memory on entering the
+/// world (device removed 0x887A0005/0x887A0007).
 /// A root view has no length: the console reads from its address as far as
 /// the program goes. The title binds each mesh's vertex block that way, and
 /// the block's streams lie megabytes apart (positions, then normals, texture
@@ -5595,9 +5598,10 @@ fn reach() -> u64 {
 }
 
 /// The reach in bytes for a setting in KiB: a multiple of 64 KiB up to
-/// 4 MiB, 2 MiB for anything else.
+/// 4 MiB, 2 MiB for anything else set, nothing when unset.
 fn reach_of(kb: Option<u64>) -> u64 {
     match kb {
+        None => 0,
         Some(kb) if kb % 64 == 0 && kb <= 4096 => kb << 10,
         _ => 2 << 20,
     }
@@ -6133,9 +6137,10 @@ mod window_tests {
         assert_eq!((start, bytes), (cell, WINDOW));
         assert_eq!(start + bytes - ask, 131_008);
         assert!(start + bytes < ask + block);
-        // With the default reach the block is whole, and so is one of the
+        // With the PR's reach (2 MiB) the block is whole, and so is one of the
         // reach's length that begins on the cell's last byte.
-        let reach = reach_of(None);
+        assert_eq!(reach_of(None), 0);
+        let reach = reach_of(Some(2048));
         assert_eq!(reach, 2 << 20);
         let (start, bytes) = unsized_window(ask, reach);
         assert_eq!((start, bytes), (cell, WINDOW + reach));

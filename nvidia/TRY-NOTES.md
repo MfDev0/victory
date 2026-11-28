@@ -22,8 +22,8 @@ Clone it into a new folder, then build it there:
 
 ```powershell
 cd $HOME
-git clone -b arena/59fabb00-victory https://github.com/MfDev0/victory victory-try-4
-cd victory-try-4\nvidia
+git clone -b arena/59fabb00-victory https://github.com/MfDev0/victory victory-try-5
+cd victory-try-5\nvidia
 .\BUILD_VICTORY.cmd
 ```
 
@@ -75,19 +75,36 @@ still turns each one off or on.
 | Photo mode: "can't save photo" | The game saves a photo by asking the console for a screenshot (`XAppCaptureTakeScreenshot`), and was always told "not supported". Now the next frame is saved, as the game drew it (without F1, the panel or notices), as a full-size PNG in **`Downloads\VIctory-Photos`** (`GTAVI-<date>-<time>.png`). `VICTORY_PHOTOS=<folder>` picks another folder | F1 PHOTO MODE SAVES, T E, `VICTORY_PHOTOS=0` |
 | Moving cars and people leave a trail of frames behind them | With F1 DLSS MODEL on DEFAULT, DLSS uses model K, the transformer model, which smears much less than the older CNN models. A model picked in DLSS MODEL is kept. If trails remain with frame generation on, try it once with frame generation off and say which it was | F1 TRAIL FIX, T C, `VICTORY_TRAIL_FIX=0` |
 | Lucia's store robbery (the first mission): the game closes on 8 GB cards, "a host command list did not close (0x8007000E)" | Textures stop at 75% of an 8 GB card's memory. That value stopped this crash for a tester in issue #232. Cards with 9 GB or more are not changed | F1 CRASH FIX (8 GB CARDS), T D, `VICTORY_ROOM_SAFE=0` |
-| The same mission: black patches or lines, skipped draws, then a crash ("dynamic descriptor slots" short, issue #918) | PR #1007: 458,752 dynamic slots, not 262,144, so busy scenes stop dropping draws | `VICTORY_DYNAMIC_SLOTS=262144` is the old value |
 | A stutter about every 1.5 seconds, even standing still | PR #340: the memory sweep that drains the card runs every 15 s while memory is not pressed | `VICTORY_SWEEP_EVERY_MS=1500` is the old cadence |
 | Hitches at cutscene cuts and busy streaming, card full | PR #1095: a texture pass stops after 128 slots held back for room, not 1,024 | `VICTORY_TEXTURE_HELD_CAP=1024` is the old value |
-| Green or black textures on 8 GB cards | PR #1179: the render-target reserve settles on 8 GB cards, slot eviction follows the line, and a waiting texture shows grey, not black or green | - |
-| Vehicles with doors or panels missing or stretched, matte paint, half decals | PR #1197: a mesh's vertex block is no longer cut off at the end of a 4 MiB window | - |
-| The sand and seabed by the water: one tile repeated in strips | PR #1183: the terrain's page table gets its host copy with its view | - |
 | DLSS MODEL: a model per mode | PR #1164: F1 DLSS MODEL AUTO (BY MODE): M for performance, L for ultra performance, K for the rest (M and L need newer DLSS files; if AUTO looks wrong, use K) | F1 DLSS MODEL |
 | KEY BINDINGS did not bring mouse and keyboard back after a bad `bindings.ini` | PR #1185: the file is read again after KEY BINDINGS writes it | - |
 | Mouse and keyboard | Upstream's (ItsMK1/VIctory-MnK-patches): F1 MOUSE AND KEYBOARD, and F1 KEY BINDINGS to change the keys; they are saved in `%LOCALAPPDATA%\victory\bindings.ini` | F1 |
 
+**Off again: these four crashed a 6 GB card.** The build with them on
+(`d8cfdff`) crashed an RTX 4050 Laptop (6 GB) seconds after entering the
+world, every time: "device removed" (0x887A0005, then 0x887A0007), with the
+card at 5,021 of its 5,153 MB and ray tracing on. The likeliest one is PR
+#1179: with it, the slot eviction that is on in every play (`VICTORY_SLOT_EVICT=1`)
+starts at the texture line, which a 6 GB card is always over, and lets go of
+textures a draw showed at any time, not only lately. This build works as
+`123f26b` did in these four places. Each is a switch in `TESTER_MENU.cmd` >
+`T` (F to I). Turn on one at a time, on 8 GB or bigger cards, and say
+whether it crashes.
+
+| What you see | Change | Switch (TESTER_MENU T, off) |
+|---|---|---|
+| Green or black textures on 8 GB cards | PR #1179: slot eviction follows the texture line and takes any slot a table ever showed, and a waiting texture shows grey, not black or green | F, `VICTORY_PR1179=1` |
+| Vehicles with doors or panels missing or stretched, matte paint, half decals | PR #1197: a mesh's vertex block is no longer cut off at the end of a 4 MiB window (each such window is 2 MiB bigger) | G, `VICTORY_WINDOW_REACH_KB=2048` |
+| The robbery mission: black patches or lines, skipped draws ("dynamic descriptor slots" short, issue #918) | PR #1007: 458,752 dynamic slots, not 262,144 (fewer title slots kept 1:1) | H, `VICTORY_DYNAMIC_SLOTS=458752` |
+| The sand and seabed by the water: one tile repeated in strips | PR #1183: small unordered-access textures (the terrain's page table) get their host copy with their view | I, `VICTORY_UNORDERED_NOW_KB=1024` |
+
+If the game still crashes on entering the world with all four off, turn
+RAY TRACING off once and say whether that stops it, then MAKE TESTER REPORT.
+
 **The robbery crash is not fully fixed.** Two crashes are reported there. The
-first, out of memory on 8 GB cards, is what CRASH FIX (8 GB CARDS) and PR
-#1007 address. The second, "device removed (0x887A0007)" after 5 to 7 minutes
+first, out of memory on 8 GB cards, is what CRASH FIX (8 GB CARDS) addresses
+(PR #1007, now off, too). The second, "device removed (0x887A0007)" after 5 to 7 minutes
 of heavy city play, has no known cause upstream yet (issue #232). If yours is
 that one, MAKE TESTER REPORT and send the zip.
 

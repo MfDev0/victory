@@ -1734,7 +1734,8 @@ fn made_with_view(desc: &ResourceDesc, most: u64) -> bool {
 
 /// Whether texture `this` gets its host copy when a view of it is written
 /// into a view heap ([`made_with_view`]). `VICTORY_UNORDERED_NOW_KB` is the
-/// most its texels take, 1024 by default; 0: none does, as before.
+/// most its texels take; unset or 0: none does, as before PR #1183 (1024 is
+/// the PR's; opt-in in this build after a 6 GB card crashed with it on).
 #[cfg(windows)]
 pub(crate) fn made_with_its_view(this: This) -> bool {
     static MOST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
@@ -1742,7 +1743,7 @@ pub(crate) fn made_with_its_view(this: This) -> bool {
         std::env::var("VICTORY_UNORDERED_NOW_KB")
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
-            .unwrap_or(1024)
+            .unwrap_or(0)
             << 10
     });
     !this.is_null() && most > 0 && made_with_view(&resource(this).desc, most)
@@ -2785,6 +2786,19 @@ pub(crate) fn let_go_idle() {
     }
 }
 
+/// PR #1179 (8 GB cards' green and black textures), opt-in in this build:
+/// `VICTORY_PR1179=1`. With it, [`slot_evict`] starts at the texture room
+/// line and lets go of textures whose slots a table showed at any time
+/// (not only lately), and slots that cannot be made show a neutral texture
+/// instead of a null view. A 6 GB card sits over that line all the time,
+/// so eviction ran without a pause and likely took textures shaders still
+/// picked by index: the card was removed (0x887A0005, then 0x887A0007)
+/// seconds after entering the world.
+pub(crate) fn pr1179() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("VICTORY_PR1179").is_ok_and(|v| v.trim() == "1"))
+}
+
 // Slot eviction: memory stack by skornuta (skornuta/victory-memory-stack 57fb136, GPL-3.0),
 // patches 06 and 07 and the slot eviction of their base.
 
@@ -2929,10 +2943,16 @@ fn slot_evict(video: Option<[u64; 4]>, idle_ms: u64, frames: u64) {
         frame_at(&ring, now_ms.saturating_sub(idle_ms))
     };
     static EVICTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    let line_pct = (room_line(budget) * 100 / budget.max(1)).clamp(50, 97);
-    let high = high.min(line_pct);
-    let low = low.min(high.saturating_sub(5).max(40));
-    let used = used.saturating_sub(crate::pool::texture_room());
+    // PR #1179 (opt-in, `VICTORY_PR1179=1`): the lines no higher than the
+    // texture room line, and the free part of the texture blocks not counted.
+    let (high, low, used) = if pr1179() {
+        let line_pct = (room_line(budget) * 100 / budget.max(1)).clamp(50, 97);
+        let high = high.min(line_pct);
+        let low = low.min(high.saturating_sub(5).max(40));
+        (high, low, used.saturating_sub(crate::pool::texture_room()))
+    } else {
+        (high, low, used)
+    };
     let (on, need) = slot_plan(EVICTING.load(Relaxed), budget, used, high, low, cap);
     EVICTING.store(on, Relaxed);
     SLOT_STATE[0].store(u64::from(on), Relaxed);
