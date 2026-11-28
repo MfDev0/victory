@@ -49,9 +49,6 @@ mod host;
 /// The F1 settings menu is shown (`host/menu.rs`): the title gets no keyboard meanwhile
 /// (read by the input module).
 pub static SETTINGS_MENU_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// Counts the times F1's KEY BINDINGS wrote the mouse and keyboard bindings file: the input
-/// module reads the file again when it changes.
-pub static MNK_BINDINGS_CHANGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 #[cfg(windows)]
 mod indirect;
 #[cfg(windows)]

@@ -99,7 +99,7 @@ const REPORT_STARTED: Labels = ["REPORT BEING MADE: DOWNLOADS, VICTORY-REPORTS",
 const REPORT_FAILED: Labels = ["REPORT NOT STARTED: RUN MAKE_REPORT.CMD INSTEAD", "报告未能开始：请运行 MAKE_REPORT.CMD", "報告未能開始：請執行 MAKE_REPORT.CMD", "INFORME NO INICIADO: USA MAKE_REPORT.CMD"];
 const REPORT_NO_PROGRAM: Labels = ["NOT STARTED BY VICTORY PLAY: RUN MAKE_REPORT.CMD", "不是由 VICTORY PLAY 启动：请运行 MAKE_REPORT.CMD", "不是由 VICTORY PLAY 啟動：請執行 MAKE_REPORT.CMD", "NO INICIADO CON VICTORY PLAY: USA MAKE_REPORT.CMD"];
 /// The action that makes a tester report, and what is said of it while it is picked.
-const REPORT: usize = 7;
+const REPORT: usize = 6;
 const ABOUT_REPORT: [Labels; 3] = [
     ["ZIPS THE LOGS, CRASH LOG, SETTINGS AND A SYSTEM PAGE INTO", "把日志、崩溃日志、设置和系统信息打包到", "把記錄、當機記錄、設定與系統資訊打包到", "COMPRIME LOGS, FALLOS, AJUSTES Y SISTEMA EN"],
     ["DOWNLOADS, VICTORY-REPORTS. THE GAME KEEPS RUNNING.", "DOWNLOADS\\VICTORY-REPORTS。游戏继续运行。", "DOWNLOADS\\VICTORY-REPORTS。遊戲繼續執行。", "DOWNLOADS, VICTORY-REPORTS. EL JUEGO SIGUE."],
@@ -110,8 +110,8 @@ const ABOUT_REPORT: [Labels; 3] = [
 const TITLE: Labels = ["SETTINGS   =^.^=              F1 OR ESC CLOSES", "设置  =^.^=           F1 / ESC 关闭", "設定  =^.^=           F1 / ESC 關閉", "AJUSTES  =^.^=            F1 O ESC PARA CERRAR"];
 /// What is said while a row of the Try build's own is picked: the left-out pull requests,
 /// the language (#1056), the cat and Discord.
-const ABOUT_TRY_VARS: [&str; 10] = ["VICTORY_KEEP_SHOWN", "VICTORY_PROBE_NEUTRAL", "VICTORY_BVH_SIZE_ANSWER", "VICTORY_TRAIL_FIX", "VICTORY_ROOM_SAFE", "VICTORY_PHOTOS", "VICTORY_BVH_FAULTS_ALL", "VICTORY_KEYMAP", LANGUAGE, "VICTORY_DISCORD"];
-const ABOUT_TRY: [[Labels; 3]; 10] = [
+const ABOUT_TRY_VARS: [&str; 8] = ["VICTORY_KEEP_SHOWN", "VICTORY_PROBE_NEUTRAL", "VICTORY_BVH_SIZE_ANSWER", "VICTORY_PHOTOS", "VICTORY_BVH_FAULTS_ALL", "VICTORY_KEYMAP", LANGUAGE, "VICTORY_DISCORD"];
+const ABOUT_TRY: [[Labels; 3]; 8] = [
     [
         ["PR 280: WHEN THE GAME SWAPS A TEXTURE FOR ANOTHER OF", "PR 280：游戏把纹理换成同尺寸的另一张时，", "PR 280：遊戲把紋理換成同尺寸的另一張時，", "PR 280: SI EL JUEGO CAMBIA UNA TEXTURA POR OTRA"],
         ["THE SAME SIZE, THE OLD ONE IS NO LONGER SHOWN UNLESS", "除非内容相同，不再显示旧纹理 (例如旧衣服)。", "除非內容相同，不再顯示舊紋理 (例如舊衣服)。", "DEL MISMO TAMAÑO, YA NO SE VE LA VIEJA (ROPA VIEJA)."],
@@ -126,16 +126,6 @@ const ABOUT_TRY: [[Labels; 3]; 10] = [
         ["PR 718: WITH RAY TRACING ON, THE GAME GETS THE SIZE OF", "PR 718：开启光线追踪时，游戏在调用时", "PR 718：開啟光線追蹤時，遊戲在呼叫時", "PR 718: CON TRAZADO DE RAYOS, EL JUEGO RECIBE EL"],
         ["A PACKED RAY STRUCTURE AT ONCE, NOT A STALE ONE LATER.", "立即得到压缩光追结构的大小，而不是旧值。", "立即得到壓縮光追結構的大小，而不是舊值。", "TAMAÑO DE LA ESTRUCTURA AL MOMENTO, NO UNO VIEJO."],
         ["FASTER RT IN TESTS. ONLY WITH RAY TRACING ON. RESTART.", "测试中光追更快。仅在开启光追时有效。需重启。", "測試中光追更快。僅在開啟光追時有效。需重啟。", "RT MAS RAPIDO. SOLO CON TRAZADO DE RAYOS. REINICIAR."],
-    ],
-    [
-        ["TRAILS BEHIND MOVING CARS AND PEOPLE: WITH DLSS MODEL", "移动的车和人身后的拖影：DLSS 模型为默认时", "移動的車和人身後的拖影：DLSS 模型為預設時", "ESTELAS TRAS COCHES Y PERSONAS: CON MODELO DLSS"],
-        ["ON DEFAULT, MODEL K (TRANSFORMER) IS USED: LESS SMEAR.", "使用 K 模型 (TRANSFORMER)，拖影更少。", "使用 K 模型 (TRANSFORMER)，拖影更少。", "PREDETERMINADO SE USA K (TRANSFORMER): MENOS ESTELA."],
-        ["A MODEL PICKED IN DLSS MODEL IS KEPT. ON. RESTART.", "在 DLSS 模型中选的模型优先。默认开启。需重启。", "在 DLSS 模型中選的模型優先。預設開啟。需重啟。", "SE RESPETA EL MODELO ELEGIDO. SI. REINICIAR."],
-    ],
-    [
-        ["8 GB CARDS: TEXTURES STOP AT 75 PCT OF THE CARD, SO", "8 GB 显卡：纹理最多用到显存的 75%，", "8 GB 顯示卡：紋理最多用到顯存的 75%，", "TARJETAS DE 8 GB: TEXTURAS HASTA EL 75% DE LA VRAM,"],
-        ["THE GAME DOES NOT RUN OUT OF MEMORY (LUCIA'S ROBBERY).", "游戏不会耗尽显存 (露西亚抢劫任务)。", "遊戲不會耗盡顯存 (露西亞搶劫任務)。", "PARA QUE NO SE QUEDE SIN MEMORIA (ROBO DE LUCIA)."],
-        ["BIGGER CARDS: NO CHANGE. ON BY DEFAULT. RESTART.", "更大显存：不变。默认开启。需重启。", "更大顯存：不變。預設開啟。需重啟。", "TARJETAS MAYORES: IGUAL. SI POR DEFECTO. REINICIAR."],
     ],
     [
         ["PHOTO MODE: SAVE PHOTO WRITES A PNG OF THE PICTURE TO", "照片模式：保存照片时把画面存为 PNG，", "相片模式：儲存相片時把畫面存為 PNG，", "MODO FOTO: GUARDAR FOTO CREA UN PNG DE LA IMAGEN"],
@@ -262,9 +252,6 @@ const ITEMS: &[Item] = &[
     Item { var: "VICTORY_PANEL", label: ["STATS PANEL (F3)", "性能统计 (F3)", "效能統計 (F3)", "PANEL DE ESTADÍSTICAS (F3)"], values: &[("0", OFF), ("1", ON)], live: true },
     Item { var: "VICTORY_FULLSCREEN", label: ["FULLSCREEN (NO BORDER)", "无边框全屏", "無邊框全螢幕", "PANTALLA COMPLETA SIN BORDES"], values: UNSET_ON, live: false },
     Item { var: "VICTORY_MOUSE_CAPTURE", label: ["MOUSE CAPTURE", "锁定鼠标", "鎖定滑鼠游標", "CAPTURA DEL RATÓN"], values: UNSET_ON, live: false },
-    // Upstream's mouse and keyboard (ItsMK1/VIctory-MnK-patches): keys and sensitivity in bindings.ini in
-    // %LOCALAPPDATA%\\victory (apps\\victory\\src\\play.rs), set in KEY BINDINGS below.
-    Item { var: "VICTORY_MNK", label: ["MOUSE AND KEYBOARD", "键鼠操作", "鍵鼠操作", "RATÓN Y TECLADO"], values: UNSET_ON, live: false },
     // GTA V PC keys, the mouse on the stand-in pad's right stick and triggers (gameinput.rs).
     Item { var: "VICTORY_KBM_GTA", label: ["GTA V KEYS AND MOUSE", "GTA V 键鼠操作", "GTA V 鍵鼠操作", "TECLAS Y RATÓN DE GTA V"], values: UNSET_ON, live: false },
     Item { var: "VICTORY_IME_ENGLISH", label: ["ENGLISH KEYBOARD", "使用英文键盘", "使用英文鍵盤", "TECLADO INGLÉS"], values: UNSET_ON, live: false },
@@ -273,9 +260,7 @@ const ITEMS: &[Item] = &[
     // In place of SERIES X PICTURE when CONSOLE is Series S.
     Item { var: S_RES, label: ["SERIES S PICTURE", "SERIES S 分辨率", "SERIES S 解析度", "RESOLUCIÓN SERIES S"], values: &[("1080", same("1920X1080 (DLAA)")), ("720", ["1280X720 (THE GAME)", "1280X720 (游戏默认)", "1280X720 (遊戲預設)", "1280X720 (DEL JUEGO)"]), ("626", same("1113X626")), ("540", ["960X540 (FASTEST)", "960X540 (最快)", "960X540 (最快)", "960X540 (MÁS RÁPIDA)"])], live: false },
     // The layer's switches.
-    // DEFAULT: model K with TRAIL FIX on (below), else the game's. AUTO (PR #1164): NVIDIA's pick per
-    // mode the picture is upscaled at (M performance, L ultra performance, K the rest).
-    Item { var: "VICTORY_DLSS_PRESET", label: ["DLSS MODEL", "DLSS 模型", "DLSS 模型", "MODELO DLSS"], values: &[("", ["DEFAULT", "默认", "預設", "PREDETERMINADO"]), ("auto", ["AUTO (BY MODE)", "自动 (按模式)", "自動 (依模式)", "AUTO (POR MODO)"]), ("k", same("K")), ("j", same("J")), ("m", same("M")), ("l", same("L"))], live: false },
+    Item { var: "VICTORY_DLSS_PRESET", label: ["DLSS MODEL", "DLSS 模型", "DLSS 模型", "MODELO DLSS"], values: &[("", ["DEFAULT", "默认", "預設", "PREDETERMINADO"]), ("k", same("K")), ("j", same("J")), ("m", same("M")), ("l", same("L"))], live: false },
     Item { var: "VICTORY_AMBIENT", label: ["LIGHT ESTIMATE", "环境光估算", "近似環境光", "ESTIMACIÓN DE LUZ"], values: &[("0.8", same("0.8")), ("1", same("1")), ("0.5", same("0.5")), ("", OFF)], live: false },
     // PR #851 (t90): the diffuse probe light made neutral, against false red/blue light (ambient.rs); opt-in.
     Item { var: "VICTORY_PROBE_NEUTRAL", label: ["NEUTRAL PROBE LIGHT (PR 851)", "中性探针光照 (PR 851)", "中性探針光照 (PR 851)", "LUZ NEUTRA (PR 851)"], values: &[("", OFF), ("0.3", ON)], live: false },
@@ -304,16 +289,12 @@ const ITEMS: &[Item] = &[
     // For testers: the face fixes of this build, each with its switch, and the crash watcher.
     // Face programs exempt from the shared-memory bounds (#938).
     Item { var: "VICTORY_LDS_BOUNDS_EXEMPT", label: ["FACE PROGRAMS UNBOUNDED", "脸部着色器不受边界限制", "臉部著色器不受邊界限制", "CARAS SIN LÍMITE LDS"], values: &[("", ON), ("0", OFF)], live: false },
+    Item { var: "VICTORY_CRASH_REPORT", label: ["CRASH REPORT ZIP", "崩溃报告 ZIP", "當機報告 ZIP", "ZIP DE FALLOS"], values: &[("", ON), ("0", OFF)], live: false },
     // Fixes testers found working are on and left out of this menu (TESTER_MENU T has them): BLACK FACE
     // FIX (PR 669, VICTORY_BLACK_FACE_FIX), SKY SHINE FIX (PR 393, VICTORY_SKY_BOUND), WIDE DISPATCH (PR 1005,
     // VICTORY_INDIRECT_WIDE_NVIDIA), and MOVIE CUTSCENES as upstream (VICTORY_MOVIE_FG).
-    // DLSS model K when DLSS MODEL is on DEFAULT, against trails behind moving things (streamline.rs).
-    Item { var: "VICTORY_TRAIL_FIX", label: ["TRAIL FIX (DLSS MODEL K)", "拖影修复 (DLSS K 模型)", "拖影修復 (DLSS K 模型)", "ARREGLO DE ESTELAS (MODELO K)"], values: &[("", ON), ("0", OFF)], live: false },
-    // Textures at most 75% of an 8 GB card's budget (resource.rs `safe_line`, issue #232).
-    Item { var: "VICTORY_ROOM_SAFE", label: ["CRASH FIX (8 GB CARDS)", "崩溃修复 (8 GB 显卡)", "當機修復 (8 GB 顯示卡)", "ARREGLO DE CIERRES (8 GB)"], values: &[("", ON), ("0", OFF)], live: false },
     // Photo mode's SAVE PHOTO: a PNG in Downloads\VIctory-Photos (photo.rs, display.rs).
     Item { var: "VICTORY_PHOTOS", label: ["PHOTO MODE SAVES (DOWNLOADS)", "照片模式保存 (下载文件夹)", "相片模式儲存 (下載資料夾)", "GUARDAR FOTOS (DESCARGAS)"], values: &[("", ON), ("0", OFF)], live: false },
-    Item { var: "VICTORY_CRASH_REPORT", label: ["CRASH REPORT ZIP", "崩溃报告 ZIP", "當機報告 ZIP", "ZIP DE FALLOS"], values: &[("", ON), ("0", OFF)], live: false },
     // The pull requests the Try build left out, each off (as before) until picked on.
     // #1008: 16,384 ray-tracing fault pages copied, not 2,048 (memory.rs); for RAY TRACING on.
     Item { var: "VICTORY_BVH_FAULTS_ALL", label: ["TRY PR 1008: RT FAULT PAGES", "试用 PR 1008：光追缺页", "試用 PR 1008：光追缺頁", "PR 1008: PÁGINAS RT"], values: &[("", ["2048 (OFF)", "2048 (关闭)", "2048 (關閉)", "2048 (NO)"]), ("16384", ["16384 (ON)", "16384 (开启)", "16384 (開啟)", "16384 (SÍ)"])], live: false },
@@ -328,27 +309,15 @@ const ITEMS: &[Item] = &[
     Item { var: "VICTORY_DISCORD", label: ["DISCORD STATUS (GTA VI)", "DISCORD 状态 (GTA VI)", "DISCORD 狀態 (GTA VI)", "ESTADO DE DISCORD (GTA VI)"], values: &[("", ON), ("0", OFF)], live: false },
 ];
 /// The lines after the settings.
-const ACTIONS: [Labels; 9] = [
+const ACTIONS: [Labels; 8] = [
     ["SAVE AND RESTART NOW", "保存并立即重启", "儲存並立即重新啟動", "GUARDAR Y REINICIAR AHORA"],
     ["SAVE FOR NEXT START", "保存设置", "儲存設定", "GUARDAR PARA EL PRÓXIMO INICIO"],
     ["PRELOAD SHADERS (RESTARTS THE GAME)", "预加载着色器 (重启游戏)", "預載著色器 (重新啟動遊戲)", "PRECARGAR SHADERS (REINICIA EL JUEGO)"],
     ["RESET ALL TO PLAY DEFAULTS", "恢复启动默认设置", "還原啟動器預設設定", "RESTABLECER AJUSTES PREDETERMINADOS"],
     ["EXPORT SAVE (TO SAVES IN THE GAME FOLDER)", "导出存档 (到游戏目录的 SAVES)", "匯出存檔 (到遊戲目錄的 SAVES)", "EXPORTAR PARTIDA (A LA CARPETA SAVES)"],
     ["IMPORT SAVE (PICK FROM SAVES)", "导入存档 (从 SAVES 选择)", "匯入存檔 (從 SAVES 選擇)", "IMPORTAR PARTIDA (ELEGIR EN SAVES)"],
-    ["KEY BINDINGS (MOUSE AND KEYBOARD)", "按键绑定 (键鼠)", "按鍵綁定 (鍵鼠)", "TECLAS (RATÓN Y TECLADO)"],
     ["MAKE TESTER REPORT (ZIP)", "生成测试报告 (ZIP)", "產生測試報告 (ZIP)", "CREAR INFORME DE PRUEBA (ZIP)"],
     ["CLOSE", "关闭", "關閉", "CERRAR"],
-];
-/// The action that opens the list of key bindings ([`binds`]; upstream's, English only).
-const BINDS: usize = 6;
-const BINDS_TITLE: &str = "KEY BINDINGS                      ESC GOES BACK";
-const BINDS_HELP: &str = "UP/DOWN PICK  ENTER, THEN A KEY OR MOUSE BUTTON";
-const BINDS_BACK: &str = "BACK TO THE SETTINGS";
-const BINDS_OFF: Labels = ["TURN ON MOUSE AND KEYBOARD AND RESTART FIRST", "请先开启键鼠操作并重启", "請先開啟鍵鼠操作並重新啟動", "ACTIVA RATÓN Y TECLADO Y REINICIA"];
-const ABOUT_BINDS: [Labels; 3] = [
-    ["THE KEY OR MOUSE BUTTON PRESSED REPLACES THE LINE KEYS.", "按下的键或鼠标键替换该行的按键。", "按下的鍵或滑鼠鍵取代該行的按鍵。", "LA TECLA O BOTÓN PULSADO REEMPLAZA LA LÍNEA."],
-    ["ESC CANCELS. LEFT/RIGHT CHANGES THE SENSITIVITY.", "ESC 取消。左右调整灵敏度。", "ESC 取消。左右調整靈敏度。", "ESC CANCELA. IZQ./DER. CAMBIA LA SENSIBILIDAD."],
-    ["SAVED TO BINDINGS.INI AND USED AT ONCE.", "保存到 BINDINGS.INI 并立即生效。", "儲存到 BINDINGS.INI 並立即生效。", "SE GUARDA EN BINDINGS.INI Y SE USA YA."],
 ];
 
 fn get(var: &str) -> String {
@@ -590,8 +559,6 @@ impl Buffers {
 enum Note {
     Text(Labels),
     Exported(String),
-    /// Said as it is (the key bindings' lines, in English).
-    Plain(String),
 }
 
 /// The menu of a presenter.
@@ -615,8 +582,6 @@ pub(super) struct Menu {
     imports: Vec<String>,
     import_at: usize,
     picking: bool,
-    /// The key bindings list (upstream's KEY BINDINGS, mouse and keyboard), while it is shown.
-    binds: Option<binds::Binds>,
 }
 
 impl Menu {
@@ -634,7 +599,7 @@ impl Menu {
                 get(i.var)
             }
         }).collect();
-        Menu { started: values.clone(), values, at: 0, note: None, changed: true, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false, binds: None }
+        Menu { started: values.clone(), values, at: 0, note: None, changed: true, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false }
     }
 
     fn say(&mut self, text: Labels) {
@@ -645,7 +610,6 @@ impl Menu {
         Some(match self.note.as_ref()? {
             Note::Text(text) => language.text(*text).to_owned(),
             Note::Exported(name) => format!("{}: {name}.ZIP", language.text(["EXPORTED TO SAVES", "已导出到 SAVES", "已匯出到 SAVES", "EXPORTADA A SAVES"])),
-            Note::Plain(text) => text.clone(),
         })
     }
 
@@ -682,9 +646,6 @@ impl Menu {
     fn lines(&self, language: Language) -> Vec<String> {
         if self.picking {
             return self.pick_lines(language);
-        }
-        if let Some(b) = &self.binds {
-            return self.bind_lines(b, language);
         }
         let tr = |labels| language.text(labels);
         let rows = self.rows();
@@ -727,8 +688,6 @@ impl Menu {
             ABOUT_IMPORT
         } else if self.at == ITEMS.len() + REPORT {
             ABOUT_REPORT
-        } else if self.at == ITEMS.len() + BINDS {
-            ABOUT_BINDS
         } else if ITEMS.get(self.at).is_some_and(|i| i.var == MFG) {
             ABOUT_MFG
         } else if ITEMS.get(self.at).is_some_and(|i| i.var == S_RES) {
@@ -757,43 +716,6 @@ impl Menu {
         }));
         out.push(REPO.to_owned());
         out
-    }
-
-    /// The list KEY BINDINGS opens, in the box's lines (upstream's; the key names in English).
-    fn bind_lines(&self, b: &binds::Binds, language: Language) -> Vec<String> {
-        let mut out = vec![BINDS_TITLE.to_owned(), BINDS_HELP.to_owned(), String::new()];
-        let total = binds::ROWS.len() + 1;
-        let first = b.at.saturating_sub(ROWS / 2).min(total.saturating_sub(ROWS));
-        for row in first..(first + ROWS).min(total) {
-            let cursor = if row == b.at { '>' } else { ' ' };
-            let line = match binds::ROWS.get(row) {
-                Some((name, label)) => {
-                    let value = b.value(name);
-                    format!("{cursor} {label:<27} {}", if value.is_empty() { "NONE" } else { &value })
-                }
-                None => format!("{cursor} {BINDS_BACK}"),
-            };
-            out.push(line.chars().take(COLUMNS as usize).collect());
-        }
-        while out.len() < 3 + ROWS {
-            out.push(String::new());
-        }
-        out.push(String::new());
-        out.extend(ABOUT_BINDS.map(|line| language.text(line).to_owned()));
-        out.push(self.note_text(language).unwrap_or_else(|| "* = CHANGED: APPLIES AT THE NEXT START UNLESS LIVE".to_owned()));
-        out.push(REPO.to_owned());
-        out
-    }
-
-    /// While a binding waits for its key: the key or button pressed is written.
-    fn hear_binding(&mut self) {
-        let Some(b) = self.binds.as_mut() else { return };
-        let Some(vk) = b.heard() else { return };
-        let (name, label) = binds::ROWS[b.at];
-        let key = binds::name(vk);
-        let note = if b.set(name, &key) { format!("{label}: {}", key.to_ascii_uppercase()) } else { "COULD NOT SAVE BINDINGS.INI".to_owned() };
-        self.note = Some(Note::Plain(note.chars().take(COLUMNS as usize).collect()));
-        self.changed = true;
     }
 
     /// The list IMPORT SAVE opens, in the box's lines.
@@ -1127,20 +1049,10 @@ impl Menu {
         self.warmup();
         let pressed = std::mem::take(&mut *keys().lock().unwrap_or_else(|e| e.into_inner()));
         if pressed.is_empty() {
-            self.hear_binding();
             return;
         }
         for vk in pressed {
             let open = Self::open();
-            // Esc in the key bindings: a wait for a key ends, else back to the settings.
-            if open && vk == VK_ESCAPE && let Some(b) = self.binds.as_mut() {
-                if b.waiting.take().is_none() {
-                    self.binds = None;
-                }
-                self.note = None;
-                self.changed = true;
-                continue;
-            }
             // Esc in the list of saves goes back to the settings.
             if open && self.picking && vk == VK_ESCAPE {
                 self.picking = false;
@@ -1152,7 +1064,6 @@ impl Menu {
                 crate::SETTINGS_MENU_OPEN.store(!open && vk == VK_F1, Ordering::Relaxed);
                 self.note = None;
                 self.picking = false;
-                self.binds = None;
                 if !open {
                     self.read_imports();
                 }
@@ -1176,32 +1087,6 @@ impl Menu {
                     VK_RETURN if !confirmed => self.say(CONFIRM_IMPORT),
                     VK_RETURN => self.import_save(),
                     _ => {}
-                }
-                self.changed = true;
-                continue;
-            }
-            if let Some(b) = self.binds.as_mut() {
-                let n = binds::ROWS.len() + 1;
-                let sensitivity = binds::ROWS.get(b.at).is_some_and(|(name, _)| *name == binds::SENSITIVITY);
-                if b.waiting.is_none() {
-                    match vk {
-                        VK_UP => b.at = (b.at + n - 1) % n,
-                        VK_DOWN => b.at = (b.at + 1) % n,
-                        VK_RETURN if b.at == binds::ROWS.len() => self.binds = None,
-                        VK_LEFT | VK_RIGHT if sensitivity => {
-                            let note = match b.sensitivity(if vk == VK_LEFT { -1 } else { 1 }) {
-                                Some(v) => format!("MOUSE SENSITIVITY: {v}"),
-                                None => "COULD NOT SAVE BINDINGS.INI".to_owned(),
-                            };
-                            self.note = Some(Note::Plain(note));
-                        }
-                        VK_RETURN if !sensitivity => {
-                            let label = binds::ROWS[b.at].1;
-                            b.listen();
-                            self.note = Some(Note::Plain(format!("PRESS A KEY OR MOUSE BUTTON: {label}").chars().take(COLUMNS as usize).collect()));
-                        }
-                        _ => {}
-                    }
                 }
                 self.changed = true;
                 continue;
@@ -1230,13 +1115,6 @@ impl Menu {
                     3 => self.reset(),
                     EXPORT => self.export_save(),
                     REPORT => self.make_report(),
-                    BINDS => match binds::Binds::open() {
-                        Some(b) => {
-                            self.binds = Some(b);
-                            self.note = None;
-                        }
-                        None => self.say(BINDS_OFF),
-                    },
                     IMPORT => {
                         self.read_imports();
                         self.import_at = 0;
@@ -1248,7 +1126,6 @@ impl Menu {
             }
             self.changed = true;
         }
-        self.hear_binding();
     }
 
     /// Records the copy of the box onto `back` (in the copy-destination state).
@@ -1327,164 +1204,6 @@ impl Menu {
     }
 }
 
-/// The mouse and keyboard bindings (`bindings.ini`, F1's MOUSE AND KEYBOARD) as KEY BINDINGS
-/// edits them: a line's keys replaced by the one pressed, written at once.
-mod binds {
-    use std::path::PathBuf;
-    use std::sync::atomic::Ordering::Relaxed;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-
-    pub(super) const SENSITIVITY: &str = "Sensitivity";
-    /// The name in the file, and on the line.
-    pub(super) const ROWS: [(&str, &str); 21] = [
-        ("MoveUp", "MOVE FORWARD"),
-        ("MoveDown", "MOVE BACK"),
-        ("MoveLeft", "MOVE LEFT"),
-        ("MoveRight", "MOVE RIGHT"),
-        ("RT", "RT (SHOOT, ACCELERATE)"),
-        ("LT", "LT (AIM, BRAKE)"),
-        ("A", "A (CONFIRM)"),
-        ("B", "B (BACK)"),
-        ("X", "X"),
-        ("Y", "Y (CAR IN OR OUT)"),
-        ("LB", "LB"),
-        ("RB", "RB"),
-        ("LS", "LEFT STICK CLICK"),
-        ("RS", "RIGHT STICK CLICK"),
-        ("Menu", "MENU"),
-        ("View", "VIEW"),
-        ("DpadUp", "D-PAD UP"),
-        ("DpadDown", "D-PAD DOWN"),
-        ("DpadLeft", "D-PAD LEFT"),
-        ("DpadRight", "D-PAD RIGHT"),
-        (SENSITIVITY, "MOUSE SENSITIVITY"),
-    ];
-
-    pub(super) struct Binds {
-        file: PathBuf,
-        text: String,
-        pub(super) at: usize,
-        /// Waiting for a key: what was held when the wait began (it must be let go first).
-        pub(super) waiting: Option<[bool; 256]>,
-    }
-
-    impl Binds {
-        /// The file the game was started with (VICTORY_MNK_BINDINGS), if any.
-        pub(super) fn open() -> Option<Binds> {
-            let file = PathBuf::from(std::env::var_os("VICTORY_MNK_BINDINGS")?);
-            let text = std::fs::read_to_string(&file).ok()?;
-            Some(Binds { file, text, at: 0, waiting: None })
-        }
-
-        #[cfg(test)]
-        pub(super) fn of(text: &str) -> Binds {
-            Binds { file: PathBuf::new(), text: text.to_owned(), at: 0, waiting: None }
-        }
-
-        /// What the file sets `name` to, upper case ("" if nothing).
-        pub(super) fn value(&self, name: &str) -> String {
-            self.text.lines().find_map(|l| setting(l, name)).map(|v| v.trim().to_ascii_uppercase()).unwrap_or_default()
-        }
-
-        /// `name` set to `value` (its first line replaced, others of it dropped), written.
-        pub(super) fn set(&mut self, name: &str, value: &str) -> bool {
-            self.text = with(&self.text, name, value);
-            let written = std::fs::write(&self.file, &self.text).is_ok();
-            if written {
-                crate::MNK_BINDINGS_CHANGED.fetch_add(1, Relaxed);
-            }
-            written
-        }
-
-        /// The sensitivity a step up or down (0.015 each), written; the new value.
-        pub(super) fn sensitivity(&mut self, step: isize) -> Option<String> {
-            let now = self.value(SENSITIVITY).parse::<f32>().ok().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.135);
-            let next = format!("{:.3}", (now + 0.015 * step as f32).clamp(0.015, 1.5));
-            self.set(SENSITIVITY, &next).then_some(next)
-        }
-
-        pub(super) fn listen(&mut self) {
-            self.waiting = Some(held());
-        }
-
-        /// While waiting: a key or mouse button pressed since (not Esc, which cancels, nor F1).
-        pub(super) fn heard(&mut self) -> Option<u8> {
-            let was = self.waiting.as_mut()?;
-            let now = held();
-            let key = (1..255).find(|&vk| now[vk] && !was[vk] && !matches!(vk, 0x1B | 0x70)).map(|vk| vk as u8);
-            *was = now;
-            if key.is_some() {
-                self.waiting = None;
-            }
-            key
-        }
-    }
-
-    fn held() -> [bool; 256] {
-        let mut down = [false; 256];
-        for (vk, d) in down.iter_mut().enumerate().skip(1).take(254) {
-            // SAFETY: a plain query.
-            *d = unsafe { GetAsyncKeyState(vk as i32) } < 0;
-        }
-        down
-    }
-
-    /// The value of a `name = value` line (case aside), comments cut.
-    fn setting<'a>(line: &'a str, name: &str) -> Option<&'a str> {
-        let (k, v) = line.split('#').next()?.split_once('=')?;
-        k.trim().eq_ignore_ascii_case(name).then_some(v)
-    }
-
-    fn with(text: &str, name: &str, value: &str) -> String {
-        let end = if text.contains("\r\n") { "\r\n" } else { "\n" };
-        let mut out: Vec<String> = Vec::new();
-        let mut done = false;
-        for line in text.lines() {
-            if setting(line, name).is_some() {
-                if !done {
-                    out.push(format!("{name} = {value}"));
-                    done = true;
-                }
-                continue;
-            }
-            out.push(line.to_owned());
-        }
-        if !done {
-            out.push(format!("{name} = {value}"));
-        }
-        out.join(end) + end
-    }
-
-    /// A key as the bindings file names it (what the input module reads).
-    pub(super) fn name(vk: u8) -> String {
-        match vk {
-            b'A'..=b'Z' | b'0'..=b'9' => (vk as char).to_string(),
-            1 => "Mouse1".into(),
-            2 => "Mouse2".into(),
-            4 => "Mouse3".into(),
-            5 => "Mouse4".into(),
-            6 => "Mouse5".into(),
-            8 => "Backspace".into(),
-            9 => "Tab".into(),
-            13 => "Enter".into(),
-            16 => "Shift".into(),
-            17 => "Ctrl".into(),
-            18 => "Alt".into(),
-            32 => "Space".into(),
-            37 => "Left".into(),
-            38 => "Up".into(),
-            39 => "Right".into(),
-            40 => "Down".into(),
-            _ => format!("0x{vk:02X}"),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn edited(text: &str, name: &str, value: &str) -> String {
-        with(text, name, value)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1510,7 +1229,7 @@ mod tests {
             std::env::remove_var("VICTORY_MENU_FILE");
             std::env::set_var("VICTORY_HOME", home.path());
         }
-        let mut menu = Menu { values: ITEMS.iter().map(|_| String::new()).collect(), started: Vec::new(), at: 0, note: None, changed: false, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false, binds: None };
+        let mut menu = Menu { values: ITEMS.iter().map(|_| String::new()).collect(), started: Vec::new(), at: 0, note: None, changed: false, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false };
         menu.started = menu.values.clone();
         let dlss = ITEMS.iter().position(|i| i.var == "VICTORY_MENU_DLSS").expect("in the menu");
         menu.change_and_save(dlss, 1);
@@ -1546,7 +1265,7 @@ mod tests {
 
     #[test]
     fn every_line_fits_and_every_character_has_a_picture() {
-        let mut menu = Menu { values: ITEMS.iter().map(|_| String::new()).collect(), started: Vec::new(), at: 0, note: None, changed: false, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false, binds: None };
+        let mut menu = Menu { values: ITEMS.iter().map(|_| String::new()).collect(), started: Vec::new(), at: 0, note: None, changed: false, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false };
         menu.started = menu.values.clone();
         let console = ITEMS.iter().position(|item| item.var == CONSOLE).expect("in the menu");
         for language in Language::ALL {
@@ -1582,7 +1301,7 @@ mod tests {
 
     #[test]
     fn the_link_is_always_right_under_the_note() {
-        let mut menu = Menu { values: ITEMS.iter().map(|_| String::new()).collect(), started: Vec::new(), at: 0, note: None, changed: false, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false, binds: None };
+        let mut menu = Menu { values: ITEMS.iter().map(|_| String::new()).collect(), started: Vec::new(), at: 0, note: None, changed: false, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false };
         menu.started = menu.values.clone();
         for note in [None, Some(same("SAVED"))] {
             menu.note = note.map(Note::Text);
@@ -1603,8 +1322,6 @@ mod tests {
                     assert_eq!(about, ABOUT_IMPORT.map(|line| Language::English.text(line)));
                 } else if at == ITEMS.len() + REPORT {
                     assert_eq!(about, ABOUT_REPORT.map(|line| Language::English.text(line)));
-                } else if at == ITEMS.len() + BINDS {
-                    assert_eq!(about, ABOUT_BINDS.map(|line| Language::English.text(line)));
                 } else if at < ITEMS.len() && ITEMS[at].var == MFG {
                     assert_eq!(about, ABOUT_MFG.map(|line| Language::English.text(line)));
                 } else if at < ITEMS.len() && ITEMS[at].var == S_RES {
@@ -1622,7 +1339,7 @@ mod tests {
         assert_eq!(Language::English.text(ACTIONS[REPORT]), "MAKE TESTER REPORT (ZIP)");
         let pick = [PICK_TITLE, PICK_HELP, PICK_NONE, PICK_BACK, CONFIRM_IMPORT, CONFIRM_PRELOAD, REPORT_STARTED, REPORT_FAILED, REPORT_NO_PROGRAM,
             ["IMPORT FAILED: THAT ZIP IS DAMAGED OR NOT A SAVE", "导入失败：压缩包已损坏或不含有效存档", "匯入失敗：ZIP 已損毀或不含有效存檔", "ERROR AL IMPORTAR: ZIP DAÑADO O SIN PARTIDA VÁLIDA"]];
-        for lines in [ABOUT_EXPORT, ABOUT_IMPORT, ABOUT_PICK, ABOUT_MFG, ABOUT_NO_DLSS, ABOUT_S_RES, ABOUT_REPORT, ABOUT_BINDS].iter().chain(&ABOUT_TRY).flatten().chain(&pick) {
+        for lines in [ABOUT_EXPORT, ABOUT_IMPORT, ABOUT_PICK, ABOUT_MFG, ABOUT_NO_DLSS, ABOUT_S_RES, ABOUT_REPORT].iter().chain(&ABOUT_TRY).flatten().chain(&pick) {
             for line in *lines {
                 assert_line_fits(line, COLUMNS);
             }
@@ -1658,7 +1375,7 @@ mod tests {
 
     #[test]
     fn the_picture_line_is_the_consoles() {
-        let mut menu = Menu { values: ITEMS.iter().map(|_| String::new()).collect(), started: Vec::new(), at: 0, note: None, changed: false, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false, binds: None };
+        let mut menu = Menu { values: ITEMS.iter().map(|_| String::new()).collect(), started: Vec::new(), at: 0, note: None, changed: false, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false };
         menu.started = menu.values.clone();
         let at = |var: &str| ITEMS.iter().position(|i| i.var == var).expect("in the menu");
         let (console, x, s, dlss) = (at(CONSOLE), at(X_RES), at(S_RES), at(DLSS));
@@ -1702,7 +1419,7 @@ mod tests {
 
     #[test]
     fn values_cycle_both_ways() {
-        let mut menu = Menu { values: ITEMS.iter().map(|i| i.values[0].0.to_owned()).collect(), started: Vec::new(), at: 0, note: None, changed: false, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false, binds: None };
+        let mut menu = Menu { values: ITEMS.iter().map(|i| i.values[0].0.to_owned()).collect(), started: Vec::new(), at: 0, note: None, changed: false, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false };
         menu.started = menu.values.clone();
         let i = 1; // DLSS, a setting with more than two options.
         let n = ITEMS[i].values.len();
@@ -1752,33 +1469,4 @@ mod tests {
         assert!(lines.iter().any(|l| l == Language::English.text(PICK_NONE)));
         assert!(lines.iter().any(|l| l == &format!("> {}", Language::English.text(PICK_BACK))));
     }
-
-    #[test]
-    fn key_bindings_are_shown_and_written() {
-        let text = "# keys\r\nSensitivity = 0.135\r\nRT = Mouse1\r\nY = F # car\r\nY = G\r\n";
-        let edited = binds::edited(text, "Y", "E");
-        assert_eq!(edited, "# keys\r\nSensitivity = 0.135\r\nRT = Mouse1\r\nY = E\r\n");
-        assert!(binds::edited("A = Shift\n", "LB", "Tab").ends_with("LB = Tab\n"));
-        let b = binds::Binds::of(&edited);
-        assert_eq!((b.value("rt").as_str(), b.value("Y").as_str(), b.value("LB").as_str()), ("MOUSE1", "E", ""));
-        assert_eq!((binds::name(b'W'), binds::name(1), binds::name(0xA2)), ("W".to_owned(), "Mouse1".to_owned(), "0xA2".to_owned()));
-        let mut menu = Menu { values: ITEMS.iter().map(|_| String::new()).collect(), started: Vec::new(), at: 0, note: None, changed: false, painted: None, painted_language: Language::English, buffers: [None, None], fps_buffers: [None, None], failed: false, imports: Vec::new(), import_at: 0, picking: false, binds: Some(b) };
-        menu.started = menu.values.clone();
-        for at in 0..=binds::ROWS.len() {
-            menu.binds.as_mut().expect("shown").at = at;
-            let lines = menu.lines(Language::English);
-            assert_eq!(lines.len(), LINES as usize);
-            assert!(lines.iter().any(|l| l.starts_with('>')));
-            for line in &lines {
-                assert_line_fits(line, COLUMNS);
-            }
-        }
-        for line in [BINDS_TITLE, BINDS_HELP, BINDS_BACK] {
-            assert_line_fits(line, COLUMNS);
-        }
-        for line in ABOUT_BINDS.iter().chain([&BINDS_OFF]).flatten() {
-            assert_line_fits(line, COLUMNS);
-        }
-    }
-
 }

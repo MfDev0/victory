@@ -133,13 +133,7 @@ call :current VICTORY_KEYMAP "a=20,lt=A2" F6
 call :current VICTORY_KEEP_SHOWN checked F8
 call :current VICTORY_PROBE_NEUTRAL 0.3 F9
 call :current VICTORY_SKY_BOUND 0 FA
-call :current VICTORY_TRAIL_FIX 0 FC
-call :current VICTORY_ROOM_SAFE 0 FD
 call :current VICTORY_PHOTOS 0 FE
-call :current VICTORY_PR1179 1 FF
-call :current VICTORY_WINDOW_REACH_KB 2048 FG
-call :current VICTORY_DYNAMIC_SLOTS 458752 FH
-call :current VICTORY_UNORDERED_NOW_KB 1024 FI
 set "LANG_NOW=en"
 call :value VICTORY_MENU_LANGUAGE LANG_NOW
 echo =============================================
@@ -156,32 +150,18 @@ echo   6  PR 982  Space=A, Ctrl=LT     %F6%
 echo   7  PR 1056 menu language        %LANG_NOW%
 echo   8  PR 280  outfit check         %F8%
 echo   9  PR 851  neutral probe light  %F9%
-echo   C  Trail fix (DLSS model K)     %FC%
-echo   D  Crash fix (8 GB cards)       %FD%
 echo   E  Photo mode saves             %FE%
-echo   ---- off: crashed a 6 GB card ----
-echo   F  PR 1179 8 GB textures        %FF%
-echo   G  PR 1197 mesh windows         %FG%
-echo   H  PR 1007 dynamic slots        %FH%
-echo   I  PR 1183 sand page table      %FI%
 echo   B  Back
 echo.
-echo   1 3 A 5 C D E are on unless set to 0.
-echo   F G H I: one at a time, 8 GB+ cards.
+echo   1 3 A 5 E are on unless set to 0.
 echo   2 goes UPSTREAM, SMOOTH, PAUSE.
 echo   Photos: Downloads\VIctory-Photos
 echo.
-choice /c 123456789ACDEFGHIB /n /m "Flip: "
+choice /c 123456789AEB /n /m "Flip: "
 set "PICK=%ERRORLEVEL%"
-if "%PICK%"=="18" goto :menu
-if "%PICK%"=="14" call :flip VICTORY_PR1179 1 "%FF%"
-if "%PICK%"=="15" call :flip VICTORY_WINDOW_REACH_KB 2048 "%FG%"
-if "%PICK%"=="16" call :flip VICTORY_DYNAMIC_SLOTS 458752 "%FH%"
-if "%PICK%"=="17" call :flip VICTORY_UNORDERED_NOW_KB 1024 "%FI%"
+if "%PICK%"=="12" goto :menu
 if "%PICK%"=="10" call :flip_off VICTORY_SKY_BOUND "%FA%"
-if "%PICK%"=="11" call :flip_off VICTORY_TRAIL_FIX "%FC%"
-if "%PICK%"=="12" call :flip_off VICTORY_ROOM_SAFE "%FD%"
-if "%PICK%"=="13" call :flip_off VICTORY_PHOTOS "%FE%"
+if "%PICK%"=="11" call :flip_off VICTORY_PHOTOS "%FE%"
 if "%PICK%"=="8" call :flip VICTORY_KEEP_SHOWN checked "%F8%"
 if "%PICK%"=="9" call :flip VICTORY_PROBE_NEUTRAL 0.3 "%F9%"
 if "%PICK%"=="7" goto :language

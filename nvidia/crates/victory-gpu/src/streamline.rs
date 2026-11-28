@@ -109,14 +109,9 @@ impl Asked {
         };
         let preset = match var("VICTORY_DLSS_PRESET") {
             Some(name) => plan::preset(&name)
-                .ok_or_else(|| format!("VICTORY_DLSS_PRESET={name}: not one of default, auto, e, f, j, k, l, m"))?,
-            // `auto` names the model per the mode the upscaling actually takes.
+                .ok_or_else(|| format!("VICTORY_DLSS_PRESET={name}: not one of default, e, f, j, k, l, m"))?,
             None => 0,
         };
-        // F1 TRAIL FIX (`VICTORY_TRAIL_FIX`, on unless 0): the model left on DEFAULT is K, the
-        // transformer model, not whatever NVIDIA's default for the mode is (a CNN one leaves a
-        // smear behind moving cars and people). A model picked in F1 DLSS MODEL is kept.
-        let preset = if preset == 0 && trail_fix(var("VICTORY_TRAIL_FIX").as_deref()) { plan::preset("k").unwrap_or(0) } else { preset };
         Ok(Asked {
             dlss: on("VICTORY_DLSS"),
             framegen,
@@ -138,11 +133,6 @@ impl Asked {
     pub fn any(&self) -> bool {
         self.dlss || self.framegen
     }
-}
-
-/// F1 TRAIL FIX: on unless `0`.
-fn trail_fix(value: Option<&str>) -> bool {
-    value.is_none_or(|v| v.trim() != "0")
 }
 
 /// What [`init`] made available: the upscaling (the title's renderer may be
@@ -710,7 +700,7 @@ fn load_and_init(asked: &Asked, require_line: bool) -> Result<Available, String>
         dlss,
         framegen,
         mode = asked.mode.name(),
-        preset = plan::preset_name(asked.preset),
+        preset = asked.preset,
         "Streamline loaded (manual hooking, no downloads)"
     );
     let _ = PLAN.set(Plan { asked: asked.clone(), dlss, framegen });
@@ -1633,7 +1623,7 @@ fn evaluate(host: &crate::host::HostList, up: &Upscale, id: u64) -> bool {
             output = ?camera.output,
             mode = plan::sl_mode_name(recorded.mode),
             asked = plan.asked.mode.name(),
-            preset = plan::preset_name(plan::resolve(plan.asked.preset, recorded.mode)),
+            preset = plan.asked.preset,
             optimal = ?recorded.optimal,
             hdr = camera.flags & plan::FFX_HIGH_DYNAMIC_RANGE != 0,
             depth_inverted = camera.depth_inverted(),
@@ -1701,7 +1691,7 @@ fn record(list: *mut c_void, textures: &Textures, camera: &plan::Camera, pre_exp
         if let Some(&(_, _, size)) = calls.optimal.iter().find(|(o, m, _)| *o == output && *m == mode) {
             return size;
         }
-        let options = abi::DlssOptions::new(mode, output, plan::resolve(plan.asked.preset, mode));
+        let options = abi::DlssOptions::new(mode, output, plan.asked.preset);
         let mut settings = abi::DlssOptimalSettings::default();
         // SAFETY: filled options and a structure to fill.
         let code = unsafe { optimal_of(&options, &mut settings) };
@@ -1714,7 +1704,7 @@ fn record(list: *mut c_void, textures: &Textures, camera: &plan::Camera, pre_exp
     let optimal_of_mode = |m: u32| sizes.iter().find(|s| s.0 == m).and_then(|s| s.1);
     let mode = plan::pick_mode(camera.render, output, optimal_of_mode)
         .ok_or_else(|| format!("no DLSS mode takes a {:?} render for a {output:?} output", camera.render))?;
-    let mut options = abi::DlssOptions::new(mode, output, plan::resolve(plan.asked.preset, mode));
+    let mut options = abi::DlssOptions::new(mode, output, plan.asked.preset);
     options.pre_exposure = if pre_exposure > 0.0 { pre_exposure } else { 1.0 };
     options.color_buffers_hdr = abi::boolean(camera.flags & plan::FFX_HIGH_DYNAMIC_RANGE != 0);
     options.use_auto_exposure = abi::boolean(textures[EXPOSURE].is_none());
@@ -2736,8 +2726,6 @@ mod tests {
     #[test]
     fn movie_cutscenes_default_to_smooth() {
         use std::ffi::OsStr;
-        assert!(trail_fix(None) && trail_fix(Some("")) && trail_fix(Some("1")) && !trail_fix(Some("0")));
-        assert_eq!(plan::preset("k"), Some(11));
         assert_eq!(movie_fg_of(None), MovieFg::Off);
         assert_eq!(movie_fg_of(Some(OsStr::new(""))), MovieFg::Off);
         assert_eq!(movie_fg_of(Some(OsStr::new("smooth"))), MovieFg::Smooth);
