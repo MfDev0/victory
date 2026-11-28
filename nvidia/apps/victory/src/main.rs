@@ -4,6 +4,8 @@
 //! the user's cache directory (outside the repository).
 
 mod census;
+#[cfg(windows)]
+mod discord;
 mod inspect;
 #[cfg(windows)]
 mod play;
@@ -352,6 +354,15 @@ enum Command {
         #[arg(long)]
         no_open: bool,
     },
+    /// (Started by `play`: Discord Rich Presence, "Playing Grand Theft Auto
+    /// VI", for as long as the game's process runs. `VICTORY_DISCORD=0`: not.)
+    #[cfg(windows)]
+    #[command(hide = true)]
+    Discord {
+        /// The game's process.
+        #[arg(long)]
+        watch: u32,
+    },
     /// Print the highest shader model the default GPU runs here (`play`
     /// asks it in a process of its own).
     #[cfg(windows)]
@@ -443,8 +454,14 @@ fn main() -> Result<()> {
                 play::preload(&ready.exe);
             }
             victory_core::logging::init("info");
+            // The Try build's cat.
+            println!("   /\\_/\\    VIctory NVIDIA Try build, by MfDev0");
+            println!("  ( o.o )   F1: settings (pet the cat there), F3: stats");
+            println!("   > ^ <");
             // A zip for the tester if the game fails: made by a process of its own.
             report::watch_this_run();
+            // Discord: "Playing Grand Theft Auto VI", with the cat, by a process of its own.
+            discord::start_for_this_run();
             // F1's MFG UNLOCKER: the mod, before the layer makes its device or loads Streamline.
             play::load_mfg();
             let console = if ready.series_s { Console::SeriesS } else { Console::SeriesX };
@@ -526,6 +543,8 @@ fn main() -> Result<()> {
         Command::GetMfg => play::get_mfg(),
         #[cfg(windows)]
         Command::Report { watch, no_open } => report::run(watch, !no_open),
+        #[cfg(windows)]
+        Command::Discord { watch } => discord::run(watch),
         #[cfg(windows)]
         Command::ShaderModel => {
             let model = victory_hle::streamline::highest_shader_model();

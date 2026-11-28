@@ -25,6 +25,8 @@ use crate::{HleExport, HleModule};
 
 // PS5 pads (DualSense, DualSense Edge) read straight from HID, USB or Bluetooth (from AnyXboxX's VIctory copy);
 // PS4 pads (DualShock 4) and rumble from FrancescoGelosoEterea/VIscosity (d8db7a0).
+// `VICTORY_KEYMAP`: the keyboard pad's keys, chosen (PR #982's keymap, without its launcher).
+mod keymap;
 #[cfg(any(windows, test))]
 mod playstation;
 
@@ -135,15 +137,18 @@ const GTA_BUTTONS: [(u8, u32); 26] = [
     (b'G', LEFT),
 ];
 
-/// Where the stand-in pad's letters are on the keyboard: scan code (set 1)
-/// and the letter a US layout prints there.
-const LETTER_POSITIONS: [(u32, u8); 21] = [
+/// Where letters are on the keyboard: scan code (set 1) and the letter a US
+/// layout prints there. All of them, so that `VICTORY_KEYMAP` can use any (#982).
+const LETTER_POSITIONS: [(u32, u8); 26] = [
     (0x10, b'Q'),
     (0x11, b'W'),
     (0x12, b'E'),
     (0x13, b'R'),
+    (0x14, b'T'),
     (0x15, b'Y'),
+    (0x16, b'U'),
     (0x17, b'I'),
+    (0x18, b'O'),
     (0x19, b'P'),
     (0x1E, b'A'),
     (0x1F, b'S'),
@@ -158,6 +163,8 @@ const LETTER_POSITIONS: [(u32, u8); 21] = [
     (0x2D, b'X'),
     (0x2E, b'C'),
     (0x2F, b'V'),
+    (0x30, b'B'),
+    (0x31, b'N'),
     (0x32, b'M'),
 ];
 
@@ -385,6 +392,11 @@ fn fallback(keys: &[KeyState]) -> PadState {
 /// The stand-in pad from the keys held, by [`GTA_BUTTONS`] when `gta` (the
 /// triggers are then the mouse's), else by [`FALLBACK_BUTTONS`].
 fn fallback_for(keys: &[KeyState], gta: bool) -> PadState {
+    // Keys chosen with `VICTORY_KEYMAP` (F1, TRY PR 982: PAD KEYS), unless GTA V keys are on;
+    // unset, the table below as before.
+    if !gta && std::env::var_os("VICTORY_KEYMAP").is_some_and(|v| !v.is_empty()) {
+        return keymap::current().pad(|vk| keys.iter().any(|k| pad_key(k) == vk));
+    }
     let on = |vk: u8| {
         if keys.iter().any(|k| pad_key(k) == vk) {
             1.0

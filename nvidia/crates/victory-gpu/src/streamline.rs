@@ -37,13 +37,14 @@ pub use plan::Mode;
 
 use std::ffi::{CStr, c_char, c_void};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::*};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::*};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::core::Interface;
 
+use crate::host::language::Language;
 use crate::object::Object;
 
 /// Where `sl.interposer.dll` is looked for without `VICTORY_STREAMLINE_DIR`.
@@ -438,22 +439,30 @@ enum NoDlss {
 
 static FACTS: OnceLock<Facts> = OnceLock::new();
 
+/// Maximum width of a startup notice, in ASCII glyph cells.
+pub(crate) const NOTICE_COLUMNS: u32 = 52;
+
 /// What this card does for frame generation, in a few lines of at most 52
 /// characters: printed at the start and shown on the picture for its first
 /// seconds. Nothing if no frame generation was asked or made ready.
 pub fn notice() -> Vec<String> {
+    notice_in(Language::English)
+}
+
+pub(crate) fn notice_in(language: Language) -> Vec<String> {
     let Some(f) = FACTS.get() else { return Vec::new() };
-    notice_of(f, FG_READY.load(Acquire) && SWAP_CHAIN_PROXIED.load(Acquire), fsr::live_swap_chain())
+    notice_of(f, FG_READY.load(Acquire) && SWAP_CHAIN_PROXIED.load(Acquire), fsr::live_swap_chain(), language)
 }
 
 /// [`notice`] as it is expected at the start, before the swap chain is made
 /// (DLSS Frame Generation where it is supported, else FSR 3 if loaded).
 pub fn notice_at_start() -> Vec<String> {
     let Some(f) = FACTS.get() else { return Vec::new() };
-    notice_of(f, f.dlss_fg_supported, f.fsr_loaded && !f.dlss_fg_supported)
+    notice_of(f, f.dlss_fg_supported, f.fsr_loaded && !f.dlss_fg_supported, Language::English)
 }
 
-fn notice_of(f: &Facts, dlss_live: bool, fsr_live: bool) -> Vec<String> {
+fn notice_of(f: &Facts, dlss_live: bool, fsr_live: bool, language: Language) -> Vec<String> {
+    let tr = |labels| language.text(labels).to_owned();
     if !f.dlss_fg_asked && !f.fsr_asked {
         return Vec::new();
     }
@@ -469,42 +478,142 @@ fn notice_of(f: &Facts, dlss_live: bool, fsr_live: bool) -> Vec<String> {
     let no_dlss_fg = f.dlss_fg_asked && !f.dlss_fg_supported;
     if no_dlss_fg {
         lines.push(if f.files_missing {
-            "DLSS FRAME GEN: NVIDIA DLSS FILES NOT FOUND"
+            tr([
+                "DLSS FRAME GEN: NVIDIA DLSS FILES NOT FOUND",
+                "DLSS 帧生成：找不到 NVIDIA DLSS 文件",
+                "DLSS 畫格生成：找不到 NVIDIA DLSS 檔案",
+                "GEN. DLSS: FALTAN ARCHIVOS NVIDIA DLSS",
+            ])
         } else if dlss_framegen_card(&f.adapter) {
-            "DLSS FRAME GEN: UNAVAILABLE (CHECK HAGS AND LOG)"
+            tr([
+                "DLSS FRAME GEN: UNAVAILABLE (CHECK HAGS AND LOG)",
+                "DLSS 帧生成不可用，请检查 GPU 硬件调度和日志",
+                "DLSS 畫格生成無法使用，請檢查 HAGS 與記錄",
+                "GEN. DLSS NO DISPONIBLE: REVISA HAGS Y EL REGISTRO",
+            ])
         } else {
-            "DLSS FRAME GEN: NOT ON THIS CARD (RTX 40 AND UP)"
-        }.into());
+            tr([
+                "DLSS FRAME GEN: NOT ON THIS CARD (RTX 40 AND UP)",
+                "DLSS 帧生成需要 RTX 40 或更新显卡",
+                "DLSS 畫格生成需要 RTX 40 或更新的顯示卡",
+                "GEN. DLSS REQUIERE UNA RTX 40 O POSTERIOR",
+            ])
+        });
     }
     if dlss_live && !f.adapter.is_empty() && !dlss_framegen_card(&f.adapter) {
         // An RTX 20 or 30 with DLSS Frame Generation: a mod beside victory.exe (MFG Unlocker,
         // as winmm.dll) answers for the card; how many frames it gives, Streamline says.
-        lines.push("FRAME GEN: DLSS, UNLOCKED BY A MOD (F1 MENU: 2X-6X)".into());
-        lines.push("NVIDIA DOES NOT SUPPORT IT: IF IT FAILS, REMOVE IT".into());
+        lines.push(tr([
+            "FRAME GEN: DLSS, UNLOCKED BY A MOD (F1 MENU: 2X-6X)",
+            "模组已解锁 DLSS 帧生成 (F1：2X-6X)",
+            "模組已解鎖 DLSS 畫格生成 (F1：2X-6X)",
+            "UN MOD DESBLOQUEÓ LA GEN. DLSS (F1: 2X-6X)",
+        ]));
+        lines.push(tr([
+            "NVIDIA DOES NOT SUPPORT IT: IF IT FAILS, REMOVE IT",
+            "NVIDIA 未提供支持。出现问题时请移除模组",
+            "NVIDIA 未支援，若發生問題請移除模組",
+            "NVIDIA NO DA SOPORTE. SI FALLA, QUITA EL MOD",
+        ]));
     } else if dlss_live {
-        lines.push("FRAME GEN: DLSS, SUPPORTED HERE (F1 MENU: 2X-6X)".into());
-        lines.push("MORE THAN 2X NEEDS AN RTX 50 CARD".into());
+        lines.push(tr([
+            "FRAME GEN: DLSS, SUPPORTED HERE (F1 MENU: 2X-6X)",
+            "此显卡支持 DLSS 帧生成 (F1：2X-6X)",
+            "此顯示卡支援 DLSS 畫格生成 (F1：2X-6X)",
+            "GEN. DLSS COMPATIBLE (MENÚ F1: 2X-6X)",
+        ]));
+        // An RTX 40: the Try build's FG UNLOCK (apps\victory\src\play.rs) gives it 3X-6X.
+        lines.push(tr(if rtx_model(&f.adapter).is_some_and(|m| m / 1000 == 4) {
+            [
+                "MORE THAN 2X: F1 > FG UNLOCK (AUTO AT 3X-6X)",
+                "高于 2X：F1 > 帧生成解锁 (3X-6X 自动)",
+                "超過 2X：F1 > 畫格生成解鎖 (3X-6X 自動)",
+                "MÁS DE 2X: F1 > DESBLOQUEO FG (AUTO 3X-6X)",
+            ]
+        } else {
+            [
+                "MORE THAN 2X NEEDS AN RTX 50 CARD",
+                "高于 2X 需要 RTX 50 显卡",
+                "超過 2X 需要 RTX 50 顯示卡",
+                "MÁS DE 2X REQUIERE UNA RTX 50",
+            ]
+        }));
     } else if fsr_live {
         lines.push(if no_dlss_fg {
-            "USING AMD FSR 3 FRAME GEN INSTEAD: 2X AT MOST".into()
+            tr([
+                "USING AMD FSR 3 FRAME GEN INSTEAD: 2X AT MOST",
+                "已改用 AMD FSR 3 帧生成，最高 2X",
+                "改用 AMD FSR 3 畫格生成，最高 2X",
+                "GEN. CON AMD FSR 3 EN SU LUGAR, HASTA 2X",
+            ])
         } else {
-            "FRAME GEN: AMD FSR 3 (CHOSEN IN F1), 2X AT MOST".into()
+            tr([
+                "FRAME GEN: AMD FSR 3 (CHOSEN IN F1), 2X AT MOST",
+                "AMD FSR 3 帧生成 (F1 设置)，最高 2X",
+                "AMD FSR 3 畫格生成 (F1 設定)，最高 2X",
+                "GEN. AMD FSR 3 (ELEGIDA EN F1), HASTA 2X",
+            ])
         });
-        lines.push("FSR 3 FRAME GEN NEEDS DLSS UPSCALING (ON)".into());
+        lines.push(tr([
+            "FSR 3 FRAME GEN NEEDS DLSS UPSCALING (ON)",
+            "FSR 3 帧生成需要开启 DLSS 超分",
+            "FSR 3 畫格生成需啟用 DLSS 超解析度",
+            "GEN. FSR 3 REQUIERE SUPERRESOLUCIÓN DLSS ACTIVA",
+        ]));
     } else if f.fsr_needs_dlss {
-        lines.push("FRAME GEN OFF: FSR 3 NEEDS DLSS UPSCALING ON".into());
+        lines.push(tr([
+            "FRAME GEN OFF: FSR 3 NEEDS DLSS UPSCALING ON",
+            "帧生成关闭：FSR 3 需要开启 DLSS 超分",
+            "畫格生成關閉：FSR 3 需啟用 DLSS 超解析度",
+            "FSR 3 SIN GEN.: ACTIVA SUPERRESOLUCIÓN DLSS",
+        ]));
         lines.push(match f.no_dlss {
-            Some(NoDlss::FilesMissing) => "NVIDIA DLSS FILES NOT FOUND (VICTORY_STREAMLINE_DIR)",
-            Some(NoDlss::Card) => "THIS CARD HAS NO DLSS UPSCALING",
-            _ => "DLSS UPSCALING IS OFF: TURN IT ON IN F1 > DLSS",
-        }.into());
+            Some(NoDlss::FilesMissing) => tr([
+                "NVIDIA DLSS FILES NOT FOUND (VICTORY_STREAMLINE_DIR)",
+                "缺少 DLSS 文件 (VICTORY_STREAMLINE_DIR)",
+                "缺少 DLSS 檔案 (VICTORY_STREAMLINE_DIR)",
+                "FALTAN ARCHIVOS DLSS (VICTORY_STREAMLINE_DIR)",
+            ]),
+            Some(NoDlss::Card) => tr([
+                "THIS CARD HAS NO DLSS UPSCALING",
+                "此显卡不支持 DLSS 超分",
+                "此顯示卡不支援 DLSS 超解析度",
+                "ESTA GPU NO ADMITE SUPERRESOLUCIÓN DLSS",
+            ]),
+            _ => tr([
+                "DLSS UPSCALING IS OFF: TURN IT ON IN F1 > DLSS",
+                "DLSS 超分已关闭，请在 F1 > DLSS 开启",
+                "DLSS 超解析度已關閉，請在 F1 > DLSS 啟用",
+                "SUPERRESOLUCIÓN DLSS APAGADA: ACTIVA EN F1 > DLSS",
+            ]),
+        });
     } else if f.fsr_asked && !f.fsr_loaded {
-        lines.push("FRAME GEN OFF: AMD FSR 3 FILES NOT FOUND".into());
-        lines.push("(AMD FIDELITYFX DLLS, VICTORY_FIDELITYFX_DIR)".into());
+        lines.push(tr([
+            "FRAME GEN OFF: AMD FSR 3 FILES NOT FOUND",
+            "帧生成关闭：找不到 AMD FSR 3 文件",
+            "畫格生成關閉：找不到 AMD FSR 3 檔案",
+            "GEN. DESACTIVADA: FALTAN ARCHIVOS DE AMD FSR 3",
+        ]));
+        lines.push(tr([
+            "(AMD FIDELITYFX DLLS, VICTORY_FIDELITYFX_DIR)",
+            "(AMD FIDELITYFX DLL，VICTORY_FIDELITYFX_DIR)",
+            "(AMD FIDELITYFX DLL，VICTORY_FIDELITYFX_DIR)",
+            "(DLL DE AMD FIDELITYFX, VICTORY_FIDELITYFX_DIR)",
+        ]));
     } else if no_dlss_fg {
-        lines.push("F1 > FRAME GEN TYPE > FSR 3 GIVES 2X ON THIS CARD".into());
+        lines.push(tr([
+            "F1 > FRAME GEN TYPE > FSR 3 GIVES 2X ON THIS CARD",
+            "此显卡可在 F1 > 帧生成类型 > FSR 3 用 2X",
+            "在 F1 > 畫格生成類型選 FSR 3 可達 2X",
+            "F1 > TIPO DE GEN. DE FOTOGRAMAS > FSR 3: 2X",
+        ]));
     } else if f.dlss_fg_supported {
-        lines.push("FRAME GEN: DLSS DID NOT START (SEE THE LOG)".into());
+        lines.push(tr([
+            "FRAME GEN: DLSS DID NOT START (SEE THE LOG)",
+            "DLSS 帧生成启动失败，请查看日志",
+            "DLSS 畫格生成未啟動，請查看記錄",
+            "GEN. DLSS NO INICIÓ: CONSULTA EL REGISTRO",
+        ]));
     } else {
         return Vec::new();
     }
@@ -1234,6 +1343,161 @@ pub(crate) fn fresh_inputs() -> Option<Inputs> {
     Some(Inputs { depth: n.depth.current(), motion: n.motion.current(), camera: n.camera, frame_ms: n.frame_ms })
 }
 
+/// PR #669's movie gate: frame generation held off while a Bink movie plays, so the
+/// still letterbox bars do not flicker. Off by default in the Try build (frame generation
+/// runs over movies, as before); `VICTORY_MOVIE_FG_GATE=1` (F1, MOVIE FG PAUSE) turns it on.
+pub fn movie_gate() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_MOVIE_FG_GATE").is_some_and(|v| v == "1"))
+}
+
+/// How many title presents after the last sign of a movie frame generation
+/// stays off. A movie decoder can hold a plane for several presents, and the
+/// upload can be recorded a list or two before the present that shows it.
+/// The lease is in presents, not milliseconds: the title can present at 250
+/// frames a second in the menu and at 12 in the world, and an async present
+/// worker must not re-decide it after a wall-clock deadline has passed.
+const MOVIE_PLANE_HOLD_FRAMES: u64 = 4;
+static MOVIE_PLANE_UNTIL_FRAME: AtomicU64 = AtomicU64::new(0);
+/// A Bink handle can stay open long after its last frame (a looping background
+/// movie decoded early, or a close that never reaches the wrapper). Classing
+/// every present as a movie for the whole life of the handle retired FSR 3 at
+/// the first movie in the fresh retest and never let it re-arm: log 13403 and
+/// every line after, "0 presents with it on, 416 off", while two handles were
+/// still open. Every Bink sign extends this lease instead; quiet handles stop
+/// holding frame generation off.
+///
+/// The frame part keeps queued presents classed the same as when they were
+/// taken (the worker must not re-decide a present after a wall-clock deadline).
+/// It alone was 1,200 presents, which is ~5 s in the 250-present/s menu but
+/// ~100 s in the measured 12-present/s gameplay: after the movie closed at
+/// 00:46:33 there were 0 Bink signs and 0 plane notes, yet every line still
+/// held 13-15 presents off. The wall-clock part caps that tail at 5 s from the
+/// last Bink sign, matching the old menu behaviour, while every real movie
+/// frame keeps renewing it. Both are checked at the title's Present, so the
+/// answer still travels unchanged to the async worker and FSR.
+const BINK_IDLE_HOLD_FRAMES: u64 = 1200;
+const BINK_IDLE_HOLD_MS: u64 = 5000;
+static BINK_IDLE_UNTIL_FRAME: AtomicU64 = AtomicU64::new(0);
+static BINK_IDLE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+/// Bink movies open in the title. Counted for diagnostics only: the gate uses
+/// the bounded lease above, not this handle count.
+static BINK_MOVIES_OPEN: AtomicUsize = AtomicUsize::new(0);
+static BINK_MOVIES_OPENED: AtomicU64 = AtomicU64::new(0);
+static BINK_MOVIES_CLOSED: AtomicU64 = AtomicU64::new(0);
+static MOVIE_PLANE_NOTES: AtomicU64 = AtomicU64::new(0);
+static MOVIE_BINK_NOTES: AtomicU64 = AtomicU64::new(0);
+static MOVIE_PLANE_TAKES: AtomicU64 = AtomicU64::new(0);
+static MOVIE_PLANE_MISSES: AtomicU64 = AtomicU64::new(0);
+
+/// Called when a list records a CPU-written movie plane upload. The upload
+/// can be recorded a list or two before the present that shows it, so it
+/// extends the lease over those presents.
+pub fn note_movie_plane() {
+    note_movie_plane_at(crate::queue::frame_count());
+}
+
+/// Extend the lease without shortening it. Several threads can note a plane
+/// or a Bink call for the same or an older present; a plain store would let
+/// the older one cancel the longer lease and turn frame generation on before
+/// the last movie frame had been shown.
+fn note_movie_plane_at(frame: u64) {
+    MOVIE_PLANE_NOTES.fetch_add(1, Relaxed);
+    let until = frame.saturating_add(MOVIE_PLANE_HOLD_FRAMES);
+    MOVIE_PLANE_UNTIL_FRAME.fetch_max(until, AcqRel);
+    BINK_IDLE_UNTIL_FRAME.fetch_max(frame.saturating_add(BINK_IDLE_HOLD_FRAMES), AcqRel);
+    BINK_IDLE_UNTIL_MS.fetch_max(crate::host::now_ms().saturating_add(BINK_IDLE_HOLD_MS), AcqRel);
+}
+
+/// A CPU-written plane upload is only a movie plane while a Bink movie is
+/// actually open. The latest retest's ordinary UI alpha textures were noted on
+/// nearly every frame ("a CPU-written alpha movie plane was recognised" at
+/// line 332, then 10-76 notes every five seconds all the way to the end), so
+/// the four-present lease never expired and every later present was classed as
+/// a movie: FSR 3 retired its context at line 12576 and made none again; 0
+/// presents with it on from line 13032 on. The Bink wrappers are the
+/// authoritative sign; a plane upload extends only the short lease, and only
+/// for an open movie, so it can bridge the last uploads without latching frame
+/// generation off. The dedicated upload path itself is unchanged.
+pub fn note_plane_upload_at(frame: u64) {
+    if BINK_MOVIES_OPEN.load(Acquire) != 0 {
+        MOVIE_PLANE_NOTES.fetch_add(1, Relaxed);
+        MOVIE_PLANE_UNTIL_FRAME.fetch_max(frame.saturating_add(MOVIE_PLANE_HOLD_FRAMES), AcqRel);
+    }
+}
+
+/// [`note_plane_upload_at`] for the current present frame.
+pub fn note_plane_upload() {
+    note_plane_upload_at(crate::queue::frame_count());
+}
+
+/// The `A8_UNORM` near-match uses the same bounded gate as the exact
+/// `R8_UNORM` Bink luma upload.
+pub fn note_alpha_plane_at(frame: u64) {
+    note_plane_upload_at(frame);
+}
+
+/// [`note_alpha_plane_at`] for the current present frame.
+pub fn note_alpha_plane() {
+    note_plane_upload();
+}
+
+/// Called by the title's Bink player whenever it works on a movie frame,
+/// even when no movie is being skipped. It tells us a movie is present when
+/// the decoder writes a plane we do not recognise as one.
+pub fn note_bink_movie() {
+    MOVIE_BINK_NOTES.fetch_add(1, Relaxed);
+    note_movie_plane();
+}
+
+/// The title opened a Bink movie. The movie gate holds through gaps with no
+/// wrapped calls or plane uploads for [`BINK_IDLE_HOLD_FRAMES`] after the last
+/// sign, but an idle handle no longer latches it forever.
+pub fn bink_movie_opened() {
+    BINK_MOVIES_OPEN.fetch_add(1, Relaxed);
+    BINK_MOVIES_OPENED.fetch_add(1, Relaxed);
+    note_movie_plane();
+}
+
+/// The title closed a Bink movie. Keep a short lease so the last frame still
+/// shown while the close is processed is classed as a movie.
+pub fn bink_movie_closed() {
+    if BINK_MOVIES_OPEN.fetch_update(AcqRel, Acquire, |n| n.checked_sub(1)).is_ok() {
+        BINK_MOVIES_CLOSED.fetch_add(1, Relaxed);
+    }
+    note_movie_plane();
+}
+
+/// Whether title present `frame` shows a movie plane. Frame generation
+/// interpolates the still letterbox edges of a video and makes the black
+/// borders flicker, so it is held off for these presents only; DLSS, FSR and
+/// the user's frame-generation choice are untouched.
+///
+/// This is called once at the title's Present, before the present is put in
+/// the async line. The answer travels with the present: the worker, the
+/// composer fallbacks, FSR and DLSS all use the same class for that frame.
+pub(crate) fn take_movie_plane(frame: u64) -> bool {
+    if !movie_gate() {
+        return false;
+    }
+    take_movie_plane_at(frame, crate::host::now_ms())
+}
+
+/// The same decision with the clock passed in, so a test can expire the wall
+/// part without waiting. The caller at the title's Present passes its own
+/// `now_ms`; the async worker uses the result already taken.
+fn take_movie_plane_at(frame: u64, now_ms: u64) -> bool {
+    let active = frame <= MOVIE_PLANE_UNTIL_FRAME.load(Acquire)
+        || (frame <= BINK_IDLE_UNTIL_FRAME.load(Acquire)
+            && now_ms <= BINK_IDLE_UNTIL_MS.load(Acquire));
+    if active {
+        MOVIE_PLANE_TAKES.fetch_add(1, Relaxed);
+    } else {
+        MOVIE_PLANE_MISSES.fetch_add(1, Relaxed);
+    }
+    active
+}
+
 /// A texture frame generation reads at the present, and the state it is in
 /// then: a title texture's host copy (in the state the lists submitted so
 /// far left it in), or one of the check's ([`check`]) in a fixed state.
@@ -1704,8 +1968,8 @@ pub(crate) struct Presenting {
 /// Before our swap chain's Present of title frame `frame`: with frame
 /// generation, the frame's latency markers, constants and tags, and whether
 /// frame generation runs on it (it does when an upscaling was submitted
-/// since the last present).
-pub(crate) fn present_begins(frame: u64, planes: Planes<'_>) -> Option<Presenting> {
+/// since the last present, and the present is not a movie plane).
+pub(crate) fn present_begins(frame: u64, planes: Planes<'_>, video: bool) -> Option<Presenting> {
     if !FG_READY.load(Acquire) || !SWAP_CHAIN_PROXIED.load(Acquire) {
         return None;
     }
@@ -1805,7 +2069,9 @@ pub(crate) fn present_begins(frame: u64, planes: Planes<'_>) -> Option<Presentin
             mvec_scale = ?constants.mvec_scale,
             "DLSS Frame Generation: first frame with depth and motion vectors tagged"
         );
-        code == 0
+        // A movie plane was recorded for this present: the tags are kept in
+        // step, but generation must not interpolate the black bars.
+        if video { false } else { code == 0 }
     } else {
         if calls.framegen_on {
             // No upscaling this frame (a menu, a load): what was tagged may
@@ -2184,7 +2450,7 @@ fn check_run(output: [u32; 2], device: bool, present: bool) -> Vec<String> {
         let hooked = present && asked.present_hook && !framegen;
         for round in 0..if hooked { 120 } else { 3 } {
             if hooked && round > 0 {
-                host.present_planes(&base, 0, None, round);
+                host.present_planes(&base, 0, None, round, false);
             }
             let id = NEXT_ID.fetch_add(1, Relaxed) + 1;
             let list = match host.new_list() {
@@ -2249,7 +2515,7 @@ fn check_run(output: [u32; 2], device: bool, present: bool) -> Vec<String> {
             if let Some(copy) = &copy {
                 lock(&HUD_SUBMITTED).push(Copied { id: frame, target: base.as_raw() as usize, texture: copy.clone() });
             }
-            host.present_planes(&base, 0, None, frame);
+            host.present_planes(&base, 0, None, frame, false);
             std::thread::sleep(std::time::Duration::from_millis(16));
         }
         crate::host::settle_for_fence();
@@ -2306,6 +2572,20 @@ fn texture(
 
 /// For the frame-rate line.
 pub(crate) fn line(frames: f64) {
+    let [notes, bink, takes, misses] = [
+        &MOVIE_PLANE_NOTES,
+        &MOVIE_BINK_NOTES,
+        &MOVIE_PLANE_TAKES,
+        &MOVIE_PLANE_MISSES,
+    ]
+    .map(|c| c.swap(0, Relaxed));
+    let opened = BINK_MOVIES_OPENED.swap(0, Relaxed);
+    let closed = BINK_MOVIES_CLOSED.swap(0, Relaxed);
+    tracing::info!(
+        "movie plane gate: {notes} plane uploads noted ({bink} Bink signs), {opened} Bink movies opened, {closed} closed, \
+         {} still open; {takes} presents held off, {misses} presents not held off",
+        BINK_MOVIES_OPEN.load(Relaxed)
+    );
     if let Some((on, off, failed, hudless)) = fsr::line_counts() {
         tracing::info!(
             "FSR 3 frame generation: {on} presents with it on ({hudless} with the colour without the interface), {off} off, {failed} prepare dispatches failed"
@@ -2390,6 +2670,126 @@ mod card_tests {
         assert!(!dlss_framegen_card("NVIDIA RTX A6000"));
         assert!(dlss_framegen_card("NVIDIA RTX 2000 Ada Generation"));
         assert!(dlss_framegen_card("NVIDIA RTX PRO 4000 Blackwell SFF Edition"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn reset_gate() {
+        MOVIE_PLANE_UNTIL_FRAME.store(0, Relaxed);
+        BINK_IDLE_UNTIL_FRAME.store(0, Relaxed);
+        BINK_IDLE_UNTIL_MS.store(0, Relaxed);
+        BINK_MOVIES_OPEN.store(0, Relaxed);
+    }
+
+    #[test]
+    fn a_late_movie_note_does_not_shorten_an_earlier_lease() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_gate();
+        note_movie_plane_at(10);
+        note_movie_plane_at(1);
+        assert_eq!(MOVIE_PLANE_UNTIL_FRAME.load(Acquire), 10 + MOVIE_PLANE_HOLD_FRAMES);
+        assert_eq!(BINK_IDLE_UNTIL_FRAME.load(Acquire), 10 + BINK_IDLE_HOLD_FRAMES);
+        reset_gate();
+    }
+
+    /// The latest retest refreshed the movie gate from ordinary A8 UI alpha
+    /// textures on nearly every frame, with no movie open. Such a note must
+    /// hold neither the short lease nor the long Bink-idle lease.
+    #[test]
+    fn an_alpha_plane_without_a_bink_movie_does_not_hold_the_gate() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_gate();
+        note_alpha_plane_at(10);
+        assert_eq!(MOVIE_PLANE_UNTIL_FRAME.load(Acquire), 0);
+        assert_eq!(BINK_IDLE_UNTIL_FRAME.load(Acquire), 0);
+        assert!(!take_movie_plane(10));
+        reset_gate();
+    }
+
+    /// The exact `R8_UNORM` plane upload uses the dedicated decoder buffer,
+    /// which ordinary one-byte UI textures can also match. It is no more a
+    /// movie sign than the A8 near-match unless a Bink movie is open.
+    #[test]
+    fn a_plane_upload_without_a_bink_movie_does_not_hold_the_gate() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_gate();
+        note_plane_upload_at(10);
+        assert_eq!(MOVIE_PLANE_UNTIL_FRAME.load(Acquire), 0);
+        assert_eq!(BINK_IDLE_UNTIL_FRAME.load(Acquire), 0);
+        assert!(!take_movie_plane(10));
+        reset_gate();
+    }
+
+    /// With a movie open, an alpha plane still bridges the last few uploads,
+    /// but must not extend the 1,200-present Bink idle lease: a Bink handle
+    /// that stays open after the last frame would otherwise keep FG off for
+    /// the whole run as UI textures refreshed.
+    #[test]
+    fn an_alpha_plane_of_an_open_bink_movie_extends_only_the_short_lease() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_gate();
+        BINK_MOVIES_OPEN.store(1, Relaxed);
+        note_alpha_plane_at(10);
+        assert_eq!(MOVIE_PLANE_UNTIL_FRAME.load(Acquire), 10 + MOVIE_PLANE_HOLD_FRAMES);
+        assert_eq!(BINK_IDLE_UNTIL_FRAME.load(Acquire), 0);
+        assert!(take_movie_plane(10 + MOVIE_PLANE_HOLD_FRAMES));
+        assert!(!take_movie_plane(11 + MOVIE_PLANE_HOLD_FRAMES));
+        reset_gate();
+    }
+
+    /// The fresh retest's movie gate: one long Bink handle stayed open, and
+    /// every present after the retire was classed as a movie forever. The
+    /// open count is still kept for diagnostics; only the idle lease expires.
+    #[test]
+    fn an_idle_bink_handle_stops_holding_the_gate() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_gate();
+        note_bink_movie();
+        BINK_MOVIES_OPEN.store(1, Relaxed);
+        let until = BINK_IDLE_UNTIL_FRAME.load(Acquire);
+        assert!(take_movie_plane(until), "the last movie frame must still be held off");
+        assert!(!take_movie_plane(until + 1), "an idle handle must not latch the gate forever");
+        // Diagnostics still see the handle.
+        assert_eq!(BINK_MOVIES_OPEN.load(Acquire), 1);
+        reset_gate();
+    }
+
+    /// The new retest held 13-15 presents off every second after the movie
+    /// closed with 0 Bink signs: 1,200 presents is ~100 s at gameplay's 12
+    /// presents/s. The wall-clock half must end that tail at 5 s, before the
+    /// frame half would, while still holding the queued presents taken before
+    /// the last sign.
+    #[test]
+    fn an_idle_bink_lease_expires_by_clock_before_its_frame_count() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_gate();
+        note_bink_movie();
+        let until_frame = BINK_IDLE_UNTIL_FRAME.load(Acquire);
+        let until_ms = BINK_IDLE_UNTIL_MS.load(Acquire);
+        assert!(until_frame > MOVIE_PLANE_HOLD_FRAMES);
+        assert!(take_movie_plane_at(until_frame - 1, until_ms - 1));
+        assert!(!take_movie_plane_at(until_frame - 1, until_ms + 1));
+        reset_gate();
+    }
+
+    /// A skipped movie is held on its last frame and returns before the
+    /// wrapper's normal sign; each wrapped call must keep renewing the lease.
+    #[test]
+    fn late_signs_extend_the_idle_lease_without_shortening_it() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_gate();
+        note_movie_plane_at(10);
+        note_movie_plane_at(10 + BINK_IDLE_HOLD_FRAMES - MOVIE_PLANE_HOLD_FRAMES);
+        let until = BINK_IDLE_UNTIL_FRAME.load(Acquire);
+        assert_eq!(until, 10 + 2 * BINK_IDLE_HOLD_FRAMES - MOVIE_PLANE_HOLD_FRAMES);
+        assert!(take_movie_plane(until));
+        assert!(!take_movie_plane(until + 1));
+        reset_gate();
     }
 }
 

@@ -4217,7 +4217,8 @@ pub(crate) mod awake;
 mod card_steps;
 #[cfg(feature = "diagnostics")]
 pub(crate) mod indirects;
-mod font;
+pub(crate) mod font;
+pub(crate) mod language;
 mod menu;
 mod panel;
 mod place;
@@ -8127,6 +8128,12 @@ impl HostList {
         fill: impl Fn(usize) + Send + 'static,
     ) -> Option<ID3D12Resource> {
         let chunk = take_chunk(host()?, size)?;
+        // Hold frame generation off for the presents that show this movie
+        // plane; generated frames interpolate the still letterbox edges.
+        // Ordinary one-byte UI textures can match Bink's exact `R8_UNORM`
+        // luma shape too, so only an open Bink movie may turn this upload into
+        // a movie sign; the dedicated upload buffer stays as it was.
+        crate::streamline::note_plane_upload();
         let source = chunk.buffer.clone();
         let destination = chunk.data;
         let mut deferred = self.deferred();
@@ -9941,18 +9948,27 @@ impl Meter {
                     crate::descriptor::host::STALE[4].load(Ordering::Relaxed)
                 );
                 // What the queue's room test (`crate::resource::room`) weighs.
-                if let Some([budget, used, blocks, buffers, targets, line]) =
+                if let Some([budget, used, blocks, buffers, targets, line, effective, filled]) =
                     crate::resource::room_terms(host().and_then(|h| h.video_memory()))
                 {
                     let weighed = used.saturating_sub(blocks) + buffers + targets;
                     tracing::info!(
                         "the texture queue's room: {used} MB in use - {blocks} MB free in texture blocks + {buffers} MB kept for \
                          card copies of title buffers + {targets} MB kept for render targets = {weighed} MB against a line of \
-                         {line} MB ({:.1} % of a budget of {budget} MB): {}",
+                         {line} MB ({:.1} % of a budget of {budget} MB; {effective} MB after face headroom, {filled} MB in texture \
+                         copies): {}",
                         line as f64 * 100.0 / budget.max(1) as f64,
-                        if weighed < line { "room" } else { "no room, new textures wait" }
+                        if weighed < effective { "room" } else { "no room, new textures wait" }
                     );
                 }
+                let first_full = crate::draw::HEAP_TEXTURES_FIRST_FULL.swap(0, Ordering::Relaxed);
+                let [allow, explicit, no_memory, allowance_off, filled, whole] =
+                    crate::resource::first_upload_reasons();
+                tracing::info!(
+                    "first host textures admitted just over the room line in the last 5 seconds: {first_full}; \
+                     first-upload room decisions: {allow} allowed, {explicit} refused by an explicit byte limit, {no_memory} without memory info, \
+                     {allowance_off} with the allowance off, {filled} at the texture-copy ceiling, {whole} at the whole-card budget"
+                );
                 let [looks, mapped, same, staged, all, made, views] =
                     [0, 1, 2, 3, 4, 5, 6].map(|i| crate::draw::HEAP_TEXTURE_NANOS[i].swap(0, Ordering::Relaxed) / 1_000_000);
                 let rest = all.saturating_sub(looks + mapped + same + staged + made + views);
@@ -10211,9 +10227,25 @@ impl Meter {
         }
         let Some(caption) = &self.caption else { return };
         // With frame generation showing more frames than are rendered, both rates.
-        let text = match crate::streamline::shown_per_frame() {
-            1 => format!(" | VIctory-NVIDIA {fps:.0} fps {ms:.1} ms/frame {draws:.0} draws/frame"),
-            per => format!(" | VIctory-NVIDIA {fps:.0} fps (frame gen {:.0} fps) {ms:.1} ms/frame {draws:.0} draws/frame", fps * f64::from(per)),
+        use language::Language;
+        let language = menu::language();
+        let per = crate::streamline::shown_per_frame();
+        let generated = if per == 1 {
+            String::new()
+        } else {
+            let shown = fps * f64::from(per);
+            match language {
+                Language::English => format!(" (frame gen {shown:.0} fps)"),
+                Language::SimplifiedChinese => format!("（显示 {shown:.0} 帧/秒）"),
+                Language::TraditionalChinese => format!("（顯示 {shown:.0} 畫格/秒）"),
+                Language::Spanish => format!(" ({shown:.0} fps de salida)"),
+            }
+        };
+        let text = match language {
+            Language::English => format!(" | VIctory-NVIDIA {fps:.0} fps{generated} {ms:.1} ms/frame {draws:.0} draws/frame"),
+            Language::SimplifiedChinese => format!(" | VIctory-NVIDIA {fps:.0} 帧/秒{generated}，{ms:.1} 毫秒/帧，{draws:.0} 次绘制/帧"),
+            Language::TraditionalChinese => format!(" | VIctory-NVIDIA {fps:.0} 畫格/秒{generated}，{ms:.1} 毫秒/畫格，{draws:.0} 次繪製/畫格"),
+            Language::Spanish => format!(" | VIctory-NVIDIA {fps:.0} fps{generated}, {ms:.1} ms/fotograma, {draws:.0} llamadas de dibujo/fotograma"),
         };
         let mut text: Vec<u16> = caption.iter().copied().chain(text.encode_utf16()).collect();
         text.push(0);
@@ -10248,17 +10280,20 @@ impl Host {
     /// shown; else, in diagnostics builds, whether the frame was black.
     #[allow(dead_code)]
     pub(crate) fn present(&self, texture: &ID3D12Resource, state: u32, frame: u64) -> Option<bool> {
-        self.present_planes(texture, state, None, frame)
+        self.present_planes(texture, state, None, frame, false)
     }
 
     /// Shows `texture`, optionally alpha-compositing a second `overlay` plane
-    /// over it (Series S two-plane presentation), and returns them to their states.
+    /// over it (Series S two-plane presentation), and returns them to their
+    /// states. `video` is the movie class decided at the title's Present; it
+    /// travels through composer fallbacks and frame generation unchanged.
     pub(crate) fn present_planes(
         &self,
         texture: &ID3D12Resource,
         state: u32,
         overlay: Option<(&ID3D12Resource, u32)>,
         frame: u64,
+        video: bool,
     ) -> Option<bool> {
         // SAFETY: a live resource.
         let desc = unsafe { texture.GetDesc() };
@@ -10300,7 +10335,7 @@ impl Host {
                 Err(e) => {
                     tracing::warn!(error = %e, "two-plane composer not made; showing base plane only");
                     drop(presenter);
-                    return self.present_planes(texture, state_u32, None, frame);
+                    return self.present_planes(texture, state_u32, None, frame, video);
                 }
             }
         }
@@ -10341,7 +10376,7 @@ impl Host {
                 Err(e) => {
                     tracing::warn!(error = %e, "two-plane composer not made after resize; showing base plane only");
                     drop(presenter);
-                    return self.present_planes(texture, state_u32, None, frame);
+                    return self.present_planes(texture, state_u32, None, frame, video);
                 }
             }
         }
@@ -10402,7 +10437,7 @@ impl Host {
                         drop(back);
                         drop(presenter);
                         tracing::warn!(%err, "could not record display composite; presenting the base plane");
-                        return self.present_planes(texture, state_u32, None, frame);
+                        return self.present_planes(texture, state_u32, None, frame, video);
                     }
                     static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
                     if !ONCE.swap(true, Ordering::Relaxed) {
@@ -10505,7 +10540,9 @@ impl Host {
                 list.ResourceBarrier(&post);
             }
             // FSR 3 frame generation: this frame's prepare dispatch, last in
-            // the list before the Present (its own descriptor heaps).
+            // the list before the Present (its own descriptor heaps). `video`
+            // is the class decided at this title present, not one sampled
+            // again here or by the async present worker.
             crate::streamline::fsr::before_present(
                 &self.device,
                 &p.swap_chain,
@@ -10514,6 +10551,7 @@ impl Host {
                 format,
                 (texture, state_u32),
                 composed && overlay.is_some(),
+                video,
             );
             copy.close();
             let flown = match slot {
@@ -10548,6 +10586,7 @@ impl Host {
                     overlay: overlay.filter(|_| composed),
                     size: [width, height],
                 },
+                video,
             );
             let called = crate::streamline::present_called(&presenting);
             let shown = p.swap_chain.Present(0, if p.presents_tearing { DXGI_PRESENT_ALLOW_TEARING } else { DXGI_PRESENT(0) });

@@ -264,6 +264,10 @@ static FFX: OnceLock<Ffx> = OnceLock::new();
 static SWAP_CHAIN: AtomicBool = AtomicBool::new(false);
 /// Frame generation ran on the last present.
 static ON: AtomicBool = AtomicBool::new(false);
+/// The class of the previous title present. On Game -> Movie the context is
+/// retired once, so a generated frame from the last game frame cannot be
+/// shown over the still letterbox edges of the first movie frame.
+static LAST_VIDEO: AtomicBool = AtomicBool::new(false);
 // Since the last frame-rate line: presents with frame generation on, off,
 // and prepare dispatches that failed.
 static PRESENTS_ON: AtomicU64 = AtomicU64::new(0);
@@ -514,7 +518,10 @@ unsafe extern "C" fn generate(params: *mut Header, user: *mut c_void) -> u32 {
 /// without the interface. Otherwise (Series X) that is the copy taken in front
 /// of the title's interface composite. FidelityFX tells the interface (and our
 /// panel and menu, drawn after) from the scene by it and does not move it with
-/// the scene.
+/// the scene. A movie class is still taken and logged at the title's Present,
+/// but FSR 3 is deliberately not gated on it: retiring the context at every
+/// cutscene and re-arming it later cost frames and often left generation off
+/// for the rest of the run. The letterbox borders are accepted for now.
 pub(crate) fn before_present(
     device: &ID3D12Device,
     swap_chain: &IDXGISwapChain3,
@@ -523,7 +530,10 @@ pub(crate) fn before_present(
     format: DXGI_FORMAT,
     base: (&ID3D12Resource, u32),
     two_planes: bool,
+    _video: bool,
 ) {
+    // Always generate: no movie retire, no held-off presents.
+    let video = false;
     if !SWAP_CHAIN.load(Acquire) {
         return;
     }
@@ -550,16 +560,31 @@ pub(crate) fn before_present(
         // SAFETY: a live texture.
         unsafe { t.GetDesc() }.Format
     });
+    let was_video = LAST_VIDEO.swap(video, Relaxed);
     let mut guard = live();
     let Some(live) = guard.as_mut() else { return };
+    if video && !was_video && live.framegen.is_some() {
+        // Everything sent so far has run before the swap chain is told to
+        // stop calling the old context; the first movie frame is then shown
+        // without a generated frame from the game frame before it.
+        crate::host::settle_now(crate::host::WHY_SYNC);
+        if retire(ffx, live) {
+            tracing::info!(frame_id = live.frame_id, "FSR 3 frame generation: its context was retired for a movie present");
+        }
+    }
     // The textures' states are those the submissions before this present
     // left: only the line of submissions orders the two.
     let line = crate::queue::line_on();
     if !line {
         once!(warn, "FSR 3 frame generation: the line of submissions did not start; frame generation stays off");
     }
-    let wanted = super::framegen_wanted() != 0 && line;
-    let fresh = if wanted { super::fresh_inputs() } else { None };
+    if video && line && super::framegen_wanted() != 0 {
+        once!(info, "FSR 3 frame generation: held off for a movie plane letterbox");
+    }
+    let wanted = super::framegen_wanted() != 0 && line && !video;
+    // Take the newest inputs even while held off: leaving them queued would
+    // let the first present after the movie generate from stale movie frames.
+    let fresh = super::fresh_inputs().filter(|_| wanted);
     // The context, made at the first upscaling (its sizes are the title's)
     // and again when they change.
     if let Some(inputs) = &fresh {
@@ -892,23 +917,35 @@ mod tests {
     /// The start's notice: what runs and why, in lines the picture's box and font show.
     #[test]
     fn the_notice_says_what_the_card_does() {
-        use super::super::notice_of;
-        let shown = |lines: &[String]| {
+        use super::super::{Language, NOTICE_COLUMNS, notice_of};
+        use crate::host::font::{ASCII_WIDTH, width};
+
+        let shown = |lines: &[String], language| {
             for l in lines {
-                assert!(l.len() <= 52, "{l}");
-                assert!(l.bytes().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || b" .,:()/->+!?_=*".contains(&c)), "{l}");
+                assert!(width(l) <= NOTICE_COLUMNS * ASCII_WIDTH, "{l}");
+                if language == Language::English {
+                    assert!(l.bytes().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || b" .,:()/->+!?_=*".contains(&c)), "{l}");
+                }
             }
         };
         let lines = |f, dlss_live, fsr_live| {
-            let l = notice_of(&f, dlss_live, fsr_live).into_iter().map(|l| l.to_ascii_uppercase()).collect::<Vec<_>>();
-            shown(&l);
-            l.join("|")
+            let localized = Language::ALL.map(|language| {
+                let lines = notice_of(&f, dlss_live, fsr_live, language);
+                shown(&lines, language);
+                lines
+            });
+            localized[Language::English.index()].join("|")
         };
         // RTX 40/50: DLSS frame generation.
         let mut rtx40 = facts(true, true, true, false);
         rtx40.adapter = "NVIDIA GeForce RTX 4070".into();
         let rtx40 = lines(rtx40, true, false);
         assert!(rtx40.contains("FRAME GEN: DLSS, SUPPORTED") && !rtx40.contains("MOD"), "{rtx40}");
+        // The Try build: an RTX 40 is pointed at FG UNLOCK for 3X-6X, an RTX 50 needs nothing.
+        assert!(rtx40.contains("F1 > FG UNLOCK") && !rtx40.contains("NEEDS AN RTX 50"), "{rtx40}");
+        let mut rtx50 = facts(true, true, true, false);
+        rtx50.adapter = "NVIDIA GeForce RTX 5080".into();
+        assert!(lines(rtx50, true, false).contains("NEEDS AN RTX 50"));
         // A supported card can still be rejected for an OS or driver requirement (for
         // example, HAGS being disabled); do not misreport that as incompatible hardware.
         let mut rtx40_unavailable = facts(true, false, false, false);
@@ -925,6 +962,22 @@ mod tests {
         // RTX 20/30 on Series X with DLSS: FSR 3 instead, 2X.
         let rtx30 = lines(facts(true, false, true, false), false, true);
         assert!(rtx30.contains("NOT ON THIS CARD") && rtx30.contains("FSR 3") && rtx30.contains("2X"));
+        let fallback = [
+            "USING AMD FSR 3 FRAME GEN INSTEAD: 2X AT MOST",
+            "已改用 AMD FSR 3 帧生成，最高 2X",
+            "改用 AMD FSR 3 畫格生成，最高 2X",
+            "GEN. CON AMD FSR 3 EN SU LUGAR, HASTA 2X",
+        ];
+        for language in Language::ALL {
+            let lines = notice_of(&facts(true, false, true, false), false, true, language);
+            assert!(lines.iter().any(|line| line == language.text(fallback)), "{lines:?}");
+        }
+        // FSR 3 selected in F1, offered as an alternative, or DLSS failing to start.
+        let mut chosen = facts(true, false, true, false);
+        chosen.dlss_fg_asked = false;
+        assert!(lines(chosen, false, true).contains("CHOSEN IN F1"));
+        assert!(lines(facts(true, false, true, false), false, false).contains("FRAME GEN TYPE"));
+        assert!(lines(facts(true, true, true, false), false, false).contains("DLSS DID NOT START"));
         // No DLSS at all, either console: FSR 3 stays off, as the title stops without DLSS.
         for series_s in [false, true] {
             let amd = lines(facts(false, false, false, series_s), false, false);
@@ -943,7 +996,9 @@ mod tests {
         // Nothing asked: nothing said.
         let mut quiet = facts(true, true, true, false);
         (quiet.dlss_fg_asked, quiet.fsr_asked) = (false, false);
-        assert!(notice_of(&quiet, false, false).is_empty());
+        for language in Language::ALL {
+            assert!(notice_of(&quiet, false, false, language).is_empty());
+        }
     }
 
     #[test]

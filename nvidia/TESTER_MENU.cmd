@@ -12,7 +12,9 @@ set "LAST="
 :menu
 cls
 echo =============================================
-echo   VIctory NVIDIA  -  TESTER MENU
+echo    /\_/\    VIctory NVIDIA  -  TESTER MENU
+echo   ( o.o )   Try build by MfDev0, with the cat
+echo    ^> ^^ ^<
 echo =============================================
 echo   Game: %GAME%
 if defined LAST echo   Last run ended with code %LAST%
@@ -30,13 +32,16 @@ echo   R  Make tester report (zip)
 echo   L  Open the logs folder
 echo   C  Check DLSS and frame gen here
 echo   D  Reset F1 settings (kept as .bak)
+echo   T  Try: left-out PRs, cat, Discord
 echo   Q  Quit
 echo.
 echo   In game: F1 settings, F3 stats panel.
+call :cat_fact
 echo.
-choice /c 123456789RLCDQ /n /m "Pick: "
+choice /c 123456789RLCDTQ /n /m "Pick: "
 set "PICK=%ERRORLEVEL%"
-if "%PICK%"=="14" goto :end
+if "%PICK%"=="15" goto :end
+if "%PICK%"=="14" goto :try
 if "%PICK%"=="13" goto :reset
 if "%PICK%"=="12" goto :check
 if "%PICK%"=="11" goto :logs
@@ -112,6 +117,105 @@ exit /b 1
 
 :end
 exit /b 0
+
+rem ---- T: the left-out PRs, the language, the cat, Discord ----
+rem Each is an F1 row too; picking one here flips it in the same file.
+:try
+cls
+call :current VICTORY_FACE_ADMIT 1 F1
+call :current VICTORY_MOVIE_FG_GATE 1 F2
+call :current VICTORY_INDIRECT_WIDE_NVIDIA 1 F3
+call :current VICTORY_BVH_FAULTS_ALL 16384 F4
+call :current VICTORY_CAT 0 F5
+call :current VICTORY_CAT_FACTS 0 F6
+call :current VICTORY_DISCORD 0 F7
+call :current VICTORY_KEYMAP "a=20,lt=A2" F8
+set "LANG_NOW=en"
+call :value VICTORY_MENU_LANGUAGE LANG_NOW
+echo =============================================
+echo   TRY: LEFT-OUT PRS, CAT, DISCORD
+echo   (each also in F1; off = as before)
+echo =============================================
+echo   1  PR 669  black face admit     %F1%
+echo   2  PR 669  movie FG pause       %F2%
+echo   3  PR 1005 wide dispatch (NV)   %F3%
+echo   4  PR 1008 RT fault pages       %F4%
+echo   5  Cat mode (=^^.^^=)             %F5%
+echo   6  Cat facts                    %F6%
+echo   7  Discord: Playing GTA VI      %F7%
+echo   8  PR 982  Space=A, Ctrl=LT     %F8%
+echo   9  PR 1056 menu language        %LANG_NOW%
+echo   B  Back
+echo.
+echo   Cat and Discord are on by default:
+echo   for them ON means not set to 0.
+echo.
+choice /c 123456789B /n /m "Flip: "
+set "PICK=%ERRORLEVEL%"
+if "%PICK%"=="10" goto :menu
+if "%PICK%"=="9" goto :language
+if "%PICK%"=="8" call :flip VICTORY_KEYMAP "a=20,lt=A2" "%F8%"
+if "%PICK%"=="1" call :flip VICTORY_FACE_ADMIT 1 "%F1%"
+if "%PICK%"=="2" call :flip VICTORY_MOVIE_FG_GATE 1 "%F2%"
+if "%PICK%"=="3" call :flip VICTORY_INDIRECT_WIDE_NVIDIA 1 "%F3%"
+if "%PICK%"=="4" call :flip VICTORY_BVH_FAULTS_ALL 16384 "%F4%"
+if "%PICK%"=="5" call :flip_off VICTORY_CAT "%F5%"
+if "%PICK%"=="6" call :flip_off VICTORY_CAT_FACTS "%F6%"
+if "%PICK%"=="7" call :flip_off VICTORY_DISCORD "%F7%"
+goto :try
+
+:language
+echo.
+echo   1 English  2 Simplified Chinese
+echo   3 Traditional Chinese  4 Spanish
+echo   5 Auto (as Windows)
+choice /c 12345 /n /m "Language: "
+set "PICK=%ERRORLEVEL%"
+if "%PICK%"=="1" call :save_choice VICTORY_MENU_LANGUAGE en
+if "%PICK%"=="2" call :save_choice VICTORY_MENU_LANGUAGE zh-CN
+if "%PICK%"=="3" call :save_choice VICTORY_MENU_LANGUAGE zh-TW
+if "%PICK%"=="4" call :save_choice VICTORY_MENU_LANGUAGE es
+if "%PICK%"=="5" call :save_choice VICTORY_MENU_LANGUAGE auto
+goto :try
+
+rem %1 the setting, %2 its value when it is the odd one out, %3 where ON or OFF goes.
+rem A setting off unless %2 (the PRs): ON when it holds %2. A setting on unless 0
+rem (%2 is 0: the cat, Discord): OFF when it holds 0.
+:current
+set "CUR="
+call :value %~1 CUR
+if "%~2"=="0" (
+  if "%CUR%"=="0" (set "%~3=OFF") else (set "%~3=ON")
+) else (
+  if "%CUR%"=="%~2" (set "%~3=ON") else (set "%~3=OFF")
+)
+goto :eof
+
+rem The last value of %1 in the settings file, into the variable %2.
+:value
+if not exist "%SETTINGS%" goto :eof
+for /f "usebackq tokens=1,* delims==" %%A in ("%SETTINGS%") do if /i "%%A"=="%~1" set "%~2=%%B"
+goto :eof
+
+:flip
+rem The value is quoted: call splits on = and , (PR 982's keys).
+if /i "%~3"=="ON" (call :save_choice %~1 "") else (call :save_choice %~1 "%~2")
+goto :eof
+
+:flip_off
+if /i "%~2"=="ON" (call :save_choice %~1 0) else (call :save_choice %~1 "")
+goto :eof
+
+rem One of the cat's facts, picked at random.
+:cat_fact
+set /a "FACT=%RANDOM% %% 6"
+if "%FACT%"=="0" echo   Cat fact: cats sleep 12-16 hours a day.
+if "%FACT%"=="1" echo   Cat fact: a group of cats is a clowder.
+if "%FACT%"=="2" echo   Cat fact: 32 muscles in each ear.
+if "%FACT%"=="3" echo   Cat fact: cats purr at 25 to 150 Hz.
+if "%FACT%"=="4" echo   Cat fact: in F1, PET THE CAT. Do it.
+if "%FACT%"=="5" echo   Cat fact: the cat knows a cheat code.
+goto :eof
 
 rem ---- shared: victory.exe, the home folder, the game ----
 :find_all

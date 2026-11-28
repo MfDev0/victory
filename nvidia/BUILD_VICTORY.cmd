@@ -8,6 +8,11 @@ rem   BUILD_VICTORY.cmd test     also runs the unit tests of the launcher
 setlocal EnableExtensions DisableDelayedExpansion
 cd /d "%~dp0"
 title VIctory - build
+echo.
+echo    /\_/\    VIctory NVIDIA Try build
+echo   ( o.o )   by MfDev0 - the cat is watching
+echo    ^> ^^ ^<    you compile. No pressure.
+echo.
 where cargo >nul 2>nul
 if errorlevel 1 (
   echo Rust is not installed or not on PATH.
@@ -35,6 +40,7 @@ if /i "%~1"=="test" (
 copy /y "target\release\victory.exe" "%~dp0victory.exe" >nul
 echo.
 echo Built: %~dp0victory.exe
+echo The cat approves =^^.^^=  (F1 in game: PET THE CAT)
 echo Next: TESTER_MENU.cmd (or put victory.exe beside your
 echo game_scarlett_master.exe and double-click it).
 echo NVIDIA's DLSS files download on the first start.

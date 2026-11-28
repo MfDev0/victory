@@ -42,7 +42,11 @@
 
 This is VIctory-NVIDIA `63b902f` with the diner face fix (PR #33, corrected),
 13 more pull requests, FG UNLOCK (3x-6x on RTX 20/30/40, from
-MfDev0/dlss-unlocked-), a crash report zip and a tester menu. Build it with
+MfDev0/dlss-unlocked-), a crash report zip and a tester menu. The left-out
+PRs (#669, #1005, #1008, #982's keymap) are in F1 as TRY PR rows, off until
+you turn them on; #1056's menu languages are in. There is also a cat =^.^=
+(F1 PET THE CAT, and a cheat code) and a Discord status, "Playing Grand Theft
+Auto VI". Build it with
 `BUILD_VICTORY.cmd`, then start `TESTER_MENU.cmd`. After a problem, send the
 zip from `MAKE_REPORT.cmd` (it is in `Downloads\VIctory-reports`). Details
 and switches: [TRY-NOTES.md](TRY-NOTES.md).
@@ -107,7 +111,12 @@ and switches: [TRY-NOTES.md](TRY-NOTES.md).
 **In the game**
 
 - **F1** brings up the settings menu (arrow keys pick and change, Enter does
-  it): DLSS, frame generation, frame rate cap and more.
+  it): DLSS, frame generation, frame rate cap and more. **LANGUAGE** switches
+  the menu, stats panel, FPS line and on-screen notices between English,
+  Simplified Chinese, Traditional Chinese and Spanish. The choice is saved
+  automatically. English is the default. **AUTO (WINDOWS)** follows the first
+  preferred Windows display language, with English as the fallback. Chinese
+  requires a Windows font with Chinese glyphs.
 - **F3** shows the stats panel (frame rate, frame generation, draws, GPU and
   memory numbers).
 - **GTA V keys and mouse**, off by default: **F1, GTA V KEYS AND MOUSE, ON**,

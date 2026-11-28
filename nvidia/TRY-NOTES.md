@@ -4,7 +4,7 @@ This folder is [trustno1-coder/VIctory-NVIDIA](https://github.com/trustno1-coder
 at `63b902f` (tag v2026.11.28.01, the newest when this was made). The fixes,
 pull requests and tester features below are added on top. None of it was
 built or run here: it is source for you to build (`BUILD_VICTORY.cmd`) and
-test.
+test. Everything (the menu, the cat, Discord) is built into `victory.exe`.
 
 ## Build and start
 
@@ -91,12 +91,77 @@ through MFG Unlocker. MFG Unlocker is someone else's mod
 (github.com/dashdogy/MFG-Unlocker, MIT), downloaded from its release and
 checked against its published SHA-256. NVIDIA does not support it.
 
-## Not taken
+## Left-out pull requests: try them
 
-- PR #669 (VRAM first-upload admission): untested, and its one review was
-  done with the feature off. It also changes Bink video and the instruction
-  translator.
-- PR #1005: NVIDIA dispatches wider than 65,535 groups are past what D3D12
-  allows.
-- PRs #1008 (ray tracing only), #982 and #1056 (large launcher and overlay
-  rewrites).
+These pull requests were not taken as they are. Each one is here behind its
+own switch, and the switch is **off** by default, so the game behaves as before
+until you turn it on. Turn one on in **F1** (the `TRY PR ...` rows), in
+`TESTER_MENU.cmd` > `T`, or with `--set NAME=VALUE`. Each needs a restart.
+
+| F1 row | Pull request | Switch (on) | What it changes |
+|---|---|---|---|
+| TRY PR 669: BLACK FACE ADMIT | #669 | `VICTORY_FACE_ADMIT=1` | When video memory is full, a face texture that was never uploaded is still let in, up to 80% of the card. Headroom: `VICTORY_FACE_HEADROOM_MB` (256), `VICTORY_TEXTURE_FIRST_UPLOAD_MB` (128). Try it if faces draw black. |
+| TRY PR 669: MOVIE FG PAUSE | #669 | `VICTORY_MOVIE_FG_GATE=1` | DLSS frame generation pauses while a Bink movie plays, so its black bars don't flicker. FSR 3 is not paused, as in #669. |
+| TRY PR 1005: WIDE DISPATCH | #1005 | `VICTORY_INDIRECT_WIDE_NVIDIA=1` | Indirect dispatches wider than 65,535 groups run in one go on NVIDIA too, as on AMD. D3D12 does not allow more than 65,535, so this may fail on your driver. |
+| TRY PR 1008: RT FAULT PAGES | #1008 | `VICTORY_BVH_FAULTS_ALL=16384` | With RAY TRACING on, up to 16,384 faulted pages are copied for the BVH (the old limit is 2,048). |
+| TRY PR 982: PAD KEYS | #982 (keymap only) | `VICTORY_KEYMAP=a=20,lt=A2` | The keyboard pad's keys can be changed. The F1 choice puts A on Space and LT on left Ctrl. Any `control=hexkey` list works, for example `b=1B` (controls: a b x y menu view up down left right lb rb ls rs lt rt ls_up ls_down ls_left ls_right rs_up rs_down rs_left rs_right). It does nothing while GTA V KEYS AND MOUSE is on. |
+| LANGUAGE | #1056 | `VICTORY_MENU_LANGUAGE=zh-CN` / `zh-TW` / `es` / `auto` | F1 and F3 in Chinese or Spanish, using the Windows fonts. English stays the default. This one is merged in full: it is only the menu. |
+
+Not taken at all: #982's Tauri launcher (4,500 lines of new crates; crates.io
+was not reachable to check them) and #1056's bundled fonts (it uses the fonts
+Windows already has).
+
+## Our touch: the cat =^.^=
+
+- **F1 title.** It reads `SETTINGS =^.^= MEOW`, and the about line credits
+  MfDev0.
+- **The walking cat.** It walks along the FPS line in the room left over, and
+  blinks now and then.
+- **PET THE CAT =^.^=.** A new F1 line. Each press gets a different reaction.
+- **Cat facts.** Each time F1 opens, a line without its own help shows a cat
+  fact. F1 CAT FACTS OFF (`VICTORY_CAT_FACTS=0`) turns them off.
+- **The cheat.** With F1 open, press up, up, down, down, left, right, left,
+  right: the cat parade starts (three cats). The same code again stops it.
+- **The cmds.** The cat is also in `BUILD_VICTORY.cmd`, in `TESTER_MENU.cmd`
+  (with a random cat fact) and in the console when the game starts.
+- **Turning it off.** F1 CAT MODE OFF (`VICTORY_CAT=0`) is the plain menu.
+
+## Discord: "Playing Grand Theft Auto VI"
+
+While the game runs, your Discord profile shows the status below. You need the
+Discord desktop app running.
+
+- **Title.** Playing Grand Theft Auto VI.
+- **Picture.** The GTA VI cover.
+- **Text.** "Vice City, on PC (yes, really)", plus a cat line that changes
+  every minute.
+- **Time.** How long you have been playing.
+- **Buttons.** Two, for your friends:
+  - **Play on PC too.** It opens a cat playing Never Gonna Give You Up. Yes,
+    it's a rickroll.
+  - **Pet the cat =^.^=.** It opens keyboard cat.
+
+How it works:
+
+- `victory play` starts a small hidden helper (`victory discord --watch
+  <pid>`). It talks to Discord through its local pipe and closes with the game.
+  It never runs inside the game, and it needs no extra crate.
+- **The name.** The "Playing" text is the name of the Discord application.
+  The default one is Neptune_VI's (`1575009406737846333`; the idea and the
+  pipe code are from github.com/zm0kiemedia/Neptune_VI, GPL-3.0).
+- **Your own name.** To be sure of the name, make an application called
+  "Grand Theft Auto VI" at discord.com/developers. Then set
+  `VICTORY_DISCORD_APP=<its application id>`. If Discord refuses the picture
+  from the web, the helper uses the application's `logo` image instead, so
+  upload one under that name.
+- **Off.** F1 DISCORD STATUS OFF, or `VICTORY_DISCORD=0`.
+
+## TESTER_MENU.cmd > T
+
+`T` is a submenu with the switches above:
+
+- 1 to 8: the left-out PRs, cat mode, cat facts and Discord. Each press flips
+  one and shows ON or OFF. They are saved the way F1 saves them, so F1 and
+  the cmd always agree.
+- 9: the menu language.
+- B: back.
