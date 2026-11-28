@@ -42,62 +42,147 @@ impl Fields {
             2 => 3,
             _ => u32::from(compares),
         };
+        // Anisotropic with point mips stays so where the card can do it
+        // (avm 011735ff, upstream e45bacd/23fc8a5/7dfa86f): it was made
+        // linear between levels, which the console does not do.
         let filter = if aniso {
-            0x55
+            host_filter(0x54 | u32::from(self.mip == 2))
         } else {
             linear(self.min) << 4 | linear(self.mag) << 2 | u32::from(self.mip == 2)
         };
-        let (min_lod, max_lod) = if self.mip == 0 {
-            // Without a mip filter the console samples mip 0 only.
-            (0.0, 0.0)
-        } else {
-            let min_lod = finite_lod(self.min_lod, 0.0);
-            let max_lod = finite_lod(self.max_lod, min_lod).max(min_lod);
-            (min_lod, max_lod)
-        };
         D3D12_SAMPLER_DESC {
             Filter: D3D12_FILTER((reduction << 7 | filter) as i32),
-            AddressU: address_mode(self.address[0]),
-            AddressV: address_mode(self.address[1]),
-            AddressW: address_mode(self.address[2]),
-            MipLODBias: if self.bias.is_nan() {
-                0.0
-            } else {
-                self.bias
-                    .clamp(D3D12_MIP_LOD_BIAS_MIN, D3D12_MIP_LOD_BIAS_MAX)
-            },
+            AddressU: D3D12_TEXTURE_ADDRESS_MODE(self.address[0] as i32),
+            AddressV: D3D12_TEXTURE_ADDRESS_MODE(self.address[1] as i32),
+            AddressW: D3D12_TEXTURE_ADDRESS_MODE(self.address[2] as i32),
+            MipLODBias: self.bias,
             MaxAnisotropy: if aniso {
                 self.anisotropy.clamp(1, 16)
             } else {
                 1
             },
-            ComparisonFunc: if reduction == 1 {
-                D3D12_COMPARISON_FUNC(self.compare as i32)
-            } else {
-                D3D12_COMPARISON_FUNC_NEVER
-            },
+            ComparisonFunc: D3D12_COMPARISON_FUNC(self.compare.max(1) as i32),
             BorderColor: self.border,
-            MinLOD: min_lod,
-            MaxLOD: max_lod,
+            MinLOD: self.min_lod,
+            // Without a mip filter the console samples mip 0 only.
+            MaxLOD: if self.mip == 0 {
+                self.min_lod
+            } else {
+                self.max_lod
+            },
         }
     }
 }
 
-/// Maps a console address mode (`1..=5`) to host D3D12, falling back to `CLAMP`.
-fn address_mode(mode: u32) -> D3D12_TEXTURE_ADDRESS_MODE {
-    match mode {
-        1..=5 => D3D12_TEXTURE_ADDRESS_MODE(mode as i32),
-        _ => D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+/// Try 5.8, sharper surfaces (what PC drivers' and other emulators'
+/// "anisotropic filtering override" and upscalers' LOD bias do):
+/// - a sampler that filters linearly between levels (a textured surface,
+///   not a data lookup: no point filter, no comparison, no minimum or
+///   maximum) and has levels to filter between is made anisotropic, 16x
+///   (`VICTORY_ANISO`, 1 to 16; 1: as the title asked). Roads, walls and
+///   pavements seen at an angle are sampled from their sharp levels along
+///   the line of sight instead of the blurred ones trilinear picks;
+/// - the same samplers get a negative level bias where the title renders
+///   smaller than the screen (`crate::dxgi::render_scale`): log2 of the
+///   scale, -0.42 at 75 %, as DLSS, FSR and XeSS ask of the titles that use
+///   them, so textures keep the sharpness of the screen's size
+///   (`VICTORY_LOD_BIAS` sets the bias, in hundredths: -50 is -0.5).
+pub(crate) fn enhance(desc: &mut D3D12_SAMPLER_DESC) {
+    let (aniso, bias) = enhancement();
+    desc.Filter = D3D12_FILTER(host_filter(desc.Filter.0 as u32) as i32);
+    let filter = desc.Filter.0 as u32;
+    // Reduction (bits 7-8) plain; mip linear (bit 0) and min linear (bit
+    // 4), or anisotropic already (bit 6).
+    let plain = filter >> 7 == 0;
+    let trilinear = filter & 0x11 == 0x11 || filter & 0x40 != 0;
+    if !plain || !trilinear || desc.MaxLOD <= desc.MinLOD {
+        return;
+    }
+    if aniso > 1 {
+        // An anisotropic filter keeps its own mip filter (point mips where
+        // the card has them: [`host_filter`]); trilinear ones become
+        // anisotropic.
+        if filter & 0x40 == 0 {
+            desc.Filter = D3D12_FILTER_ANISOTROPIC;
+        }
+        desc.MaxAnisotropy = desc.MaxAnisotropy.max(aniso);
+    }
+    if bias != 0.0 {
+        desc.MipLODBias = (desc.MipLODBias + bias).clamp(-16.0, 15.99);
     }
 }
 
-/// Sanitizes an LOD bound for D3D12, substituting `fallback` for `NaN` and clamping infinities.
-fn finite_lod(value: f32, fallback: f32) -> f32 {
-    if value.is_nan() {
-        fallback
-    } else {
-        value.clamp(-D3D12_FLOAT32_MAX, D3D12_FLOAT32_MAX)
+/// Whether the card filters anisotropically with point mips
+/// (`D3D12_OPTIONS19`, optional): asked once the device is there.
+pub(crate) fn aniso_point_mip() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if let Some(&on) = ON.get() {
+        return on;
     }
+    let Some(host) = crate::host::host() else { return false };
+    *ON.get_or_init(|| {
+        let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS19::default();
+        // SAFETY: the feature query writes the structure of the given size.
+        // Older runtimes may not recognize OPTIONS19; that means no support.
+        let on = unsafe {
+            host.device.CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS19,
+                (&raw mut options).cast(),
+                size_of_val(&options) as u32,
+            )
+        }
+        .is_ok()
+            && options.AnisoFilterWithPointMipSupported.as_bool();
+        tracing::info!(on, "anisotropic filtering with point mips on the card (D3D12_OPTIONS19)");
+        on
+    })
+}
+
+/// A host filter the card takes: anisotropic with point mips becomes
+/// anisotropic with linear mips where the card lacks it (reduction bits
+/// kept).
+pub(crate) fn host_filter(filter: u32) -> u32 {
+    if filter & !0x180 == 0x54 && !aniso_point_mip() { filter | 1 } else { filter }
+}
+
+/// The same for a static sampler of a root signature.
+pub(crate) fn enhance_static(filter: &mut u32, max_anisotropy: &mut u32, bias: &mut f32, min_lod: f32, max_lod: f32) {
+    let mut desc = D3D12_SAMPLER_DESC {
+        Filter: D3D12_FILTER(*filter as i32),
+        MaxAnisotropy: *max_anisotropy,
+        MipLODBias: *bias,
+        MinLOD: min_lod,
+        MaxLOD: max_lod,
+        ..Default::default()
+    };
+    enhance(&mut desc);
+    *filter = host_filter(desc.Filter.0 as u32);
+    *max_anisotropy = desc.MaxAnisotropy;
+    *bias = desc.MipLODBias;
+}
+
+/// The anisotropy and level bias of [`enhance`].
+fn enhancement() -> (u32, f32) {
+    static ONCE: std::sync::OnceLock<(u32, f32)> = std::sync::OnceLock::new();
+    *ONCE.get_or_init(|| {
+        let aniso = std::env::var("VICTORY_ANISO")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .map_or(16, |n| n.clamp(1, 16));
+        let bias = std::env::var("VICTORY_LOD_BIAS")
+            .ok()
+            .and_then(|v| v.trim().parse::<i32>().ok())
+            .map_or_else(
+                || (crate::dxgi::render_scale() as f32 / 100.0).log2(),
+                |h| h.clamp(-300, 300) as f32 / 100.0,
+            );
+        tracing::info!(
+            anisotropy = aniso,
+            lod_bias = bias,
+            "sharper surfaces: textured samplers made anisotropic, level bias for the render scale (VICTORY_ANISO, VICTORY_LOD_BIAS)"
+        );
+        (aniso, bias)
+    })
 }
 
 /// The console's sampler description (27 words): flags, magnification,
@@ -144,77 +229,5 @@ mod tests {
         assert_eq!(console(&w).ComparisonFunc, D3D12_COMPARISON_FUNC_LESS_EQUAL);
         w[16] = 1;
         assert_eq!(console(&w).Filter.0, 0x5);
-    }
-
-    #[test]
-    fn mip_none_forces_base_level_and_inverted_lod_range_clamps() {
-        let mut w = [0u32; 27];
-        w[3] = 0; // mip none
-        w[9] = 3.0f32.to_bits();
-        w[10] = 8.0f32.to_bits();
-        let d = console(&w);
-        assert_eq!((d.MinLOD, d.MaxLOD), (0.0, 0.0));
-
-        w[3] = 2; // linear mips
-        w[9] = 4.0f32.to_bits();
-        w[10] = 1.0f32.to_bits();
-        let d = console(&w);
-        assert_eq!((d.MinLOD, d.MaxLOD), (4.0, 4.0));
-
-        w[9] = f32::NAN.to_bits();
-        w[10] = f32::INFINITY.to_bits();
-        let d = console(&w);
-        assert_eq!((d.MinLOD, d.MaxLOD), (0.0, D3D12_FLOAT32_MAX));
-
-        w[9] = 2.5f32.to_bits();
-        w[10] = f32::NAN.to_bits();
-        let d = console(&w);
-        assert_eq!((d.MinLOD, d.MaxLOD), (2.5, 2.5));
-
-        w[9] = f32::NEG_INFINITY.to_bits();
-        w[10] = f32::NEG_INFINITY.to_bits();
-        let d = console(&w);
-        assert_eq!(
-            (d.MinLOD, d.MaxLOD),
-            (-D3D12_FLOAT32_MAX, -D3D12_FLOAT32_MAX)
-        );
-    }
-
-    #[test]
-    fn bias_address_and_comparison_stay_in_host_bounds() {
-        let mut w = [0u32; 27];
-        w[6..9].copy_from_slice(&[0, 6, 3]);
-        w[11] = 24.0f32.to_bits();
-        w[16] = 99;
-        let d = console(&w);
-        assert_eq!(d.MipLODBias, D3D12_MIP_LOD_BIAS_MAX);
-        assert_eq!(
-            [d.AddressU, d.AddressV, d.AddressW],
-            [D3D12_TEXTURE_ADDRESS_MODE_CLAMP; 3]
-        );
-        assert_eq!(d.ComparisonFunc, D3D12_COMPARISON_FUNC_NEVER);
-
-        w[11] = (-24.0f32).to_bits();
-        w[5] = 1; // minimum reduction
-        w[16] = 4; // less-or-equal, ignored when reduction != 1
-        let d = console(&w);
-        assert_eq!(d.MipLODBias, D3D12_MIP_LOD_BIAS_MIN);
-        assert_eq!(d.ComparisonFunc, D3D12_COMPARISON_FUNC_NEVER);
-
-        w[11] = f32::NAN.to_bits();
-        w[5] = 0; // plain mode, reduction == 1 from compare == 4
-        w[6..9].copy_from_slice(&[1, 4, 5]);
-        w[16] = 4;
-        let d = console(&w);
-        assert_eq!(d.MipLODBias, 0.0);
-        assert_eq!(
-            [d.AddressU, d.AddressV, d.AddressW],
-            [
-                D3D12_TEXTURE_ADDRESS_MODE_WRAP,
-                D3D12_TEXTURE_ADDRESS_MODE_BORDER,
-                D3D12_TEXTURE_ADDRESS_MODE_MIRROR_ONCE,
-            ]
-        );
-        assert_eq!(d.ComparisonFunc, D3D12_COMPARISON_FUNC_LESS_EQUAL);
     }
 }

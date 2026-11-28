@@ -1,34 +1,167 @@
 //! Translated shaders kept on disk (decision 0003): under the configured
-//! cache folder, keyed by the container's content and by the VIctory build
-//! that translated it (the BLAKE3 of our executable), so a rebuilt
-//! translator never serves an old translation. Entries go through
+//! cache folder, keyed by the container's content and by the translator
+//! that translated it (its source fingerprint and settings, see `build`), so
+//! a changed translator never serves an old translation. Entries go through
 //! `victory-pipeline`'s content-addressed cache, which writes them
 //! atomically; an entry that does not read back is translated again.
 //!
 //! The entry is our own encoding of [`HostShader`]: a field added to it
 //! must be added to `encode` and `decode` too (entries of older builds
 //! are ignored anyway).
+//!
+//! Try 6.16, the disk: each build of the translator keys its translations
+//! afresh (`build`), so every new version translated the title's 25,746
+//! shaders again (the 6.15 prepare log: "2879 already cached, 25749
+//! translated now") and filed them beside every older version's, which
+//! nothing read again and nothing removed: about a gigabyte more of the
+//! cache folder with each update. Now each build key has a folder of its
+//! own (`b-` and 16 hex digits) with a stamp of when a run last used it,
+//! and a while after the start the folders of all but the
+//! `VICTORY_SHADER_CACHE_KEEP` (2 unless set; 0: none removed) most
+//! recently used builds go, as do the entries of the flat layout before
+//! 6.16 (folders of two hex digits). A folder used in the last hour stays
+//! whatever its rank.
 
-use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use victory_pipeline::{Cache, Converter};
 use victory_shader::emit::{HostShader, StaticSampler, UserData};
+use victory_shader::resource::RootIndexedView;
 use victory_shader::{HwStage, RootType};
 
-static CACHE: OnceLock<Cache> = OnceLock::new();
+/// The cache folder ([`use_shader_cache`]), absolute.
+static ROOT: OnceLock<PathBuf> = OnceLock::new();
+/// The caches of the build keys met so far, each in its folder under
+/// [`ROOT`] ([`cache_for`]): one or two a run.
+static CACHES: Mutex<Vec<([u8; 32], Cache)>> = Mutex::new(Vec::new());
 static HITS: AtomicU64 = AtomicU64::new(0);
 static MISSES: AtomicU64 = AtomicU64::new(0);
 
-/// Keeps translated shaders in `dir` from now on.
+/// The file in a build's folder that says when a run last used it
+/// (seconds since 1970, as text).
+const USED: &str = "used";
+
+/// A folder used within this many seconds is never removed.
+const RECENT_S: u64 = 3600;
+
+/// Keeps translated shaders in `dir` from now on, each build's in a folder
+/// of its own; the folders of older builds are removed a while after the
+/// start ([`prune`]).
 pub fn use_shader_cache(dir: PathBuf) {
-    match Cache::open(dir) {
-        Ok(cache) => {
-            let _ = CACHE.set(cache);
+    match Cache::open(&dir) {
+        Ok(_) => {
+            let root = std::path::absolute(&dir).unwrap_or(dir);
+            if ROOT.set(root.clone()).is_ok() {
+                prune_later(root);
+            }
         }
         Err(e) => tracing::warn!(error = %e, "no shader cache"),
     }
+}
+
+/// How many of the most recently used builds' folders are kept
+/// (`VICTORY_SHADER_CACHE_KEEP`; 2 unless set; 0: nothing is removed).
+fn keep() -> usize {
+    std::env::var("VICTORY_SHADER_CACHE_KEEP").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(2)
+}
+
+/// The folder of a build key's translations.
+fn build_folder(build: &[u8; 32]) -> String {
+    let mut name = String::from("b-");
+    for b in &build[..8] {
+        name.push_str(&format!("{b:02x}"));
+    }
+    name
+}
+
+fn now_s() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// The cache of `build`'s translations, its folder made and stamped as
+/// used at the first ask of this run; none without a cache folder.
+fn cache_for(build: &[u8; 32]) -> Option<Cache> {
+    let root = ROOT.get()?;
+    let mut caches = CACHES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, cache)) = caches.iter().find(|(b, _)| b == build) {
+        return Some(cache.clone());
+    }
+    let dir = root.join(build_folder(build));
+    match Cache::open(&dir) {
+        Ok(cache) => {
+            let _ = std::fs::write(dir.join(USED), now_s().to_string());
+            caches.push((*build, cache.clone()));
+            Some(cache)
+        }
+        Err(e) => {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| tracing::warn!(error = %e, dir = %dir.display(), "no shader cache folder for this build"));
+            None
+        }
+    }
+}
+
+/// [`prune`] on a thread of its own, 90 seconds after the start: by then
+/// this run has stamped the folders it uses, and removing a gigabyte of
+/// small files takes nothing from the loading.
+fn prune_later(root: PathBuf) {
+    let keep = keep();
+    if keep == 0 {
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("victory-shader-cache-tidy".into()).spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(90));
+        let (builds, flat) = prune(&root, keep, now_s());
+        if builds + flat > 0 {
+            tracing::info!(
+                builds,
+                flat,
+                keep,
+                "shader cache: translations of older builds removed (VICTORY_SHADER_CACHE_KEEP; each version translates the game's shaders again)"
+            );
+        }
+    });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "no thread to remove older builds' translations");
+    }
+}
+
+/// Removes from the cache folder `root` the folders of builds other than
+/// the `keep` most recently used and those used in the last hour (`now`
+/// in seconds since 1970), and the folders of the flat layout before Try
+/// 6.16 (two hex digits). Other files and folders stay. Returns how many
+/// build folders and flat folders went.
+fn prune(root: &Path, keep: usize, now: u64) -> (usize, usize) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return (0, 0);
+    };
+    let mut builds = Vec::new();
+    let mut flat = 0;
+    for e in entries.flatten() {
+        let path = e.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.len() == 2 && name.bytes().all(|b| b.is_ascii_hexdigit()) {
+            if std::fs::remove_dir_all(&path).is_ok() {
+                flat += 1;
+            }
+        } else if name.len() == 18 && name.starts_with("b-") && name[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
+            let used = std::fs::read_to_string(path.join(USED)).ok().and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(0);
+            builds.push((used, path));
+        }
+    }
+    builds.sort_by_key(|b| std::cmp::Reverse(b.0));
+    let mut gone = 0;
+    for (used, path) in builds.into_iter().skip(keep) {
+        if now.saturating_sub(used) > RECENT_S && std::fs::remove_dir_all(&path).is_ok() {
+            gone += 1;
+        }
+    }
+    (gone, flat)
 }
 
 /// Shaders found in the cache and translated since the start.
@@ -36,66 +169,234 @@ pub(crate) fn counts() -> (u64, u64) {
     (HITS.load(Ordering::Relaxed), MISSES.load(Ordering::Relaxed))
 }
 
-/// What identifies this build: the BLAKE3 of our executable file and of
-/// the translation settings it runs with (the loop and spin-wait limits,
-/// which `VICTORY_SHADER_LOOP_LIMIT` and `VICTORY_SHADER_SPIN_LIMIT` change
-/// at run time, and whether the host device runs 64-lane waves, known once
-/// it is created).
-fn build() -> &'static [u8; 32] {
-    static BUILD: OnceLock<[u8; 32]> = OnceLock::new();
-    BUILD.get_or_init(|| {
-        let exe = std::env::current_exe().and_then(std::fs::read);
-        let limit = victory_shader::emit::loop_limit();
-        if limit != victory_shader::emit::DEFAULT_LOOP_LIMIT {
-            tracing::warn!(
-                limit,
-                "VICTORY_SHADER_LOOP_LIMIT: translated loops stop sooner"
-            );
-        }
-        let spin = victory_shader::emit::spin_limit();
-        if spin != victory_shader::emit::DEFAULT_SPIN_LIMIT {
-            tracing::warn!(
-                spin,
-                "VICTORY_SHADER_SPIN_LIMIT: spin-wait loops stop at this count"
-            );
-        }
-        match exe {
-            Ok(mut bytes) => {
-                bytes.extend_from_slice(&limit.to_le_bytes());
-                bytes.extend_from_slice(&spin.to_le_bytes());
-                bytes.push(u8::from(victory_shader::emit::host_wave64()));
-                *blake3::hash(&bytes).as_bytes()
+/// What identifies the translation, besides the container: the shader
+/// crate's fingerprint (its source, every switch it reads, the host facts the
+/// device gave it, the loop limit, barrier waits and clean-up passes) and
+/// this file's encoding of the result. Not the whole executable any more: a
+/// rebuild that leaves the translator alone keeps its translations (each new
+/// build used to translate the title's thousands of shaders again, which kept
+/// the first minutes of every test run short of pipelines).
+/// `VICTORY_SHADER_CACHE_KEY=exe` restores the old key (the executable's hash).
+/// Worked out per lookup, so a translation made before the device said its
+/// wave size is never filed under the later key.
+fn build() -> [u8; 32] {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    let limit = victory_shader::emit::loop_limit();
+    if limit != victory_shader::emit::DEFAULT_LOOP_LIMIT {
+        WARNED.call_once(|| tracing::warn!(limit, "VICTORY_SHADER_LOOP_LIMIT: translated loops stop sooner"));
+    }
+    static EXE: OnceLock<Option<[u8; 32]>> = OnceLock::new();
+    let exe = EXE.get_or_init(|| {
+        if std::env::var_os("VICTORY_SHADER_CACHE_KEY").is_some_and(|v| v == "exe") {
+            match std::env::current_exe().and_then(std::fs::read) {
+                Ok(bytes) => Some(*blake3::hash(&bytes).as_bytes()),
+                Err(e) => {
+                    tracing::warn!(error = %e, "cannot read our executable; keying on the translator");
+                    None
+                }
             }
-            Err(e) => {
-                // Without it no entry can be trusted: a fresh key per run.
-                tracing::warn!(error = %e, "cannot read our executable; shader cache unused");
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default();
-                *blake3::hash(&now.as_nanos().to_le_bytes()).as_bytes()
-            }
+        } else {
+            None
         }
-    })
+    });
+    let mut h = blake3::Hasher::new();
+    h.update(b"victory shader cache key 2\0");
+    if let Some(exe) = exe {
+        h.update(exe);
+    }
+    h.update(&victory_shader::emit::translation_fingerprint());
+    // The list this file reads for the translator (`translate_listed`): the
+    // shader crate's fingerprint does not see it.
+    h.update(b"VICTORY_WAVE_WIDE_ONLY=");
+    if let Some(value) = std::env::var_os("VICTORY_WAVE_WIDE_ONLY") {
+        h.update(value.as_encoded_bytes());
+    }
+    h.update(b"\0VICTORY_WAVE_PAIRS_ONLY=");
+    h.update(wave_pairs_only().as_bytes());
+    h.update(include_bytes!("shader_cache.rs"));
+    *h.finalize().as_bytes()
+}
+
+/// The water's two tiled light programs (transmission volumetrics), whose
+/// wave64 sums the paired form replays exactly.
+pub(crate) const WATER_PAIRS: &str = "5dc3b25986622949,6f225b641c5b0708";
+
+/// `VICTORY_WAVE_PAIRS_ONLY` as it holds for this run: the programs
+/// translated in the paired wave64 form. Try 6.22: unset means the water's
+/// two programs ([`WATER_PAIRS`], with `VICTORY_WAVE_PAIRS_FP32` defaulting to
+/// `non-ieee-rne-ftz`); set it to another list, or empty or `none` for none.
+pub(crate) fn wave_pairs_only() -> String {
+    std::env::var("VICTORY_WAVE_PAIRS_ONLY").unwrap_or_else(|_| WATER_PAIRS.to_owned())
+}
+
+/// A container translated with the wave-wide form allowed when its hash is
+/// on `VICTORY_WAVE_WIDE_ONLY` (16-hex-digit hashes as the log names
+/// shaders, comma separated; unset or empty: none). Off by default: two
+/// programs that moved to that form were in a submission that lost the card
+/// (runs 121-124, not proven the cause). After commit a416e392 of pull
+/// request #823 (Felix2180), whose list is the four refused programs
+/// 5dc3b25986622949 and 6f225b641c5b0708 (the water's transmission
+/// volumetrics), 369cbe906ea72764 (particle visibility) and
+/// 2cc4c197ee29e291 (the reflection pass's tiling). For runs and the offline
+/// warm-up alike, which share the cache.
+fn translate_listed(c: &[u8]) -> Result<HostShader, String> {
+    static LIST: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    let list = LIST.get_or_init(|| {
+        std::env::var("VICTORY_WAVE_WIDE_ONLY")
+            .unwrap_or_default()
+            .split(',')
+            .map(|h| h.trim().to_lowercase())
+            .filter(|h| !h.is_empty() && h != "none")
+            .collect()
+    });
+    let hash = blake3::hash(c).to_hex();
+    let wide = list.iter().any(|h| hash.starts_with(h.as_str()));
+    static PAIRS: OnceLock<Vec<String>> = OnceLock::new();
+    let pairs = PAIRS.get_or_init(|| {
+        wave_pairs_only()
+            .split(',')
+            .map(|h| h.trim().to_ascii_lowercase())
+            .filter(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+            .collect()
+    });
+    let paired = listed_pair_hash(hash.as_str(), pairs);
+    if paired {
+        tracing::info!(hash = &hash.as_str()[..16], "translated in the paired wave64 form (VICTORY_WAVE_PAIRS_ONLY)");
+    }
+    let program = program_hash(c);
+    let done = victory_shader::emit::for_program(&program, || victory_shader::emit::with_wave_wide(wide, || victory_shader::emit::with_wave_pairs(paired, || victory_shader::emit::translate(c))))
+        .map_err(|e| e.to_string());
+    // Try 6.19: the retry form a console wave64 program was made in, said
+    // where the translation is made (a run, `victory prepare` or the
+    // warm-up; a translation from the cache says nothing). The approximate
+    // forms give each half of a console wave its own cross-lane results: a
+    // tiled program's light list or depth range per half-tile, light in
+    // blocks on the screen.
+    let form = victory_shader::emit::take_form();
+    if done.is_ok()
+        && let Some(form) = form
+    {
+        if form.contains("APPROXIMATE") {
+            let n = APPROXIMATE.fetch_add(1, Ordering::Relaxed) + 1;
+            tracing::warn!(
+                hash = %program,
+                form = %form,
+                so_far = n,
+                "shader translated APPROXIMATELY: each half of a console wave has its own cross-lane results (a tiled program's \
+                 light list or depth range per half-tile: light in blocks); VICTORY_WAVE_WIDE_FIRST=1 tries the wave-wide form \
+                 first for groups of one console wave"
+            );
+        } else {
+            tracing::info!(hash = %program, form = %form, "shader translated in a retry form for 32-lane waves");
+        }
+    }
+    done
+}
+
+fn listed_pair_hash(hash: &str, list: &[String]) -> bool {
+    hash.get(..16).is_some_and(|prefix| list.iter().any(|h| h == prefix))
+}
+
+#[cfg(test)]
+#[test]
+fn listed_pair_hash_matches_only_complete_log_hashes() {
+    let list = vec!["5dc3b25986622949".to_owned(), "6f225b641c5b0708".to_owned()];
+    assert!(listed_pair_hash("5dc3b25986622949ffffffffffffffffffffffffffffffff", &list));
+    assert!(listed_pair_hash("6f225b641c5b0708", &list));
+    assert!(!listed_pair_hash("5dc3b25986622940", &list));
+    assert!(!listed_pair_hash("5dc3", &list));
+    assert!(!listed_pair_hash("5dc3b25986622949", &["5dc3".to_owned()]));
+}
+
+#[cfg(test)]
+#[test]
+fn listed_pair_cache_key_changes() {
+    const CHILD: &str = "VICTORY_CACHE_PAIRS_KEY_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        println!("pairs-cache-key={}", blake3::Hash::from_bytes(build()));
+        return;
+    }
+    let key = |list: &str| {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["listed_pair_cache_key_changes", "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("VICTORY_WAVE_PAIRS", "0")
+            .env("VICTORY_WAVE_PAIRS_ONLY", list)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap().lines()
+            .find_map(|line| line.split_once("pairs-cache-key=").map(|(_, key)| key.to_owned()))
+            .expect("the child printed its cache key")
+    };
+    let off = key("");
+    assert_ne!(off, key("5dc3b25986622949"));
+    assert_ne!(key("5dc3b25986622949"), key("6f225b641c5b0708"));
+    assert_eq!(off, key(""));
+}
+
+/// Try 6.19: translations made in an approximate form ([`translate_listed`]),
+/// since the start.
+pub(crate) static APPROXIMATE: AtomicU64 = AtomicU64::new(0);
+
+/// The offline warm-up (`victory translate --warm`): `container` is
+/// translated into the cache unless it is there already. `Ok(true)`: it
+/// was translated now. Needs [`use_shader_cache`] and the same host facts
+/// the run will have (`victory_shader::emit::translation_fingerprint`).
+pub fn warm(container: &[u8]) -> Result<bool, String> {
+    let build = build();
+    let cache = cache_for(&build).ok_or("no shader cache")?;
+    let ran = AtomicBool::new(false);
+    let translate = |c: &[u8]| {
+        ran.store(true, Ordering::Relaxed);
+        translate_listed(c)
+    };
+    cached(&cache, &build, victory_shader::emit::host_uses_wave32(), container, translate).map(|_| ran.load(Ordering::Relaxed))
+}
+
+/// Fills the cache ahead of a run (`victory prepare`): the container's
+/// translation as this executable makes it in a run on this PC (the host's
+/// wave width and view heap limit, found as a run finds them), taken from
+/// the cache or made and stored now. Why it does not translate, if not
+/// (Try 6.23: `victory prepare` lists the reasons by count).
+///
+/// A rebuilt VIctory keys its translations afresh, so the first world
+/// visit after every update translated each shader again while the title
+/// waited for it (draws dropped, objects see-through); prepared, a run
+/// finds them all.
+pub fn prepare(container: &[u8]) -> Result<(), String> {
+    crate::descriptor::host::probe_view_limit();
+    host_shader(container).map(|_| ())
+}
+
+/// Translations found in the cache and made, since the start.
+pub fn prepared_counts() -> (u64, u64) {
+    counts()
 }
 
 /// The translation of a console shader container, from the cache when
 /// there is one.
 pub(crate) fn host_shader(container: &[u8]) -> Result<HostShader, String> {
-    let translate = |c: &[u8]| victory_shader::emit::translate(c).map_err(|e| e.to_string());
-    match CACHE.get() {
-        Some(cache) => cached(cache, build(), container, translate),
+    let translate = translate_listed;
+    let build = build();
+    match cache_for(&build) {
+        Some(cache) => cached(&cache, &build, victory_shader::emit::host_uses_wave32(), container, translate),
         None => translate(container),
     }
 }
 
-/// The cache entry's converter: the build and the container in, the
+/// The hash the log names a shader by (`pipeline.rs`: the first 16 hex
+/// digits of the container's BLAKE3), which the translator's per-program
+/// switches take (`victory_shader::emit::for_program`).
+fn program_hash(container: &[u8]) -> String {
+    blake3::hash(container).to_hex()[..16].to_owned()
+}
+
+/// The cache entry's converter: the build, host wave mode and container in, the
 /// encoded translation out. `ran` tells a miss from a hit.
 struct Translate<F> {
     translate: F,
     ran: AtomicBool,
-    /// The translation it ran worked: a cache error after that is the
-    /// cache's (it could not keep the entry), not the shader's.
-    translated: AtomicBool,
 }
 
 impl<F: Fn(&[u8]) -> Result<HostShader, String> + Send + Sync> Converter for Translate<F> {
@@ -103,13 +404,12 @@ impl<F: Fn(&[u8]) -> Result<HostShader, String> + Send + Sync> Converter for Tra
         "shader.dxil"
     }
     fn version(&self) -> u32 {
-        // The build fingerprint in the input does the versioning.
-        1
+        // Version 1 did not distinguish translations made for 32-lane hosts.
+        2
     }
     fn convert(&self, input: &[u8]) -> anyhow::Result<Vec<u8>> {
         self.ran.store(true, Ordering::Relaxed);
-        let shader = (self.translate)(&input[32..]).map_err(anyhow::Error::msg)?;
-        self.translated.store(true, Ordering::Relaxed);
+        let shader = (self.translate)(&input[33..]).map_err(anyhow::Error::msg)?;
         Ok(encode(&shader))
     }
 }
@@ -117,26 +417,19 @@ impl<F: Fn(&[u8]) -> Result<HostShader, String> + Send + Sync> Converter for Tra
 fn cached(
     cache: &Cache,
     build: &[u8; 32],
+    wave32: bool,
     container: &[u8],
     translate: impl Fn(&[u8]) -> Result<HostShader, String> + Send + Sync,
 ) -> Result<HostShader, String> {
-    let input = [&build[..], container].concat();
+    let input = [&build[..], &[u8::from(wave32)], container].concat();
     let converter = Translate {
         translate,
         ran: AtomicBool::new(false),
-        translated: AtomicBool::new(false),
     };
     for _ in 0..2 {
-        let path = match cache.get_or_convert(&converter, &input) {
-            Ok(path) => path,
-            // A full disk, a file in the way, a scanner holding the new
-            // entry: the shader is still good, only not kept.
-            Err(e) if converter.translated.load(Ordering::Relaxed) => {
-                tracing::warn!(error = format!("{e:#}"), "shader cache entry not written");
-                break;
-            }
-            Err(e) => return Err(format!("{e:#}")),
-        };
+        let path = cache
+            .get_or_convert(&converter, &input)
+            .map_err(|e| format!("{e:#}"))?;
         if let Some(shader) = std::fs::read(&path).ok().and_then(|b| decode(&b)) {
             let (counter, what) = if converter.ran.load(Ordering::Relaxed) {
                 (&MISSES, "translated and cached")
@@ -229,9 +522,26 @@ fn encode(s: &HostShader) -> Vec<u8> {
             word(&mut out, v);
         }
     }
-    for slots in [&s.root_cbvs, &s.root_srvs] {
+    for slots in [&s.root_cbvs, &s.root_srvs, &s.root_uavs] {
         word(&mut out, slots.len() as u32);
         out.extend(slots);
+    }
+    word(&mut out, s.root_indexed_views.len() as u32);
+    for view in &s.root_indexed_views {
+        for value in [
+            u32::from(view.table_slot),
+            u32::from(view.constant_slot),
+            view.constant_dword,
+            view.byte_offset,
+            u32::from(view.shift),
+        ] {
+            word(&mut out, value);
+        }
+    }
+    word(&mut out, s.half_views.len() as u32);
+    for &(slot, dword) in &s.half_views {
+        word(&mut out, u32::from(slot));
+        word(&mut out, dword);
     }
     out
 }
@@ -289,6 +599,23 @@ fn decode(bytes: &[u8]) -> Option<HostShader> {
     }
     let root_cbvs = r.list()?;
     let root_srvs = r.list()?;
+    let root_uavs = r.list()?;
+    let n = r.word()? as usize;
+    let mut root_indexed_views = Vec::with_capacity(n.min(256));
+    for _ in 0..n {
+        root_indexed_views.push(RootIndexedView {
+            table_slot: u8::try_from(r.word()?).ok()?,
+            constant_slot: u8::try_from(r.word()?).ok()?,
+            constant_dword: r.word()?,
+            byte_offset: r.word()?,
+            shift: u8::try_from(r.word()?).ok().filter(|&s| s < 32)?,
+        });
+    }
+    let n = r.word()? as usize;
+    let mut half_views = Vec::with_capacity(n.min(256));
+    for _ in 0..n {
+        half_views.push((u8::try_from(r.word()?).ok()?, r.word()?));
+    }
     r.0.is_empty().then_some(HostShader {
         stage,
         dxil,
@@ -297,6 +624,9 @@ fn decode(bytes: &[u8]) -> Option<HostShader> {
         static_samplers,
         root_cbvs,
         root_srvs,
+        root_uavs,
+        root_indexed_views,
+        half_views,
     })
 }
 
@@ -323,6 +653,15 @@ mod tests {
             ])],
             root_cbvs: vec![2],
             root_srvs: vec![0, 3],
+            root_uavs: vec![1],
+            root_indexed_views: vec![RootIndexedView {
+                table_slot: 1,
+                constant_slot: 2,
+                constant_dword: 3,
+                byte_offset: 32,
+                shift: 5,
+            }],
+            half_views: vec![(0, 8), (4, 0)],
         }
     }
 
@@ -337,43 +676,90 @@ mod tests {
             runs.fetch_add(1, Ordering::Relaxed);
             Ok(shader())
         };
-        assert_eq!(cached(&cache, &build, container, translate), Ok(shader()));
-        assert_eq!(cached(&cache, &build, container, translate), Ok(shader()));
+        assert_eq!(cached(&cache, &build, false, container, translate), Ok(shader()));
+        assert_eq!(cached(&cache, &build, false, container, translate), Ok(shader()));
         assert_eq!(runs.load(Ordering::Relaxed), 1, "the second came from disk");
 
         // Another build translates again.
-        assert_eq!(cached(&cache, &[8; 32], container, translate), Ok(shader()));
+        assert_eq!(cached(&cache, &[8; 32], false, container, translate), Ok(shader()));
         assert_eq!(runs.load(Ordering::Relaxed), 2);
 
         // A damaged entry is a miss, translated and stored again.
         for e in walk(dir.path()) {
             std::fs::write(e, b"VSH1 broken").unwrap();
         }
-        assert_eq!(cached(&cache, &build, container, translate), Ok(shader()));
+        assert_eq!(cached(&cache, &build, false, container, translate), Ok(shader()));
         assert_eq!(runs.load(Ordering::Relaxed), 3);
-        assert_eq!(cached(&cache, &build, container, translate), Ok(shader()));
+        assert_eq!(cached(&cache, &build, false, container, translate), Ok(shader()));
         assert_eq!(runs.load(Ordering::Relaxed), 3);
 
         // Failures are not stored.
         let fail = |_: &[u8]| Err::<HostShader, _>("unsupported".to_owned());
-        assert!(cached(&cache, &build, b"other", fail).is_err());
+        assert!(cached(&cache, &build, false, b"other", fail).is_err());
     }
 
     #[test]
-    fn a_cache_that_cannot_keep_an_entry_still_gives_the_translation() {
+    fn reopening_the_cache_preserves_each_host_wave_translation() {
         let dir = tempfile::tempdir().unwrap();
-        let cache = Cache::open(dir.path()).unwrap();
-        // A file where every entry's folder would go: nothing can be written.
-        for shard in 0..=0xff_u8 {
-            std::fs::write(dir.path().join(format!("{shard:02x}")), b"").unwrap();
+        let input = b"synthetic wave reduction";
+        let runs = AtomicU64::new(0);
+        for wave32 in [false, true, false, true] {
+            let cache = Cache::open(dir.path()).unwrap();
+            let mut expected = shader();
+            expected.stage = HwStage::Cs;
+            expected.dxil.push(if wave32 { 32 } else { 64 });
+            let result = cached(&cache, &[7; 32], wave32, input, |container| {
+                assert_eq!(container, input);
+                runs.fetch_add(1, Ordering::Relaxed);
+                Ok(expected.clone())
+            });
+            assert_eq!(result, Ok(expected));
         }
-        let translate = |_: &[u8]| Ok(shader());
-        let container = b"a console container".as_slice();
-        assert_eq!(cached(&cache, &[7; 32], container, translate), Ok(shader()));
-        // A shader that does not translate still fails, with its own error.
-        let fail = |_: &[u8]| Err::<HostShader, _>("unsupported".to_owned());
-        let error = cached(&cache, &[7; 32], b"other", fail).unwrap_err();
-        assert!(error.contains("unsupported"), "{error}");
+        assert_eq!(runs.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn older_builds_folders_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let now = 1_000_000;
+        let make = |name: &str, used: Option<u64>| {
+            let d = root.join(name);
+            std::fs::create_dir_all(d.join("ab")).unwrap();
+            std::fs::write(d.join("ab").join("cdef"), b"VSH1").unwrap();
+            if let Some(used) = used {
+                std::fs::write(d.join(USED), used.to_string()).unwrap();
+            }
+        };
+        make("b-0000000000000001", Some(now));
+        make("b-0000000000000002", Some(now - 10_000));
+        make("b-0000000000000003", Some(now - 20_000));
+        make("b-0000000000000004", Some(now - 100));
+        make("b-0000000000000005", None);
+        // The flat layout before 6.16, and things that are not the cache's.
+        std::fs::create_dir_all(root.join("7f")).unwrap();
+        std::fs::write(root.join("7f").join("0123"), b"VSH1").unwrap();
+        std::fs::create_dir_all(root.join("pipelines")).unwrap();
+        std::fs::write(root.join("notes.txt"), b"x").unwrap();
+
+        assert_eq!(prune(root, 1, now), (3, 1));
+        let left: std::collections::BTreeSet<String> =
+            std::fs::read_dir(root).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        // The newest, and the one used within the hour, stay.
+        let want: std::collections::BTreeSet<String> =
+            ["b-0000000000000001", "b-0000000000000004", "pipelines", "notes.txt"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(left, want);
+        // Nothing more to do.
+        assert_eq!(prune(root, 1, now), (0, 0));
+    }
+
+    #[test]
+    fn a_build_folder_is_named_by_its_key() {
+        let mut key = [0u8; 32];
+        key[0] = 0xab;
+        key[7] = 0x01;
+        key[8] = 0xff;
+        assert_eq!(build_folder(&key), "b-ab00000000000001");
     }
 
     fn walk(dir: &std::path::Path) -> Vec<PathBuf> {

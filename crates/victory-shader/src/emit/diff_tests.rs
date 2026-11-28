@@ -142,7 +142,7 @@ const CASES: &[(&str, &str)] = &[
         }"#,
     ),
     // 16-bit outputs and inputs (one value per dword with the 2020
-    // compiler; Grand Theft Auto VI's two per dword cannot be compiled
+    // compiler; the title's two per dword cannot be compiled
     // here) and the front face.
     (
         "16-bit varyings and front face",
@@ -355,7 +355,7 @@ const CS_CASES: &[(&str, &str)] = &[
                 uint4(w * 7 + h, l + asuint(r), n * 5 + ns * 3 + st, b + raw.Load(4 * (i & 31))));
         }"#,
     ),
-    // Typed loads (`tbuffer_load_format_*`, Grand Theft Auto VI's vertex
+    // Typed loads (`tbuffer_load_format_*`, the title's vertex
     // fetch) convert by the format the instruction names: the PC reads the
     // same bytes through typed views in those formats. Channels past the
     // format's read (0, 0, 0, 1); a byte format at unaligned offsets.
@@ -588,7 +588,7 @@ const MS_CASES: &[(&str, u32, &str)] = &[
             }
         }"#,
     ),
-    // Two waves per group, as Grand Theft Auto VI's mesh programs run: the
+    // Two waves per group, as the title's mesh programs run: the
     // second wave's lanes are threads 64-127.
     (
         "two waves",
@@ -606,7 +606,7 @@ const MS_CASES: &[(&str, u32, &str)] = &[
             tris[i] = i & 1 ? uint3(c + 1, c + 10, c + 9) : uint3(c, c + 1, c + 9);
         }"#,
     ),
-    // Quad reads (DPP quad permutations on the console; Grand Theft Auto VI's
+    // Quad reads (DPP quad permutations on the console; the title's
     // tessellating mesh programs swizzle within quads too).
     (
         "quad reads",
@@ -743,9 +743,6 @@ fn user_data(s: &HostShader, k: &[u32; 4]) -> Vec<u32> {
             (RootType::Table, 3) => 5 * 32,
             // The typed views of `raw` (compute) from 9.
             (RootType::Table, 6) => 9 * 32,
-            // The bytes of the root CBV (slot 4) and SRV (slot 5) bound.
-            (RootType::Descriptor, 4) => 64 * 4,
-            (RootType::Descriptor, 5) => 32 * 4,
             other => panic!("unexpected user data {other:?}"),
         };
     }
@@ -1257,6 +1254,12 @@ fn translated_compute_matches_pc() {
         root_views.extend(cs_c.root_srvs.iter().map(|&s| (s, true)));
         root_views.sort_unstable();
         for (n, (slot, srv)) in root_views.into_iter().enumerate() {
+            // (the table of view kinds of d16 typed accesses through tables:
+            // no integer views here)
+            if srv && slot == super::SLOT_TABLE_STRIDES {
+                roots.push((1 + n as u32, Root::View { srv, data: vec![0u32; 1024] }));
+                continue;
+            }
             assert_eq!(slot, 4 + u8::from(srv), "{name}: root view");
             let data = if srv {
                 root_srv.clone()
@@ -1265,7 +1268,24 @@ fn translated_compute_matches_pc() {
             };
             roots.push((1 + n as u32, Root::View { srv, data }));
         }
-        let ours = host.dispatch(&root_t, &pso_t, &dispatch(roots));
+        // A buffer of halves the translated program moves as unsigned
+        // integers is shown to it as its unsigned twin, as the host does
+        // (`HostShader::half_views`); the PC program keeps the float view.
+        let twins: Vec<View> = views
+            .iter()
+            .map(|&v| match v {
+                View::HalfUav(n) if !cs_c.half_views.is_empty() => View::HalfUintUav(n),
+                v => v,
+            })
+            .collect();
+        let ours = host.dispatch(
+            &root_t,
+            &pso_t,
+            &Dispatch {
+                views: &twins,
+                ..dispatch(roots)
+            },
+        );
         if name.starts_with("terminates") {
             match ours {
                 Ok(_) => eprintln!("{name}: finished"),

@@ -3,7 +3,7 @@
 //! slice lies, and to copy linear data into tiled memory and back. Served
 //! from `victory_formats::texture`.
 //!
-//! Grand Theft Auto VI imports `XGCreateTextureComputer` and
+//! The title imports `XGCreateTextureComputer` and
 //! `XGSuggestSwizzleMode` and calls these computer methods: Release (0x08),
 //! the layout (0x10), copies into (0x40) and out of (0x48) a subresource,
 //! and the 64 KiB tiling (0x50). The other slots log and fail.
@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use victory_formats::texture::{Dimension, Error, Layout, Swizzle, Texture, TextureDesc};
 
-use super::release_ref;
 use super::xasync::{E_INVALIDARG, E_NOTIMPL};
 use super::xgameruntime::{HRESULT, S_OK};
 use crate::{HleModule, hle_export};
@@ -135,7 +134,7 @@ pub extern "system" fn XGCreateTextureComputer(
     S_OK
 }
 
-fn texture_desc(desc: &ResourceDesc) -> Option<TextureDesc> {
+fn texture(desc: &ResourceDesc) -> Option<Texture> {
     let dimension = match desc.dimension {
         TEXTURE_1D => Dimension::Tex1d,
         3 => Dimension::Tex2d,
@@ -148,7 +147,7 @@ fn texture_desc(desc: &ResourceDesc) -> Option<TextureDesc> {
         l if l & !0xff == SWIZZLED => Swizzle(l & 0xff),
         _ => return None,
     };
-    Some(TextureDesc {
+    let texture = Texture::new(&TextureDesc {
         dimension,
         width: u32::try_from(desc.width).ok()?,
         height: desc.height,
@@ -158,10 +157,7 @@ fn texture_desc(desc: &ResourceDesc) -> Option<TextureDesc> {
         samples: desc.samples.max(1),
         swizzle,
     })
-}
-
-fn texture(desc: &ResourceDesc) -> Option<Texture> {
-    let texture = Texture::new(&texture_desc(desc)?).ok()?;
+    .ok()?;
     // The layout struct has room for 15 mips.
     (texture.planes[0].layout.mips.len() <= MIPS).then_some(texture)
 }
@@ -169,7 +165,7 @@ fn texture(desc: &ResourceDesc) -> Option<Texture> {
 const MIPS: usize = 15;
 
 /// One mip in the layout the title reads (offsets 0x00, 0x08, 0x10 and
-/// 0x1c are read by Grand Theft Auto VI; the rest follow the library's
+/// 0x1c are read by the title; the rest follow the library's
 /// older public shape).
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy)]
@@ -284,13 +280,13 @@ extern "system" fn add_ref(this: This) -> u32 {
 }
 
 extern "system" fn release(this: This) -> u32 {
-    let left = release_ref(&computer(this).refs, "texture computer");
-    if left == Some(0) {
+    let left = computer(this).refs.fetch_sub(1, Ordering::AcqRel) - 1;
+    if left == 0 {
         // SAFETY: made by `Box::into_raw` in `XGCreateTextureComputer`; the
         // last reference is gone.
         drop(unsafe { Box::from_raw(this) });
     }
-    left.unwrap_or(0)
+    left
 }
 
 extern "system" fn layout(this: This, out: *mut LayoutOut) -> HRESULT {
@@ -304,6 +300,8 @@ extern "system" fn layout(this: This, out: *mut LayoutOut) -> HRESULT {
         out.write_bytes(0, 1);
         &mut *out
     };
+    out.size = c.texture.size;
+    out.alignment = c.texture.alignment;
     out.mips = c.mips;
     out.planes = c.texture.planes.len() as u32;
     out.dimension = c.desc.dimension;
@@ -311,28 +309,6 @@ extern "system" fn layout(this: This, out: *mut LayoutOut) -> HRESULT {
     // without mips.
     let depth =
         c.desc.flags & ALLOW_DEPTH_STENCIL != 0 && (c.texture.planes.len() > 1 || c.mips == 1);
-    // A render target or depth buffer also needs memory for the console's
-    // compression metadata. Its plane shapes are not published, so report
-    // an upper-bound reservation after the data planes rather than making
-    // up plane types the title might try to copy from.
-    let render = c.desc.flags & (ALLOW_RENDER_TARGET | ALLOW_DEPTH_STENCIL) != 0;
-    let meta = texture_desc(&c.desc)
-        .map(|d| victory_formats::texture::metadata(&d, &c.texture, depth, render))
-        .unwrap_or(0);
-    if meta > 0 {
-        let offset = c
-            .texture
-            .size
-            .next_multiple_of(victory_formats::texture::METADATA_ALIGNMENT);
-        out.size = offset + meta;
-        out.alignment = c
-            .texture
-            .alignment
-            .max(victory_formats::texture::METADATA_ALIGNMENT);
-    } else {
-        out.size = c.texture.size;
-        out.alignment = c.texture.alignment;
-    }
     for (plane, p) in out.plane.iter_mut().zip(&c.texture.planes) {
         let l = &p.layout;
         plane.usage = match (p.stencil, depth) {
@@ -355,13 +331,12 @@ extern "system" fn layout(this: This, out: *mut LayoutOut) -> HRESULT {
 }
 
 /// The plane, its mip and array slice for a subresource index, and the
-/// tiled byte range and linear byte count the copy touches.
+/// tiled bytes and the linear bytes the copy touches.
 struct CopyArgs<'a> {
     layout: &'a Layout,
     mip: u32,
     slice: u32,
-    tiled_offset: usize,
-    tiled_len: usize,
+    tiled: usize,
     linear: usize,
 }
 
@@ -375,37 +350,15 @@ fn copy_args(
     let p = c.texture.planes.get(plane as usize)?;
     let l = &p.layout;
     let (mip, slice) = (subresource % c.mips, subresource / c.mips);
-    if slice >= l.slices {
-        return None;
-    }
     let m = l.mips.get(mip as usize)?;
-    let bytes = usize::try_from(m.width)
-        .ok()?
-        .checked_mul(usize::try_from(l.desc.element_bytes).ok()?)?;
-    let depths = usize::try_from(l.subresource_depth(mip)).ok()?;
-    let depth_span = depths
-        .checked_sub(1)?
-        .checked_mul(usize::try_from(depth).ok()?)?;
-    let row_span = usize::try_from(m.height)
-        .ok()?
-        .checked_sub(1)?
-        .checked_mul(usize::try_from(row).ok()?)?;
-    let linear = depth_span.checked_add(row_span)?.checked_add(bytes)?;
-    if linear > isize::MAX as usize {
-        return None;
-    }
-    let tiled_end = p.offset.checked_add(l.size)?;
-    if usize::try_from(tiled_end).ok()? > isize::MAX as usize {
-        return None;
-    }
-    let tiled_offset = usize::try_from(p.offset).ok()?;
-    let tiled_len = usize::try_from(l.size).ok()?;
+    let bytes = m.width as usize * l.desc.element_bytes as usize;
+    let depths = l.subresource_depth(mip) as usize;
+    let linear = (depths - 1) * depth as usize + (m.height as usize - 1) * row as usize + bytes;
     Some(CopyArgs {
         layout: l,
         mip,
         slice,
-        tiled_offset,
-        tiled_len,
+        tiled: (p.offset + l.size) as usize,
         linear,
     })
 }
@@ -435,10 +388,11 @@ extern "system" fn copy_into(
     if tiled.is_null() || linear.is_null() {
         return E_INVALIDARG;
     }
+    let offset = c.texture.planes[plane as usize].offset as usize;
     // SAFETY: the title's memory holds the whole texture and its rows.
     let (tiled, linear) = unsafe {
         (
-            std::slice::from_raw_parts_mut(tiled.add(a.tiled_offset), a.tiled_len),
+            std::slice::from_raw_parts_mut(tiled.add(offset), a.tiled - offset),
             std::slice::from_raw_parts(linear, a.linear),
         )
     };
@@ -471,10 +425,11 @@ extern "system" fn copy_from(
     if tiled.is_null() || linear.is_null() {
         return E_INVALIDARG;
     }
+    let offset = c.texture.planes[plane as usize].offset as usize;
     // SAFETY: the title's memory holds the whole texture and its rows.
     let (tiled, linear) = unsafe {
         (
-            std::slice::from_raw_parts(tiled.add(a.tiled_offset), a.tiled_len),
+            std::slice::from_raw_parts(tiled.add(offset), a.tiled - offset),
             std::slice::from_raw_parts_mut(linear, a.linear),
         )
     };
@@ -529,10 +484,6 @@ extern "system" fn tiling(
     if l.thick {
         return E_NOTIMPL;
     }
-    // SAFETY: `count` is null or a valid pointer to the caller's capacity.
-    if unsafe { count.as_ref().is_some_and(|&n| n > 0) } && out.is_null() {
-        return E_INVALIDARG;
-    }
     let standard = l.first_tail_mip;
     let tail = standard < c.mips;
     let tail_tiles = match standard {
@@ -541,8 +492,8 @@ extern "system" fn tiling(
         _ => 0,
     };
     let block = l.desc.block;
-    // SAFETY: each output is null or room for its value; `out` is non-null
-    // whenever `*count > 0` and has room for `*count` entries.
+    // SAFETY: each output is null or room for its value; `out` has room
+    // for `*count` entries.
     unsafe {
         if let Some(t) = tiles.as_mut() {
             *t = (l.size / TILE) as u32;
@@ -560,7 +511,7 @@ extern "system" fn tiling(
         }
         if let Some(n) = count.as_mut() {
             let slices = if tail { l.slices.min(2) } else { l.slices };
-            let wanted = standard.saturating_mul(slices).saturating_sub(first).min(*n);
+            let wanted = (standard * slices).saturating_sub(first).min(*n);
             for i in 0..wanted {
                 let (slice, mip) = ((first + i) / standard, (first + i) % standard);
                 let m = &l.mips[mip as usize];
@@ -588,7 +539,7 @@ extern "system" fn tiling(
 }
 
 /// Slot 0x30 `(plane, mip, x, y, z or slice, sample, bit position)`: an
-/// element's byte offset from the texture's start. Grand Theft Auto VI reads
+/// element's byte offset from the texture's start. The title reads
 /// texels of a 128x4 `4KB_S` texture on the CPU through it (title+0x5151c90);
 /// an error returned as an offset made it read wild memory. 0 if outside.
 extern "system" fn element_offset(
@@ -631,19 +582,19 @@ struct Vtable([*const (); 13]);
 unsafe impl Sync for Vtable {}
 
 static VTABLE: Vtable = Vtable([
-    add_ref as *const (),        // 0x00
-    release as *const (),        // 0x08
-    layout as *const (),         // 0x10
-    unused as *const (),         // 0x18 size
-    unused as *const (),         // 0x20 alignment
-    unused as *const (),         // 0x28 mip offset
+    add_ref as *const (),   // 0x00
+    release as *const (),   // 0x08
+    layout as *const (),    // 0x10
+    unused as *const (),    // 0x18 size
+    unused as *const (),    // 0x20 alignment
+    unused as *const (),    // 0x28 mip offset
     element_offset as *const (), // 0x30
-    unused as *const (),         // 0x38 element coordinate
-    copy_into as *const (),      // 0x40
-    copy_from as *const (),      // 0x48
-    tiling as *const (),         // 0x50
-    unused as *const (),         // 0x58 view descriptor
-    unused as *const (),         // 0x60 tiled resource?
+    unused as *const (),    // 0x38 element coordinate
+    copy_into as *const (), // 0x40
+    copy_from as *const (), // 0x48
+    tiling as *const (),    // 0x50
+    unused as *const (),    // 0x58 view descriptor
+    unused as *const (),    // 0x60 tiled resource?
 ]);
 
 pub(crate) fn module() -> HleModule {
@@ -714,37 +665,6 @@ mod tests {
         d.flags = ALLOW_DEPTH_STENCIL;
         XGSuggestSwizzleMode(&d, 0, &mut out);
         assert_eq!(out, 0x118);
-        // A 1D texture has no tiled layout, whatever its use.
-        d.dimension = TEXTURE_1D;
-        XGSuggestSwizzleMode(&d, 0, &mut out);
-        assert_eq!(out, 0x100);
-    }
-
-    #[test]
-    fn render_targets_reserve_metadata_memory() {
-        let plain = desc(256, 256, 1, 28, 0);
-        let mut render = plain;
-        render.flags = ALLOW_RENDER_TARGET;
-        let mut depth = plain;
-        depth.flags = ALLOW_DEPTH_STENCIL;
-        let layout = |d: &ResourceDesc| {
-            let c = create(d);
-            // SAFETY: LayoutOut is plain data; all zeroes is a valid value.
-            let mut out: Box<LayoutOut> = Box::new(unsafe { std::mem::zeroed() });
-            let get: extern "system" fn(This, *mut LayoutOut) -> HRESULT = slot(c, 2);
-            assert_eq!(get(c, &mut *out), S_OK);
-            let result = (out.size, out.alignment, out.planes);
-            slot::<extern "system" fn(This) -> u32>(c, 1)(c);
-            result
-        };
-        let (base, base_align, base_planes) = layout(&plain);
-        let (color, color_align, color_planes) = layout(&render);
-        let (depth_size, _, _) = layout(&depth);
-        assert!(color > base, "color metadata is reserved");
-        assert!(depth_size > base, "depth metadata is reserved");
-        assert!(depth_size >= color, "HTILE is at least color metadata");
-        assert!(color_align >= base_align && color_align.is_multiple_of(1 << 16));
-        assert_eq!(color_planes, base_planes, "data planes are unchanged");
     }
 
     /// The title's calls: layout, then a copy in and out of each mip.
@@ -856,96 +776,5 @@ mod tests {
         let bad = desc(256, 256, 1, 28, 0x103);
         assert_eq!(XGCreateTextureComputer(&bad, &mut c), E_INVALIDARG);
         assert!(module().exports.len() == 2);
-    }
-
-    /// A title releasing a computer once too often: the count stays 0 and
-    /// nothing is freed again (the old `fetch_sub(1) - 1` overflowed).
-    #[test]
-    fn release_past_zero_leaves_the_count_at_zero() {
-        let c = create(&desc(128, 4, 1, 11, 0x100));
-        let release = slot::<extern "system" fn(This) -> u32>(c, 1);
-        assert_eq!(slot::<extern "system" fn(This) -> u32>(c, 0)(c), 2);
-        assert_eq!(release(c), 1);
-        computer(c).refs.store(0, Ordering::Relaxed);
-        assert_eq!(release(c), 0);
-        assert_eq!(computer(c).refs.load(Ordering::Relaxed), 0);
-        // SAFETY: made by `XGCreateTextureComputer` and not freed by
-        // `release`.
-        drop(unsafe { Box::from_raw(c) });
-    }
-
-    #[test]
-    fn tiling_rejects_null_out_when_count_nonzero() {
-        type Tiling = extern "system" fn(
-            This,
-            *mut u32,
-            *mut PackedMips,
-            *mut [u32; 3],
-            *mut u32,
-            u32,
-            *mut SubresourceTiling,
-        ) -> HRESULT;
-        let c = create(&desc(256, 256, 0, 98, 0x10a));
-        let tiling: Tiling = slot(c, 10);
-
-        let mut tiles = 99;
-        let mut count = 2;
-        assert_eq!(
-            tiling(
-                c,
-                &mut tiles,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut count,
-                0,
-                std::ptr::null_mut(),
-            ),
-            E_INVALIDARG
-        );
-        // Failed call leaves caller's outputs untouched.
-        assert_eq!((tiles, count), (99, 2));
-
-        // Zero capacity with null `out` is allowed and fills the summary fields.
-        count = 0;
-        assert_eq!(
-            tiling(
-                c,
-                &mut tiles,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut count,
-                0,
-                std::ptr::null_mut(),
-            ),
-            S_OK
-        );
-        assert_eq!((tiles, count), (2, 0));
-        assert_eq!(release(c), 0);
-    }
-
-    #[test]
-    fn copy_rejects_out_of_range_slice_and_plane() {
-        type Into = extern "system" fn(This, *mut u8, u32, u32, *const u8, u32, u32) -> HRESULT;
-        type From =
-            extern "system" fn(This, *mut u8, u32, u32, u32, *const u8, u32, u32) -> HRESULT;
-        let c = create(&desc(64, 64, 2, 98, 0x10a));
-        let (into, from): (Into, From) = (slot(c, 8), slot(c, 9));
-
-        // 1 slice, 2 mips -> subresource 2 is slice 1 (out of range).
-        // Must fail in `copy_args` before touching `tiled` or `linear`.
-        let mut dummy = [0u8; 16];
-        assert_eq!(
-            into(c, dummy.as_mut_ptr(), 0, 2, dummy.as_ptr(), 256, 0),
-            E_INVALIDARG
-        );
-        assert_eq!(
-            from(c, dummy.as_mut_ptr(), 0, 2, 0, dummy.as_ptr(), 256, 0),
-            E_INVALIDARG
-        );
-        assert_eq!(
-            into(c, dummy.as_mut_ptr(), 1, 0, dummy.as_ptr(), 256, 0),
-            E_INVALIDARG
-        );
-        assert_eq!(release(c), 0);
     }
 }

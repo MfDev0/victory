@@ -78,6 +78,52 @@ fn host_export(cache: &OnceLock<Option<usize>>, name: &CStr) -> Option<usize> {
     })
 }
 
+/// The host's serializer refused a description the title made for the
+/// console's, whose serializer takes it (a flag the host runtime does not
+/// know: Windows 10's in-box runtime refuses the directly indexed heap
+/// flags). The title then has a failure and no blob, which its code may
+/// not check, so the refusal is logged with the host's reason (the first
+/// 16). Belobug/VIctory-Belobug-AMD #351, by way of ScarlettPort 1e72650.
+fn note_refusal(hr: HRESULT, flags: u32, error: *mut *mut c_void) {
+    if hr >= 0 {
+        return;
+    }
+    static SAID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if SAID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 16 {
+        return;
+    }
+    // SAFETY: `error` is the title's out pointer, nulled before the host's
+    // call; the host put its blob there or left it null.
+    let blob = (!error.is_null()).then(|| unsafe { *error }).filter(|b| !b.is_null());
+    #[cfg(windows)]
+    let why = blob.and_then(|b| {
+        use windows::Win32::Graphics::Direct3D::ID3DBlob;
+        use windows::core::Interface;
+        // SAFETY: the host's blob, alive until the title releases it.
+        unsafe { ID3DBlob::from_raw_borrowed(&b) }.map(|blob| {
+            // SAFETY: the blob's own buffer, read before it is released.
+            let text = unsafe { std::slice::from_raw_parts(blob.GetBufferPointer().cast::<u8>(), blob.GetBufferSize()) };
+            String::from_utf8_lossy(text).trim_end_matches(['\0', '\n']).to_owned()
+        })
+    });
+    #[cfg(not(windows))]
+    let why = blob.map(|_| String::new());
+    tracing::warn!(
+        hr = format_args!("{hr:#x}"),
+        flags = format_args!("{flags:#x}"),
+        why = why.as_deref().unwrap_or(""),
+        "host refused the title's root signature"
+    );
+}
+
+/// Nulls the title's error out pointer, so a refusal's blob is the host's.
+fn clear(error: *mut *mut c_void) {
+    if !error.is_null() {
+        // SAFETY: the title's out pointer.
+        unsafe { *error = std::ptr::null_mut() };
+    }
+}
+
 fn without_console_flags(desc: Desc) -> Desc {
     if desc.flags & CONSOLE_FLAGS != 0 {
         tracing::debug!(
@@ -107,15 +153,12 @@ pub extern "system" fn serialize(
         tracing::warn!("no host d3d12.dll to serialize root signatures");
         return E_NOTIMPL;
     };
+    let desc = without_console_flags(desc);
+    clear(error);
     // SAFETY: the export has this signature; it takes what the title passed.
-    unsafe {
-        std::mem::transmute::<usize, Serialize>(address)(
-            &without_console_flags(desc),
-            version,
-            blob,
-            error,
-        )
-    }
+    let hr = unsafe { std::mem::transmute::<usize, Serialize>(address)(&desc, version, blob, error) };
+    note_refusal(hr, desc.flags, error);
+    hr
 }
 
 /// `d3d12_xs!D3D12SerializeVersionedRootSignature`.
@@ -137,8 +180,11 @@ pub extern "system" fn serialize_versioned(
         desc: without_console_flags(desc.desc),
         ..desc
     };
+    clear(error);
     // SAFETY: the export has this signature; it takes what the title passed.
-    unsafe { std::mem::transmute::<usize, SerializeVersioned>(address)(&desc, blob, error) }
+    let hr = unsafe { std::mem::transmute::<usize, SerializeVersioned>(address)(&desc, blob, error) };
+    note_refusal(hr, desc.desc.flags, error);
+    hr
 }
 
 type Deserialize =
@@ -147,7 +193,7 @@ type Deserialize =
 /// `d3d12_xs!D3D12CreateRootSignatureDeserializer`: our blobs are the
 /// host's serialization, so the host's deserializer reads them, and its
 /// object (IUnknown, then the description getter) is laid out as the
-/// console's. Grand Theft Auto VI's upscaler asks with the PC interface id.
+/// console's. The title's upscaler asks with the PC interface id.
 pub extern "system" fn create_deserializer(
     blob: *const u8,
     size: usize,
@@ -201,6 +247,25 @@ extern "system" fn query(this: This, iid: *const Iid, out: *mut This) -> HRESULT
 }
 extern "system" fn release(this: This) -> u32 {
     object::release_boxed::<RootSignature>(this)
+}
+
+/// The serialized form of `this` if it is one of our root signatures (its
+/// function table is ours): the device methods 0x1c8 / 0x218 name one by
+/// pointer in a description of the title's. The table word is read through
+/// the kernel first, so a pointer that is not one of ours is never touched.
+#[cfg(windows)]
+pub(crate) fn blob(this: This) -> Option<Vec<u8>> {
+    let mut first = [0u8; 8];
+    if this.is_null() || !crate::host::read_into(this.cast(), &mut first) {
+        return None;
+    }
+    if usize::from_le_bytes(first) != FUNCTIONS.0.as_ptr() as usize {
+        return None;
+    }
+    // SAFETY: one of ours (its table): a live `RootSignature` while the
+    // title holds the description that names it.
+    let root = unsafe { &*this.cast::<RootSignature>() };
+    Some(root.blob.clone())
 }
 
 /// IUnknown 3, object 4, device child 1.

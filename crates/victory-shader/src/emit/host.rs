@@ -62,69 +62,54 @@ fn err(e: windows::core::Error) -> String {
     e.message().to_string()
 }
 
-fn pick_adapter(filter: Option<&str>) -> Result<IDXGIAdapter1, String> {
-    let needle = filter.map(|s| s.trim().to_ascii_lowercase());
-    // SAFETY: plain DXGI enumeration and D3D12 capability probe.
-    unsafe {
-        let factory: IDXGIFactory4 =
-            CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)).map_err(err)?;
-        let factory6 = factory.cast::<IDXGIFactory6>().ok();
-        let mut i = 0u32;
-        loop {
-            let adapter: IDXGIAdapter1 = match &factory6 {
-                Some(f6) => {
-                    match f6.EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE) {
-                        Ok(a) => a,
-                        Err(e) if e.code() == DXGI_ERROR_NOT_FOUND => break,
-                        Err(e) => return Err(err(e)),
-                    }
-                }
-                None => match factory.EnumAdapters1(i) {
-                    Ok(a) => a,
-                    Err(e) if e.code() == DXGI_ERROR_NOT_FOUND => break,
-                    Err(e) => return Err(err(e)),
-                },
-            };
-            i += 1;
-            let desc = adapter.GetDesc1().map_err(err)?;
-            let is_sw = desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0;
-            if let Some(ref want) = needle {
-                let len = desc
-                    .Description
-                    .iter()
-                    .position(|&c| c == 0)
-                    .unwrap_or(desc.Description.len());
-                let name = String::from_utf16_lossy(&desc.Description[..len]).to_ascii_lowercase();
-                if !name.contains(want) {
-                    continue;
-                }
-            } else if is_sw {
-                continue;
-            }
-            if D3D12CreateDevice(
-                &adapter,
-                D3D_FEATURE_LEVEL_12_0,
-                std::ptr::null_mut::<Option<ID3D12Device>>(),
-            )
-            .is_ok()
-            {
-                return Ok(adapter);
-            }
-        }
-        Err(match filter {
-            Some(f) => format!("no D3D12 adapter matching VICTORY_ADAPTER={f:?}"),
-            None => "no hardware D3D12 adapter found".into(),
-        })
-    }
-}
-
 impl Host {
-    /// The high-performance adapter (or `VICTORY_ADAPTER` substring match), or
-    /// WARP with `warp` (or `VICTORY_WARP=1`).
+    #[cfg(test)]
+    pub(super) fn check_hardware_validation(&self) {
+        if std::env::var_os("VICTORY_D3D12_DEBUG").is_none() {
+            return;
+        }
+        let queue: ID3D12InfoQueue = self.device.cast().expect("D3D12 debug layer");
+        let (mut errors, mut warnings) = (0, 0);
+        // SAFETY: storage is aligned for the message and sized for its inline text.
+        unsafe {
+            for i in 0..queue.GetNumStoredMessages() {
+                let mut size = 0;
+                queue.GetMessage(i, None, &mut size).unwrap();
+                let mut storage = vec![0u64; size.div_ceil(8)];
+                let message = storage.as_mut_ptr().cast::<D3D12_MESSAGE>();
+                queue.GetMessage(i, Some(message), &mut size).unwrap();
+                let message = &*message;
+                if message.Severity.0 <= D3D12_MESSAGE_SEVERITY_WARNING.0 {
+                    let text = std::slice::from_raw_parts(message.pDescription, message.DescriptionByteLength);
+                    eprintln!("D3D12 #{}: {}", message.ID.0, String::from_utf8_lossy(text).trim_end_matches('\0'));
+                    if message.Severity == D3D12_MESSAGE_SEVERITY_WARNING { warnings += 1 } else { errors += 1 }
+                }
+            }
+            assert_eq!(queue.GetNumMessagesDiscardedByMessageCountLimit(), 0);
+        }
+        eprintln!("D3D12 hardware validation: {errors} errors, {warnings} warnings");
+        assert_eq!(errors, 0);
+    }
+
+    /// The default adapter, or WARP with `warp` (or `VICTORY_WARP=1`).
     pub fn new(warp: bool) -> Result<Self, String> {
         let warp = warp || std::env::var("VICTORY_WARP").is_ok_and(|v| v == "1");
         // SAFETY: plain D3D12/DXGI calls with valid out pointers.
         unsafe {
+            // `VICTORY_D3D12_DEBUG`: the debug layer, whose messages a
+            // refused pipeline's error then carries.
+            if std::env::var_os("VICTORY_D3D12_DEBUG").is_some() {
+                let mut debug: Option<ID3D12Debug> = None;
+                if D3D12GetDebugInterface(&mut debug).is_ok()
+                    && let Some(debug) = debug
+                {
+                    debug.EnableDebugLayer();
+                    #[cfg(test)]
+                    if !warp && std::env::var_os("VICTORY_NVIDIA_HARDWARE_TESTS").is_some_and(|v| v == "1") {
+                        debug.cast::<ID3D12Debug1>().expect("GPU validation interface").SetEnableGPUBasedValidation(true);
+                    }
+                }
+            }
             let mut device: Option<ID3D12Device> = None;
             if warp {
                 let factory: IDXGIFactory4 =
@@ -132,18 +117,20 @@ impl Host {
                 let adapter: IDXGIAdapter = factory.EnumWarpAdapter().map_err(err)?;
                 D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, &mut device).map_err(err)?;
             } else {
-                let filter = std::env::var("VICTORY_ADAPTER")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty());
-                match pick_adapter(filter.as_deref()) {
-                    Ok(adapter) => {
-                        D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, &mut device)
-                            .map_err(err)?;
-                    }
-                    Err(e) if filter.is_some() => return Err(e),
-                    Err(_) => {
-                        D3D12CreateDevice(None, D3D_FEATURE_LEVEL_12_0, &mut device)
-                            .map_err(err)?;
+                D3D12CreateDevice(None, D3D_FEATURE_LEVEL_12_0, &mut device).map_err(err)?;
+                // A machine without a graphics card gives the software
+                // adapter as its default device (a hosted test runner,
+                // whose first adapter is a display stub that cannot make a
+                // device): that is no hardware device, and the tests that
+                // ask for one skip it, as they do where there is none.
+                if let Some(made) = &device {
+                    let factory: IDXGIFactory4 =
+                        CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)).map_err(err)?;
+                    if let Ok(adapter) = factory.EnumAdapterByLuid::<IDXGIAdapter1>(made.GetAdapterLuid())
+                        && let Ok(desc) = adapter.GetDesc1()
+                        && (desc.Flags & 2 != 0 || (desc.VendorId == 0x1414 && desc.DeviceId == 0x8c))
+                    {
+                        return Err("the default device is the software adapter".to_owned());
                     }
                 }
             }
@@ -202,21 +189,23 @@ impl Host {
                 ShaderVisibility: vis,
             })
             .collect();
-        let mut views: Vec<(u8, bool)> = stages
+        // By slot, then kind: 0 CBV, 1 SRV, 2 UAV.
+        let mut views: Vec<(u8, u8)> = stages
             .iter()
             .flat_map(|(s, _)| {
-                let cbvs = s.root_cbvs.iter().map(|&r| (r, false));
-                cbvs.chain(s.root_srvs.iter().map(|&r| (r, true)))
+                let cbvs = s.root_cbvs.iter().map(|&r| (r, 0));
+                let srvs = s.root_srvs.iter().map(|&r| (r, 1));
+                cbvs.chain(srvs).chain(s.root_uavs.iter().map(|&r| (r, 2)))
             })
             .collect();
         views.sort_unstable();
         views.dedup();
-        for (slot, srv) in views {
+        for (slot, kind) in views {
             params.push(D3D12_ROOT_PARAMETER1 {
-                ParameterType: if srv {
-                    D3D12_ROOT_PARAMETER_TYPE_SRV
-                } else {
-                    D3D12_ROOT_PARAMETER_TYPE_CBV
+                ParameterType: match kind {
+                    1 => D3D12_ROOT_PARAMETER_TYPE_SRV,
+                    2 => D3D12_ROOT_PARAMETER_TYPE_UAV,
+                    _ => D3D12_ROOT_PARAMETER_TYPE_CBV,
                 },
                 Anonymous: D3D12_ROOT_PARAMETER1_0 {
                     Descriptor: D3D12_ROOT_DESCRIPTOR1 {
@@ -228,12 +217,24 @@ impl Host {
                 ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
             });
         }
+        let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS19::default();
+        // SAFETY: the feature query writes the structure of the given size.
+        // Older runtimes may not recognize OPTIONS19; that means no support.
+        let aniso_point_mip_supported = unsafe {
+            self.device.CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS19,
+                (&raw mut options).cast(),
+                size_of_val(&options) as u32,
+            )
+        }
+        .is_ok()
+            && options.AnisoFilterWithPointMipSupported.as_bool();
         let mut samplers = Vec::new();
         for &(s, vis) in stages {
             for (n, d) in s.static_samplers.iter().enumerate() {
                 let [u, v, w] = d.address.map(|a| D3D12_TEXTURE_ADDRESS_MODE(a as i32));
                 samplers.push(D3D12_STATIC_SAMPLER_DESC {
-                    Filter: D3D12_FILTER(d.filter as i32),
+                    Filter: D3D12_FILTER(d.filter_for_host(aniso_point_mip_supported) as i32),
                     AddressU: u,
                     AddressV: v,
                     AddressW: w,
@@ -303,7 +304,34 @@ impl Host {
             ..Default::default()
         };
         // SAFETY: the description points at live data.
-        unsafe { self.device.CreateComputePipelineState(&desc) }.map_err(err)
+        unsafe { self.device.CreateComputePipelineState(&desc) }.map_err(|e| self.explained(e))
+    }
+
+    /// The error with the debug layer's messages since the last call, if
+    /// the layer is on (`VICTORY_D3D12_DEBUG`).
+    fn explained(&self, e: windows::core::Error) -> String {
+        let mut text = err(e);
+        let Ok(queue) = self.device.cast::<ID3D12InfoQueue>() else {
+            return text;
+        };
+        // SAFETY: each message is read into a buffer of the size the queue
+        // asks for, aligned for the message header.
+        unsafe {
+            for i in 0..queue.GetNumStoredMessages() {
+                let mut len = 0usize;
+                let _ = queue.GetMessage(i, None, &mut len);
+                let mut buffer = vec![0u64; len.div_ceil(8)];
+                let message = buffer.as_mut_ptr().cast::<D3D12_MESSAGE>();
+                if queue.GetMessage(i, Some(message), &mut len).is_ok() {
+                    let m = &*message;
+                    let bytes = std::slice::from_raw_parts(m.pDescription, m.DescriptionByteLength.saturating_sub(1));
+                    text.push_str(" | ");
+                    text.push_str(&String::from_utf8_lossy(bytes));
+                }
+            }
+            queue.ClearStoredMessages();
+        }
+        text
     }
 
     /// A graphics pipeline from a vertex and a pixel shader, with float or
@@ -324,6 +352,18 @@ impl Host {
         &self,
         root: &ID3D12RootSignature,
         vs: &[u8],
+        ps: &[u8],
+    ) -> Result<ID3D12PipelineState, String> {
+        self.pipeline_with_gs(root, vs, None, ps)
+    }
+
+    /// As [`Host::pipeline_with`], with a geometry shader between the two
+    /// (the rectangle stage, `rect_list_gs`).
+    pub fn pipeline_with_gs(
+        &self,
+        root: &ID3D12RootSignature,
+        vs: &[u8],
+        gs: Option<&[u8]>,
         ps: &[u8],
     ) -> Result<ID3D12PipelineState, String> {
         let inputs = sig(vs, FourCC::ISG1)?;
@@ -357,6 +397,10 @@ impl Host {
                 pShaderBytecode: ps.as_ptr().cast(),
                 BytecodeLength: ps.len(),
             },
+            GS: gs.map_or(D3D12_SHADER_BYTECODE::default(), |gs| D3D12_SHADER_BYTECODE {
+                pShaderBytecode: gs.as_ptr().cast(),
+                BytecodeLength: gs.len(),
+            }),
             SampleMask: u32::MAX,
             RasterizerState: D3D12_RASTERIZER_DESC {
                 FillMode: D3D12_FILL_MODE_SOLID,
@@ -598,6 +642,9 @@ fn stub(pixel: bool, outputs: Vec<SigElement>) -> HostShader {
         static_samplers: Vec::new(),
         root_cbvs: Vec::new(),
         root_srvs: Vec::new(),
+        root_uavs: Vec::new(),
+        root_indexed_views: Vec::new(),
+        half_views: Vec::new(),
     }
 }
 
@@ -977,6 +1024,7 @@ fn transition(
 
 /// A view in the heap for [`Host::dispatch`].
 #[cfg(test)]
+#[derive(Clone, Copy)]
 pub enum View<'a> {
     /// An RGBA32F texture SRV (width, height, texels).
     Texture(u32, u32, &'a [[f32; 4]]),
@@ -990,6 +1038,9 @@ pub enum View<'a> {
     UintTextureUav(u32, u32),
     /// A typed RGBA16F buffer UAV of this many elements, zeroed.
     HalfUav(u32),
+    /// The same buffer viewed as R16G16B16A16_UINT: what a translated
+    /// program that moves halves is shown ([`super::HostShader::half_views`]).
+    HalfUintUav(u32),
     /// A constant buffer of these dwords.
     Cbv(&'a [u32]),
     /// A buffer SRV over these dwords.
@@ -1029,6 +1080,17 @@ impl Host {
         pso: &ID3D12PipelineState,
         d: &Dispatch,
     ) -> Result<Vec<Vec<u32>>, String> {
+        self.dispatch_repeated(root, pso, d, 1).map(|(output, _)| output)
+    }
+
+    pub(super) fn dispatch_repeated(
+        &self,
+        root: &ID3D12RootSignature,
+        pso: &ID3D12PipelineState,
+        d: &Dispatch,
+        passes: u32,
+    ) -> Result<(Vec<Vec<u32>>, f64), String> {
+        assert!(passes > 0);
         let dev = &self.device;
         // SAFETY: D3D12 calls with descriptions that outlive them; resources
         // stay alive until the fence says the GPU is done.
@@ -1222,12 +1284,18 @@ impl Host {
                         );
                         keep.push(tex);
                     }
-                    View::RawUav(_) | View::HalfUav(_) => {
+                    View::RawUav(_) | View::HalfUav(_) | View::HalfUintUav(_) => {
                         // (dwords, format, elements, flags)
                         let (n, format, elements, flags) = match *v {
                             View::HalfUav(e) => (
                                 2 * e,
                                 DXGI_FORMAT_R16G16B16A16_FLOAT,
+                                e,
+                                D3D12_BUFFER_UAV_FLAG_NONE,
+                            ),
+                            View::HalfUintUav(e) => (
+                                2 * e,
+                                DXGI_FORMAT_R16G16B16A16_UINT,
                                 e,
                                 D3D12_BUFFER_UAV_FLAG_NONE,
                             ),
@@ -1391,7 +1459,44 @@ impl Host {
                 }
             }
             let [x, y, z] = d.groups;
-            list.Dispatch(x, y, z);
+            let timing = if passes > 1 {
+                let mut query: Option<ID3D12QueryHeap> = None;
+                dev.CreateQueryHeap(
+                    &D3D12_QUERY_HEAP_DESC {
+                        Type: D3D12_QUERY_HEAP_TYPE_TIMESTAMP,
+                        Count: 2,
+                        NodeMask: 0,
+                    },
+                    &mut query,
+                ).map_err(err)?;
+                let back = make(
+                    D3D12_HEAP_TYPE_READBACK,
+                    &buffer(16, D3D12_RESOURCE_FLAG_NONE),
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                )?;
+                let query = query.ok_or("no timestamp query heap")?;
+                list.EndQuery(&query, D3D12_QUERY_TYPE_TIMESTAMP, 0);
+                Some((query, back))
+            } else {
+                None
+            };
+            let uav_order = D3D12_RESOURCE_BARRIER {
+                Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
+                Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                    UAV: std::mem::ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER::default()),
+                },
+                ..Default::default()
+            };
+            for pass in 0..passes {
+                if pass != 0 {
+                    list.ResourceBarrier(std::slice::from_ref(&uav_order));
+                }
+                list.Dispatch(x, y, z);
+            }
+            if let Some((query, back)) = &timing {
+                list.EndQuery(query, D3D12_QUERY_TYPE_TIMESTAMP, 1);
+                list.ResolveQueryData(query, D3D12_QUERY_TYPE_TIMESTAMP, 0, 2, back, 0);
+            }
             for (r, size, n, rb) in &uavs {
                 // (Buffers were promoted from the common state by the dispatch.)
                 list.ResourceBarrier(&[transition(
@@ -1445,7 +1550,20 @@ impl Host {
                 out.push(words);
             }
             drop(keep);
-            Ok(out)
+            let ns = if let Some((_, back)) = timing {
+                let mut p = std::ptr::null_mut();
+                back.Map(0, None, Some(&mut p)).map_err(err)?;
+                let [start, end] = *p.cast::<[u64; 2]>();
+                back.Unmap(0, Some(&D3D12_RANGE::default()));
+                if end <= start {
+                    return Err("timestamp batch did not advance".into());
+                }
+                (end - start) as f64 * 1e9 / queue.GetTimestampFrequency().map_err(err)? as f64
+                    / f64::from(passes)
+            } else {
+                0.0
+            };
+            Ok((out, ns))
         }
     }
 }

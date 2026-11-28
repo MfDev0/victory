@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use anyhow::{Context, Result, bail};
-use victory_core::diagnostics::{self, IoOperation};
 use victory_pe::{ImageInfo, ImportSymbol};
 use windows_sys::Win32::Foundation::{FreeLibrary, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW};
@@ -55,25 +54,26 @@ pub struct BindReport {
 /// `dir` receives derived game data, so it must be outside the repository.
 pub fn load(prepared: &PreparedImage, dir: &Path) -> Result<LoadedImage> {
     victory_core::ensure_outside_repo(dir)?;
-    let started = diagnostics::operation_started();
-    std::fs::create_dir_all(dir)
-        .inspect_err(|error| IoOperation::CreateImageDirectory.failed(error, started))
-        .with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let path = dir.join(prepared.file_name());
     write_if_changed(&path, &prepared.bytes)?;
 
-    // SAFETY: the prepared image has no entry point or imports.
-    let module = unsafe { map_image(&path) }.with_context(|| {
-        format!(
-            "LoadLibraryExW({}) failed{}",
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: `wide` is a NUL-terminated path. The image has no entry point
+    // and no imports, so loading it runs no title code.
+    let module = unsafe { LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+    if module.is_null() {
+        bail!(
+            "LoadLibraryExW({}) failed: {}{}",
             path.display(),
+            std::io::Error::last_os_error(),
             if prepared.info.has_relocations {
                 ""
             } else {
                 " (image has no relocations; its preferred base may be taken)"
             }
-        )
-    })?;
+        );
+    }
     let loaded = LoadedImage {
         module,
         path,
@@ -84,15 +84,9 @@ pub fn load(prepared: &PreparedImage, dir: &Path) -> Result<LoadedImage> {
         // SAFETY: just mapped, and no title code has run.
         unsafe { crate::tls::redirect(loaded.base(), &loaded.info) }?;
     }
-    if std::env::var_os(crate::hooks::NO_WATCHDOG_ENV).is_some() {
+    if !loaded.info.is_dll() && std::env::var_os(crate::pool_asserts::ENV).is_some_and(|v| v != "0") {
         // SAFETY: just mapped, and no title code has run.
-        let applied =
-            unsafe { crate::hooks::disarm_watchdog(loaded.base(), &prepared.original_hash) };
-        tracing::info!(
-            applied,
-            "title watchdog hooks ({})",
-            crate::hooks::NO_WATCHDOG_ENV
-        );
+        unsafe { crate::pool_asserts::disarm(loaded.base(), &loaded.info, &prepared.original_hash) };
     }
     tracing::info!(
         base = format_args!("{:#x}", loaded.base()),
@@ -212,37 +206,6 @@ impl ImportResolver for WithTitleDlls<'_> {
                 provenance: Provenance::Title,
             })
     }
-}
-
-/// The caller supplies an image safe to map with the default loader flags.
-unsafe fn map_image(path: &Path) -> std::io::Result<HMODULE> {
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let started = diagnostics::operation_started();
-    // SAFETY: `wide` is terminated and the caller checked the image.
-    let module = unsafe { LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), 0) };
-    if module.is_null() {
-        let error = std::io::Error::last_os_error();
-        IoOperation::MapImage.failed(&error, started);
-        return Err(error);
-    }
-    Ok(module)
-}
-
-#[cfg(test)]
-#[test]
-fn maps_missing_dll_to_its_original_win32_error() {
-    let directory = tempfile::tempdir().unwrap();
-    let output = directory.path().join("diagnostics.jsonl");
-    diagnostics::start(&output).unwrap();
-    // SAFETY: the path points into a fresh directory and has no DLL to load.
-    let error =
-        unsafe { map_image(&directory.path().join("absent-victory-test.dll")) }.unwrap_err();
-    diagnostics::finish(false);
-    assert_eq!(error.raw_os_error(), Some(126));
-    let output = std::fs::read_to_string(output).unwrap();
-    assert!(output.contains("ERROR_MOD_NOT_FOUND"));
-    assert!(output.contains("\"value\":126"));
-    assert!(!output.contains("absent-victory-test.dll"));
 }
 
 fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<()> {

@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      # The version and components pinned in rust-toolchain.toml.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # The launcher runs on the users' Windows PowerShell 5.1: it must parse there.
+      - name: Try script parses
+        shell: powershell
+        run: |
+          $errors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile("$PWD\scripts\try\try.ps1", [ref]$null, [ref]$errors)
+          if ($errors) { $errors | ForEach-Object { Write-Output "::error::try.ps1 line $($_.Extent.StartLineNumber): $($_.Message)" }; exit 1 }
+          Write-Output 'try.ps1 parses'
+      - name: Clippy
+        shell: pwsh
+        run: |
+          cargo clippy --workspace --all-targets --locked --message-format=short -- -D warnings 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\clippy.txt"
+          $code = $LASTEXITCODE
+          $hits = @(Select-String -CaseSensitive -Path "$env:RUNNER_TEMP\clippy.txt" -Pattern ': (error|warning)|^error' | Select-Object -First 60 | ForEach-Object { $_.Line.Trim() })
+          if ($code -ne 0 -and $hits.Count -gt 0) { Write-Output ("::error::" + ($hits -join ' %0A ')) }
+          exit $code
+      - name: Clippy, diagnostics build
+        shell: pwsh
+        run: |
+          cargo clippy --workspace --all-targets --all-features --locked --message-format=short -- -D warnings 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\clippy.txt"
+          $code = $LASTEXITCODE
+          $hits = @(Select-String -CaseSensitive -Path "$env:RUNNER_TEMP\clippy.txt" -Pattern ': (error|warning)|^error' | Select-Object -First 60 | ForEach-Object { $_.Line.Trim() })
+          if ($code -ne 0 -and $hits.Count -gt 0) { Write-Output ("::error::" + ($hits -join ' %0A ')) }
+          exit $code
+      # Includes xtask's repository_passes_policy, the asset-policy check.
+      # (The step outputs go to the runner's temp folder: inside the checkout
+      # the policy check saw them as files of the repository.)
+      - name: Tests
+        shell: pwsh
+        run: |
+          cargo test --workspace --locked --no-fail-fast 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\test-output.txt"
+          $code = $LASTEXITCODE
+          # Failing tests and panics as annotations (readable through the API).
+          # (case-sensitive, and all in one: a step shows at most 10 annotations)
+          $hits = @(Select-String -CaseSensitive -Path "$env:RUNNER_TEMP\test-output.txt" -Pattern ' FAILED|panicked|^error|could not compile|STATUS_|^---- |left: |right: |POLICY: ' |
+            Select-Object -First 80 | ForEach-Object { $_.Line.Trim() })
+          if ($hits.Count -gt 0) { Write-Output ("::error::" + ($hits -join ' %0A ')) }
+          exit $code

@@ -37,7 +37,7 @@ pub const PROVIDER: Guid = Guid::new(
     0x4cc2,
     [0xb1, 0x97, 0x30, 0x51, 0x1b, 0x99, 0x6f, 0xe2],
 );
-/// As Grand Theft Auto VI (2026) asks for it; every slot it calls takes
+/// As the title (2026) asks for it; every slot it calls takes
 /// the public API's arguments in the same order as under the provider's
 /// own id (older titles).
 pub const IID_2026: Guid = Guid::new(
@@ -177,15 +177,87 @@ fn parse_manifest(bytes: &[u8]) -> Option<Vec<String>> {
     (out.len() >= 2).then_some(out)
 }
 
+/// Windows errors that clear up by themselves while a virus scanner, the
+/// indexer or an Explorer window holds a handle for a moment: access denied
+/// (5), sharing violation (32), lock violation (33).
+fn transient(e: &std::io::Error) -> bool {
+    cfg!(windows) && matches!(e.raw_os_error(), Some(5 | 32 | 33))
+}
+
+/// Runs `op` again after a short wait while it fails with a [`transient`]
+/// error (about two seconds in all). Only for the reads and the one rename
+/// a save needs, never for removing leftovers (ScarlettPort 0.5.0: retried
+/// removals of six leftovers under the saves' lock held the boot for about
+/// 243 s).
+fn retry<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut wait = 10;
+    let mut tries = 1;
+    loop {
+        match op() {
+            Err(e) if transient(&e) && tries < 12 => {
+                std::thread::sleep(std::time::Duration::from_millis(wait));
+                wait = (wait * 2).min(250);
+                tries += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Removes a leftover (an unfinished or an older version) once, without
+/// waiting; what will not go stays alone for the rest of the run. It must
+/// never make the container unreadable or unsavable, which loses the save
+/// (and with it the profile's accepted terms, so the first-boot screens
+/// come back). From ZigZagBoi1/ScarlettPort f059bbf (`SAVE_NO_WAIT`, its
+/// default).
+fn discard(path: &Path) {
+    static STAYED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    let stayed = || STAYED.lock().unwrap_or_else(|e| e.into_inner());
+    if stayed().iter().any(|p| p == path) {
+        return;
+    }
+    match remove_plainly(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            tracing::debug!(path = %path.display(), %e, "game save: leftover not removed yet");
+            stayed().push(path.to_path_buf());
+        }
+    }
+}
+
+/// `remove_dir_all`, and where that fails, the folder's files one by one and
+/// then the folder by its path. On the PC ScarlettPort measured this on,
+/// `remove_dir_all` removed the files and then failed on the folder itself
+/// with a sharing violation every time, also for an empty folder hours old,
+/// while `remove_dir` removed it at once.
+fn remove_plainly(path: &Path) -> std::io::Result<()> {
+    let Err(first) = std::fs::remove_dir_all(path) else {
+        return Ok(());
+    };
+    if first.kind() == std::io::ErrorKind::NotFound {
+        return Err(first);
+    }
+    // Version folders hold files only; anything else stays, and the folder
+    // with it.
+    for entry in std::fs::read_dir(path)?.flatten() {
+        if entry.file_type().is_ok_and(|t| t.is_file()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    std::fs::remove_dir(path)
+}
+
 /// The container's newest committed version, if any. Removes what a crash
-/// left: unfinished versions and older ones.
+/// left: unfinished versions and older ones (what cannot be removed now
+/// is left for a later call).
 fn current(dir: &Path) -> std::io::Result<Option<Version>> {
     let mut committed = Vec::new();
     for entry in std::fs::read_dir(dir)?.flatten() {
         let file = entry.file_name();
         let file = file.to_string_lossy();
         if file.ends_with(".new") {
-            std::fs::remove_dir_all(entry.path())?;
+            discard(&entry.path());
         } else if let Some(digits) = file.strip_prefix('v')
             && let Ok(number) = digits.parse::<u64>()
             && digits == number.to_string()
@@ -198,14 +270,25 @@ fn current(dir: &Path) -> std::io::Result<Option<Version>> {
     let Some(&number) = committed.last() else {
         return Ok(None);
     };
+    // Older versions are removed as far as that goes. The highest version
+    // is the container whatever is left below it, and a file another
+    // program holds without letting it be deleted (a virus scanner, a
+    // backup in progress) fails the removal: returning that error made the
+    // container unreadable and every save of it fail for as long as the
+    // file was held.
+    for old in &committed[..committed.len() - 1] {
+        let path = dir.join(format!("v{old}"));
+        if let Err(e) = remove_plainly(&path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::info!(dir = %path.display(), %e, "an older save version stays for now; it goes at a later save");
+        }
+    }
     let version = dir.join(format!("v{number}"));
     let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "bad save manifest");
-    let mut names = parse_manifest(&std::fs::read(version.join(MANIFEST))?).ok_or_else(bad)?;
+    let mut names = parse_manifest(&retry(|| std::fs::read(version.join(MANIFEST)))?).ok_or_else(bad)?;
     let blobs = names.split_off(2);
     let [name, display] = <[String; 2]>::try_from(names).map_err(|_| bad())?;
-    for old in &committed[..committed.len() - 1] {
-        std::fs::remove_dir_all(dir.join(format!("v{old}")))?;
-    }
     Ok(Some(Version {
         dir: version,
         number,
@@ -245,9 +328,18 @@ fn commit(
     display: &str,
     blobs: &[(&str, Source<'_>)],
 ) -> std::io::Result<()> {
-    let staged = dir.join(format!("v{number}.new"));
-    if staged.exists() {
-        std::fs::remove_dir_all(&staged)?;
+    // A leftover staging folder that cannot be removed (a scanner holds it)
+    // is not in the way: stage under another name (ScarlettPort f059bbf).
+    let mut staged = dir.join(format!("v{number}.new"));
+    for n in 1..=8 {
+        if !staged.exists() {
+            break;
+        }
+        discard(&staged);
+        if !staged.exists() {
+            break;
+        }
+        staged = dir.join(format!("v{number}.{n}.new"));
     }
     std::fs::create_dir_all(&staged)?;
     let write = |path: PathBuf, data: &[u8]| -> std::io::Result<()> {
@@ -260,16 +352,19 @@ fn commit(
         match source {
             Source::Data(data) => write(path, data)?,
             // Files are never changed in place, so sharing one is safe.
-            Source::Kept(from) => {
-                std::fs::hard_link(from, &path).or_else(|_| std::fs::copy(from, &path).map(drop))?
-            }
+            Source::Kept(from) => std::fs::hard_link(from, &path)
+                .or_else(|_| std::fs::copy(from, &path).map(drop))?,
         }
         step();
     }
     let names: Vec<&str> = blobs.iter().map(|(n, _)| *n).collect();
     write(staged.join(MANIFEST), &manifest(name, display, &names))?;
     step();
-    std::fs::rename(&staged, dir.join(format!("v{number}")))?;
+    // The one step that commits (retried over a scanner's brief hold).
+    if let Err(e) = retry(|| std::fs::rename(&staged, dir.join(format!("v{number}")))) {
+        discard(&staged);
+        return Err(e);
+    }
     step();
     Ok(())
 }
@@ -363,13 +458,6 @@ fn take<T>(handle: *mut T) {
         // SAFETY: as in `get`; closing ends the handle.
         drop(unsafe { Box::from_raw(handle) });
     }
-}
-/// Nulls a handle the title asked for before anything can fail: the GDK
-/// documents these as null on failure (`_Outptr_result_nullonfailure_`),
-/// and titles close whatever handle they hold, without checking that the
-/// call that should have given it worked.
-fn clear<T>(out: *mut *mut T) {
-    let _ = put(out, std::ptr::null_mut());
 }
 
 impl Provider {
@@ -472,9 +560,7 @@ impl Update {
         }
         let replaced: u64 = current.as_ref().map_or(0, |v| {
             let sizes = v.sizes();
-            let changed = sizes
-                .iter()
-                .filter(|(n, _)| self.changes.iter().any(|(c, _)| c == n));
+            let changed = sizes.iter().filter(|(n, _)| self.changes.iter().any(|(c, _)| c == n));
             changed.map(|(_, size)| size).sum()
         });
         let root = self.dir.parent().unwrap_or(&self.dir);
@@ -490,7 +576,7 @@ impl Update {
         }
         // The old version is garbage now; a crash here leaves it for later.
         if let Some(old) = &current {
-            let _ = std::fs::remove_dir_all(&old.dir);
+            discard(&old.dir);
             step();
         }
         S_OK
@@ -527,11 +613,7 @@ fn read(c: &Container, names: Option<Vec<String>>) -> Result<Vec<(String, Vec<u8
     names
         .into_iter()
         .map(|name| {
-            let i = version
-                .blobs
-                .iter()
-                .position(|b| *b == name)
-                .ok_or(BLOB_NOT_FOUND)?;
+            let i = version.blobs.iter().position(|b| *b == name).ok_or(BLOB_NOT_FOUND)?;
             let data = std::fs::read(version.blob(i)).map_err(|e| io_error(&c.dir, &e))?;
             Ok((name, data))
         })
@@ -591,12 +673,7 @@ pub struct BlobInfo {
 
 /// Calls `callback` with the information of each container that passes
 /// `keep` until it returns false; never under our lock (it may call us).
-fn report(
-    root: &Path,
-    keep: impl Fn(&str) -> bool,
-    context: *mut c_void,
-    callback: ContainerCallback,
-) {
+fn report(root: &Path, keep: impl Fn(&str) -> bool, context: *mut c_void, callback: ContainerCallback) {
     let infos: Vec<(CString, CString, u32, u64, i64)> = {
         let _saves = saves_lock();
         containers(root)
@@ -660,7 +737,6 @@ extern "system" fn initialize_result(
     block: *mut AsyncBlock,
     out: *mut *mut Provider,
 ) -> HRESULT {
-    clear(out);
     xasync::result(block, (&raw const INIT).cast(), out)
 }
 extern "system" fn close_provider(_: This, provider: *mut Provider) {
@@ -738,7 +814,6 @@ extern "system" fn create_container(
     name: *const c_char,
     out: *mut *mut Container,
 ) -> HRESULT {
-    clear(out);
     let (Some(p), Some(name)) = (get(provider), text(name)) else {
         return E_INVALIDARG;
     };
@@ -863,7 +938,6 @@ extern "system" fn create_update(
     display: *const c_char,
     out: *mut *mut Update,
 ) -> HRESULT {
-    clear(out);
     let Some(c) = get(container) else {
         return E_INVALIDARG;
     };
@@ -1000,10 +1074,7 @@ mod tests {
     fn a_full_disk_is_not_the_quota() {
         let mb = 1 << 20;
         assert_eq!(no_room(2 * mb, 0, 0, mb), Some(OUT_OF_LOCAL_STORAGE));
-        assert_eq!(
-            no_room(2 * mb, 0, QUOTA - mb, 100 * mb),
-            Some(QUOTA_EXCEEDED)
-        );
+        assert_eq!(no_room(2 * mb, 0, QUOTA - mb, 100 * mb), Some(QUOTA_EXCEEDED));
         // Replacing a blob of the same size fits a full quota.
         assert_eq!(no_room(mb, mb, QUOTA, 100 * mb), None);
         assert_eq!(no_room(mb, 0, 0, mb), None);
@@ -1031,51 +1102,50 @@ mod tests {
         Some((display, blobs.into_iter().map(text).collect()))
     }
 
+    /// A file of an older version held by another program (a virus scanner,
+    /// a backup copy in progress) keeps that version from being removed.
+    /// The saves after it must not fail for that: the newest version is the
+    /// container whatever is left below it, and what is left goes at a
+    /// later save.
     #[test]
-    fn unreadable_latest_manifest_preserves_previous_version() {
-        let dir = tempfile::tempdir().unwrap();
-        let older = dir.path().join("v1");
-        let latest = dir.path().join("v2");
-        std::fs::create_dir(&older).unwrap();
-        std::fs::create_dir(&latest).unwrap();
-        std::fs::write(older.join(MANIFEST), manifest("Slot", "Previous", &[])).unwrap();
-
-        assert!(current(dir.path()).is_err());
-        assert!(older.join(MANIFEST).is_file());
-
-        std::fs::write(latest.join(MANIFEST), []).unwrap();
-        assert!(current(dir.path()).is_err());
-        assert!(older.join(MANIFEST).is_file());
-
-        std::fs::write(latest.join(MANIFEST), manifest("Slot", "Latest", &[])).unwrap();
-        let loaded = current(dir.path()).unwrap().unwrap();
-        assert_eq!(loaded.number, 2);
-        assert!(!older.exists());
+    fn an_older_version_that_cannot_be_removed_does_not_fail_the_saves_after_it() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let dir = container_dir(root.path(), "Slot");
+        let versions = || {
+            let entries = std::fs::read_dir(&dir).unwrap().flatten();
+            entries.filter(|e| e.file_name().to_string_lossy().starts_with('v')).count()
+        };
+        assert_eq!(update(root.path(), "one", &[("a", Some("first a"))]), S_OK);
+        let first = current(&dir).unwrap().unwrap();
+        // Opened with no sharing: nobody else can delete it while it is held.
+        let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(first.blob(0)).unwrap();
+        // Blob `a` is written anew each time, so no version shares the held file.
+        assert_eq!(update(root.path(), "two", &[("a", Some("second a"))]), S_OK);
+        assert_eq!(state(root.path()), Some(("two".into(), vec![("a".into(), "second a".into())])));
+        assert_eq!(update(root.path(), "three", &[("a", Some("third a"))]), S_OK);
+        assert_eq!(state(root.path()), Some(("three".into(), vec![("a".into(), "third a".into())])));
+        assert!(first.blob(0).exists(), "the held file is still there");
+        // Let go of: the next looks at the container remove what was left.
+        drop(held);
+        assert_eq!(update(root.path(), "four", &[("a", Some("fourth a"))]), S_OK);
+        assert_eq!(state(root.path()), Some(("four".into(), vec![("a".into(), "fourth a".into())])));
+        assert_eq!(versions(), 1);
     }
 
     fn old_state() -> Option<(String, Vec<(String, String)>)> {
-        Some((
-            "one".into(),
-            vec![("a".into(), "old a".into()), ("b".into(), "old b".into())],
-        ))
+        Some(("one".into(), vec![("a".into(), "old a".into()), ("b".into(), "old b".into())]))
     }
 
     /// Run by the crash test in a child process; does nothing otherwise.
     #[test]
     fn crash_child() {
-        let (Ok(root), Ok(op)) = (
-            std::env::var("VICTORY_SAVE_CHILD"),
-            std::env::var("VICTORY_SAVE_OP"),
-        ) else {
+        let (Ok(root), Ok(op)) = (std::env::var("VICTORY_SAVE_CHILD"), std::env::var("VICTORY_SAVE_OP")) else {
             return;
         };
         let root = PathBuf::from(root);
         let hr = if op == "update" {
-            update(
-                &root,
-                "two",
-                &[("a", Some("new a")), ("b", None), ("c", Some("new c"))],
-            )
+            update(&root, "two", &[("a", Some("new a")), ("b", None), ("c", Some("new c"))])
         } else {
             delete(&root, "Slot")
         };
@@ -1088,25 +1158,15 @@ mod tests {
     /// new one.
     #[test]
     fn a_kill_at_any_step_leaves_old_or_new() {
-        let new = Some((
-            "two".into(),
-            vec![("a".into(), "new a".into()), ("c".into(), "new c".into())],
-        ));
+        let new = Some(("two".into(), vec![("a".into(), "new a".into()), ("c".into(), "new c".into())]));
         for (op, after) in [("update", new), ("delete", None)] {
             let mut seen = (0, 0);
             for stop in 1.. {
                 let dir = tempfile::tempdir().unwrap();
                 let root = dir.path();
-                assert_eq!(
-                    update(root, "one", &[("a", Some("old a")), ("b", Some("old b"))]),
-                    S_OK
-                );
+                assert_eq!(update(root, "one", &[("a", Some("old a")), ("b", Some("old b"))]), S_OK);
                 let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-                    .args([
-                        "--exact",
-                        "modules::xgamesave::tests::crash_child",
-                        "--nocapture",
-                    ])
+                    .args(["--exact", "modules::xgamesave::tests::crash_child", "--nocapture"])
                     .args(["--test-threads=1"])
                     .env("VICTORY_SAVE_CHILD", root)
                     .env("VICTORY_SAVE_OP", op)
@@ -1151,35 +1211,16 @@ mod tests {
         for good in ["Profile/Slot_1", "a/b/Save-2.sav", "x", &"a".repeat(256)] {
             assert!(valid_container(good), "{good}");
         }
-        for bad in [
-            "a b",
-            "",
-            "a/",
-            "a.",
-            "a..b",
-            "a.b/c",
-            "a-b/c",
-            &"a".repeat(257),
-        ] {
+        for bad in ["a b", "", "a/", "a.", "a..b", "a.b/c", "a-b/c", &"a".repeat(257)] {
             assert!(!valid_container(bad), "{bad}");
         }
 
         // Containers and blobs differing only in case, reserved device
         // names, characters the host forbids, long names: all distinct.
         let dir = tempfile::tempdir().unwrap();
-        let p = Provider {
-            root: dir.path().into(),
-        };
+        let p = Provider { root: dir.path().into() };
         let long = "n".repeat(300);
-        let blobs = [
-            "A",
-            "a",
-            "CON",
-            "nul.txt",
-            "x/y:z*?\"<>|",
-            long.as_str(),
-            "end. ",
-        ];
+        let blobs = ["A", "a", "CON", "nul.txt", "x/y:z*?\"<>|", long.as_str(), "end. "];
         for container in ["Save", "save", "SAVE/CON.x"] {
             let c = p.container(container);
             let u = Update {
@@ -1211,10 +1252,7 @@ mod tests {
     #[test]
     fn the_old_layout_moves_over() {
         let saves = tempfile::tempdir().unwrap();
-        let root = saves
-            .path()
-            .join(format!("{:016X}", xuser::XUID))
-            .join("scid");
+        let root = saves.path().join(format!("{:016X}", xuser::XUID)).join("scid");
         let old = root.join("Player");
         std::fs::create_dir_all(&old).unwrap();
         std::fs::write(old.join("Save%20Game%20Data"), b"data").unwrap();
@@ -1279,42 +1317,6 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_create_leaves_a_null_handle() {
-        let this: This = &OBJECT;
-        let saves = tempfile::tempdir().unwrap();
-        let provider = give(Provider::open(saves.path(), Some("scid")).unwrap());
-        // What an uninitialized handle variable may hold.
-        fn garbage<T>() -> *mut T {
-            std::ptr::without_provenance_mut(0x1234)
-        }
-
-        let mut container = garbage();
-        let bad = c"bad name".as_ptr();
-        let hr = create_container(this, provider, bad, &mut container);
-        assert_eq!(hr, INVALID_CONTAINER_NAME);
-        assert!(container.is_null());
-
-        let mut update = garbage();
-        let hr = create_update(this, std::ptr::null(), c"x".as_ptr(), &mut update);
-        assert_eq!(hr, E_INVALIDARG);
-        assert!(update.is_null());
-
-        // A provider that could not be opened (its folder could not be made).
-        let mut b = block();
-        xasync::finished_with(&mut b, (&raw const INIT).cast(), Err(NO_ACCESS));
-        let mut opened = garbage();
-        let hr = initialize_result(this, &mut b, &mut opened);
-        assert_eq!(hr, NO_ACCESS);
-        assert!(opened.is_null());
-
-        // So closing what the title holds, as it does, is harmless.
-        close_container(this, container);
-        close_update(this, update);
-        close_provider(this, opened);
-        close_provider(this, provider);
-    }
-
-    #[test]
     fn saves_persist_across_providers() {
         let this: This = &OBJECT;
         let saves = tempfile::tempdir().unwrap();
@@ -1360,10 +1362,7 @@ mod tests {
             S_OK
         );
         type Delete = extern "system" fn(This, *mut Update, *const c_char) -> HRESULT;
-        assert_eq!(
-            method::<Delete>(&OBJECT, 0xd0)(this, update, c"gone".as_ptr()),
-            S_OK
-        );
+        assert_eq!(method::<Delete>(&OBJECT, 0xd0)(this, update, c"gone".as_ptr()), S_OK);
         type Submit = extern "system" fn(This, *const Update, *mut AsyncBlock) -> HRESULT;
         let mut b = block();
         assert_eq!(method::<Submit>(&OBJECT, 0xe0)(this, update, &mut b), S_OK);

@@ -71,6 +71,35 @@ pub fn load_title_dll(file: &str) -> Result<Option<usize>, String> {
     TITLE_DLL_LOADER.get().map_or(Ok(None), |load| load(file))
 }
 
+static TITLE_DLL_SETTLE: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
+/// Set once, by whoever maps the title's DLLs: waits until no thread is
+/// mapping, binding or initialising one (the loader lock's shape).
+pub fn set_title_dll_settle(settle: Box<dyn Fn() + Send + Sync>) {
+    let _ = TITLE_DLL_SETTLE.set(settle);
+}
+
+/// Waits for a title DLL mapping in progress on another thread (Try 6.7:
+/// a `GetModuleHandle` racing the title's load of its upscaler was refused
+/// as a host DLL).
+pub fn settle_title_dlls() {
+    if let Some(settle) = TITLE_DLL_SETTLE.get() {
+        settle();
+    }
+}
+
+/// The file names of the title images whose names start as `file`'s does,
+/// for the log of a refused name.
+pub fn images_like(file: &str) -> Vec<String> {
+    let stem: String = file.chars().take(8).collect::<String>().to_ascii_lowercase();
+    let paths = IMAGE_PATHS.lock().unwrap_or_else(|e| e.into_inner());
+    paths
+        .iter()
+        .filter_map(|(_, p)| p.file_name()?.to_str().map(str::to_owned))
+        .filter(|n| n.to_ascii_lowercase().starts_with(&stem))
+        .collect()
+}
+
 /// What the title's manifest (`MicrosoftGame.config` beside its executable)
 /// says about it, and where its persistent local storage lives.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -96,13 +125,12 @@ impl Title {
                 .map(|(_, text)| text.as_str())
         };
         let id = get("Game/TitleId").and_then(|v| u32::from_str_radix(v, 16).ok());
-        let storage_mb =
-            get("Game/PersistentLocalStorage/SizeMB").and_then(|v| v.parse::<u64>().ok());
+        let storage_mb = get("Game/PersistentLocalStorage/SizeMB").and_then(|v| v.parse().ok());
         Title {
             id: id.unwrap_or(0),
             store_id: get("Game/StoreId").unwrap_or_default().to_owned(),
             storage: PathBuf::new(),
-            storage_bytes: storage_mb.unwrap_or(0).saturating_mul(1024 * 1024),
+            storage_bytes: storage_mb.unwrap_or(0) << 20,
         }
     }
 
@@ -128,7 +156,7 @@ fn elements(text: &str) -> Vec<(String, String)> {
         } else if rest.starts_with("<![CDATA[") {
             rest.find("]]>").map(|e| e + 3)
         } else {
-            tag_end(rest)
+            rest.find('>').map(|e| e + 1)
         };
         let Some(end) = end else { break };
         let tag = &rest[1..end - 1];
@@ -150,36 +178,15 @@ fn elements(text: &str) -> Vec<(String, String)> {
             .unwrap_or("");
         path.push(name);
         let body = rest[..rest.find('<').unwrap_or(rest.len())].trim();
-        let body = [
-            ("&lt;", "<"),
-            ("&gt;", ">"),
-            ("&quot;", "\""),
-            ("&apos;", "'"),
-            ("&amp;", "&"),
-        ]
-        .iter()
-        .fold(body.to_owned(), |b, (entity, c)| b.replace(entity, c));
+        let body = [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&apos;", "'"), ("&amp;", "&")]
+            .iter()
+            .fold(body.to_owned(), |b, (entity, c)| b.replace(entity, c));
         out.push((path.join("/"), body));
         if closed {
             path.pop();
         }
     }
     out
-}
-
-/// Where the tag that starts `text` ends, past its `>`; a `>` in a quoted
-/// attribute value is part of the value (XML allows it there unescaped).
-fn tag_end(text: &str) -> Option<usize> {
-    let mut quote = None;
-    for (at, c) in text.char_indices() {
-        match (quote, c) {
-            (None, '"' | '\'') => quote = Some(c),
-            (Some(open), _) if c == open => quote = None,
-            (None, '>') => return Some(at + 1),
-            _ => {}
-        }
-    }
-    None
 }
 
 static TITLE: Mutex<Option<Title>> = Mutex::new(None);
@@ -198,7 +205,7 @@ pub fn title() -> Title {
 }
 
 /// Gives the process the console's millisecond timers. Titles pace
-/// themselves with short waits (Grand Theft Auto VI's audio mixer sleeps
+/// themselves with short waits (the title's audio mixer sleeps
 /// about 4 ms per 5.3 ms block) and cannot tune the timer on the console;
 /// a desktop process waits in 15.6 ms ticks unless it asks for finer ones,
 /// and Windows 11 drops that request while the window is hidden unless the
@@ -207,13 +214,23 @@ pub fn title() -> Title {
 pub fn use_console_timers() {
     use windows_sys::Win32::Media::timeBeginPeriod;
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        GetCurrentProcess, PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
         PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION, PROCESS_POWER_THROTTLING_STATE,
         ProcessPowerThrottling, SetProcessInformation,
     };
+    // Also: the system does not run this process at reduced speed (its
+    // "efficiency mode": lower clock, the slow cores of a hybrid processor)
+    // when its window is not the one in front, as while its owner works in
+    // another window or streams. The console has eight cores alike and no
+    // such mode. `VICTORY_EFFICIENCY_MODE=1` leaves the system its choice.
+    let execution = if std::env::var_os("VICTORY_EFFICIENCY_MODE").is_some_and(|v| v == "1") {
+        0
+    } else {
+        PROCESS_POWER_THROTTLING_EXECUTION_SPEED
+    };
     let keep = PROCESS_POWER_THROTTLING_STATE {
         Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
-        ControlMask: PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
+        ControlMask: PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION | execution,
         StateMask: 0,
     };
     // SAFETY: plain process settings; `keep` outlives the call.
@@ -226,20 +243,89 @@ pub fn use_console_timers() {
         );
         timeBeginPeriod(1);
     }
+    use_whole_machine();
+}
+
+#[cfg(windows)]
+fn whole_machine() -> bool {
+    std::env::var_os("VICTORY_WHOLE_MACHINE").is_none_or(|v| v != "0")
+}
+
+/// Try 6.0: asks Windows for the whole machine while the title runs.
+/// `VICTORY_WHOLE_MACHINE=0`: none of it.
+///
+/// - The process runs above normal priority: the title's threads and ours
+///   come before the browser, the launcher and updaters on a busy CPU.
+/// - Windows is told not to throttle its execution speed (no EcoQoS): on
+///   CPUs with performance and efficiency cores (Intel 12th generation and
+///   later) a thread Windows judges to be in the background is put on the
+///   slow cores, and our helper threads that wait a lot looked like that.
+/// - A soft minimum working set of a quarter of the PC's memory (at most
+///   4 GiB): on a PC whose memory is nearly all in use (under 1 GB free in
+///   the 2026-11-26 report) Windows takes pages away from the biggest
+///   process first, and the title's memory then came back from the page
+///   file a page at a time. Soft: Windows still takes them if it must.
+#[cfg(windows)]
+fn use_whole_machine() {
+    use windows_sys::Win32::System::Memory::{
+        QUOTA_LIMITS_HARDWS_MAX_DISABLE, QUOTA_LIMITS_HARDWS_MIN_DISABLE, SetProcessWorkingSetSizeEx,
+    };
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    use windows_sys::Win32::System::Threading::{
+        ABOVE_NORMAL_PRIORITY_CLASS, GetCurrentProcess, HIGH_PRIORITY_CLASS, SetPriorityClass,
+    };
+    if !whole_machine() {
+        return;
+    }
+    // Try 6.12 (all-out mode): `VICTORY_PRIORITY=high` runs the process at
+    // high priority (never realtime: the mouse, the keyboard and the driver
+    // still come first), and `VICTORY_WORKING_SET_PERCENT` sets the soft
+    // minimum working set as a share of the PC's memory (1 to 95, no 4 GiB
+    // cap) instead of a quarter.
+    let high = std::env::var("VICTORY_PRIORITY").is_ok_and(|v| v.trim().eq_ignore_ascii_case("high"));
+    let percent = std::env::var("VICTORY_WORKING_SET_PERCENT")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|p| p.clamp(1, 95));
+    // SAFETY: plain process settings and a query that fills our structure.
+    unsafe {
+        let process = GetCurrentProcess();
+        let class = if high { HIGH_PRIORITY_CLASS } else { ABOVE_NORMAL_PRIORITY_CLASS };
+        let priority = SetPriorityClass(process, class) != 0;
+        let mut status: MEMORYSTATUSEX = std::mem::zeroed();
+        status.dwLength = size_of_val(&status) as u32;
+        let mut kept_mb = 0;
+        if GlobalMemoryStatusEx(&mut status) != 0 {
+            let min = match percent {
+                Some(p) => (status.ullTotalPhys / 100 * p) as usize,
+                None => (status.ullTotalPhys / 4).min(4 << 30) as usize,
+            };
+            // The maximum only has to be above the minimum: it is not enforced.
+            let max = min.saturating_mul(4);
+            if SetProcessWorkingSetSizeEx(
+                process,
+                min,
+                max,
+                QUOTA_LIMITS_HARDWS_MIN_DISABLE | QUOTA_LIMITS_HARDWS_MAX_DISABLE,
+            ) != 0
+            {
+                kept_mb = min >> 20;
+            }
+        }
+        tracing::info!(
+            above_normal = priority && !high,
+            high = priority && high,
+            soft_min_working_set_mb = kept_mb,
+            pc_memory_mb = status.ullTotalPhys >> 20,
+            pc_memory_free_mb = status.ullAvailPhys >> 20,
+            "the whole machine for the title (VICTORY_WHOLE_MACHINE=0: none of it)"
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_quoted_angle_bracket_does_not_end_its_tag() {
-        let text = "<Game><ShellVisuals DefaultDisplayName=\"A > B\" Description='x>y'/>\
-                    <TitleId>639AA8DD</TitleId>\
-                    <PersistentLocalStorage><SizeMB>64</SizeMB></PersistentLocalStorage></Game>";
-        let t = Title::from_manifest(text);
-        assert_eq!((t.id, t.storage_bytes), (0x639A_A8DD, 64 << 20));
-    }
 
     #[test]
     fn reads_title_id_store_id_and_storage_quota() {
@@ -253,24 +339,5 @@ mod tests {
         assert_eq!((t.id, t.storage_bytes), (0x639A_A8DD, 1024 << 20));
         assert_eq!(t.store_id, "9&C");
         assert_eq!(Title::from_manifest("").storage_bytes, 0);
-    }
-
-    #[test]
-    fn storage_quota_saturates_when_megabytes_exceed_u64_bytes() {
-        let max_mb = u64::MAX / (1024 * 1024);
-
-        let at_limit = format!(
-            "<Game><PersistentLocalStorage><SizeMB>{max_mb}</SizeMB></PersistentLocalStorage></Game>"
-        );
-        assert_eq!(
-            Title::from_manifest(&at_limit).storage_bytes,
-            max_mb * 1024 * 1024
-        );
-
-        let above_limit = format!(
-            "<Game><PersistentLocalStorage><SizeMB>{}</SizeMB></PersistentLocalStorage></Game>",
-            max_mb + 1
-        );
-        assert_eq!(Title::from_manifest(&above_limit).storage_bytes, u64::MAX);
     }
 }

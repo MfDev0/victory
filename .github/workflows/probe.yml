@@ -1,0 +1,110 @@
+name: Shader probe
+
+# Translates the shaders the user's latest reports name as failing
+# (failed-shaders in the report zips on main) as the user's RTX 4060 does
+# (32-lane waves), with each wave switch, and prints why each stops.
+# Runs when scripts/try/probe.txt changes; the report names are in it.
+# (`translate --list` calls emit::emit: the pixel first-half retries of
+# emit::translate are not in it, so those three fail here only.)
+# (5.1: the last resort splits console waves around LDS too.)
+
+on:
+  push:
+    branches: [arena/59fabb00-victory]
+    paths: [scripts/try/probe.txt, .github/workflows/probe.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: probe
+      - name: Build
+        shell: bash
+        run: cargo build --release -p victory
+      - name: Reports
+        shell: bash
+        run: |
+          git fetch -q --depth=1 origin main
+          mkdir -p probe
+          while IFS= read -r name; do
+            [ -z "$name" ] && continue
+            case "$name" in \#*) continue;; esac
+            git show "origin/main:$name" > probe/r.zip
+            (cd probe && unzip -qo r.zip -x '*.log' '*.txt' || true)
+            rm -f probe/r.zip
+          done < scripts/try/probe.txt
+          mkdir -p shaders
+          find probe -iname '*.dxbc' -exec cp {} shaders/ \;
+          # (zips made on Windows keep "failed-shaders\name" as one name)
+          for f in probe/*; do case "$f" in *.dxbc) cp "$f" "shaders/$(basename "${f##*\\}")";; esac; done
+          ls -la shaders
+      - name: Translate
+        shell: bash
+        env:
+          VICTORY_HOST_WAVE: "32"
+          VICTORY_WAVE_WHY: "1"
+          VICTORY_SHADER_LOOP_LIMIT: "256"
+        run: |
+          exe=target/release/victory
+          out=probe-out.txt
+          : > $out
+          for mode in default; do
+            for f in shaders/*; do
+              echo "---- $(basename "$f") WAVE_WIDE=$mode" >> $out
+              if [ "$mode" = default ]; then
+                "$exe" translate --list --jobs 1 "$f" > one.txt 2>&1 || true
+              else
+                VICTORY_WAVE_WIDE=$mode "$exe" translate --list --jobs 1 "$f" > one.txt 2>&1 || true
+              fi
+              { grep -a "WAVE64" one.txt | head -n 24; tail -n 22 one.txt; } >> $out || true
+            done
+          done
+          cat $out
+      - name: Instructions around where each failing shader stops
+        if: always()
+        shell: bash
+        run: |
+          exe=target/release/victory
+          out=disasm-out.txt
+          : > $out
+          for pair in compute-7f05ddab771799a9:89ec; do
+            name=${pair%%:*}; off=${pair##*:}
+            f=$(ls shaders/$name*.dxbc 2>/dev/null | head -n 1)
+            [ -n "$f" ] || continue
+            "$exe" shader-info --disasm "$f" > d.txt 2>&1 || true
+            if [ "$off" = x ]; then
+              "$exe" translate --list --jobs 1 "$f" > one.txt 2>&1 || true
+              off=$(grep -aoE "at 0x[0-9a-f]+" one.txt | tail -n 1 | sed 's/at 0x//')
+            fi
+            echo "==== $name @$off" >> $out
+            grep -aiE -B 40 -A 4 "^ *0*${off}: " d.txt | cut -c1-100 | head -n 46 >> $out || true
+          done
+          cat $out
+      - name: Results as annotations (the log host is not reachable from where they are read)
+        if: always()
+        shell: python
+        run: |
+          import os
+          t = ""
+          if os.path.exists("disasm-out.txt"):
+              t += open("disasm-out.txt", encoding="utf-8", errors="replace").read()
+          t += "\n#### translate\n"
+          lines = [l for l in open("probe-out.txt", encoding="utf-8", errors="replace").read().splitlines()
+                   if l.startswith("----") or "WAVE64" in l or " emit: " in l or "translated of" in l]
+          t += "\n".join(lines)
+          chunks = [t[i:i + 3900] for i in range(0, len(t), 3900)][:10]
+          for n, c in enumerate(chunks):
+              c = c.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::notice title=probe {n}::{c}")

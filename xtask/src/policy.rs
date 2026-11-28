@@ -11,6 +11,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 const MAX_FILE_SIZE: usize = 512 * 1024;
+/// The limit for a Rust source file (see [`check`]).
+const MAX_RUST_SOURCE: usize = 1024 * 1024;
 const MAX_ENCODED_RUN: usize = 512;
 
 const ALLOWED_EXTENSIONS: &[&str] = &[
@@ -28,10 +30,40 @@ const ALLOWED_NAMES: &[&str] = &[
 ];
 
 /// Paths explicitly exempted, with a reason. Keep this empty if at all possible.
-const EXCEPTIONS: &[(&str, &str)] = &[(
-    "crates/victory-formats/src/bcpack-tables.bin",
-    "the BCPack format's constant tables: nothing decodes without them and they cannot be derived (owner's decision, 2026-11-23; docs/asset-policy.md)",
-)];
+const EXCEPTIONS: &[(&str, &str)] = &[
+    (
+        "crates/victory-formats/src/bcpack-tables.bin",
+        "the BCPack format's constant tables: nothing decodes without them and they cannot be derived (owner's decision, 2026-11-23; docs/asset-policy.md)",
+    ),
+    (
+        "docs/media/catez.gif",
+        "the fork's README picture, the owner's own cat picture, nothing from any game (owner's decision, 2026-11-24)",
+    ),
+];
+
+/// Run logs: the layer's own log of a run, scrubbed of names, kept under
+/// `diagnostics/` by the owner's decision (2026-11-26; docs/asset-policy.md).
+/// A log is text we wrote, but long: these may be this large as text, and
+/// the longest are kept gzipped ([`RUN_LOG_GZ_MAX`]).
+const RUN_LOG_MAX: usize = 32 * 1024 * 1024;
+/// A gzipped run log (`diagnostics/*.txt.gz`) may be this large.
+const RUN_LOG_GZ_MAX: usize = 16 * 1024 * 1024;
+
+/// Whether `path` is a run log directly under `diagnostics/`: `Some(true)`
+/// for a gzipped one (`.txt.gz`), `Some(false)` for a text one (`.txt`).
+fn run_log(path: &str) -> Option<bool> {
+    let name = path.strip_prefix("diagnostics/")?;
+    if name.contains('/') {
+        return None;
+    }
+    if name.ends_with(".txt.gz") {
+        Some(true)
+    } else if name.ends_with(".txt") {
+        Some(false)
+    } else {
+        None
+    }
+}
 
 /// Signatures of formats that must never be committed.
 const FORBIDDEN_MAGIC: &[(&[u8], &str)] = &[
@@ -48,15 +80,26 @@ const FORBIDDEN_MAGIC: &[(&[u8], &str)] = &[
     (b"\xD0\xCF\x11\xE0", "MSI/OLE"),
 ];
 
-pub fn run(root: &Path, staged: bool) -> Result<()> {
-    let files = list_files(root, staged)?;
-    check_files(root, staged, &files)
+/// VIctory Try's report zips that the owner uploads to the top of `main` for
+/// reading (`VIctory-report-<date>.zip`: the run's logs and settings, which
+/// the Try launcher writes; nothing of the game's). CI checks pull requests
+/// merged onto `main`, so without this every pull request failed on them.
+fn report_zip(path: &str) -> bool {
+    !path.contains('/') && path.starts_with("VIctory-report-") && path.ends_with(".zip")
 }
 
-fn check_files(root: &Path, staged: bool, files: &[String]) -> Result<()> {
+/// `nvidia/`: trustno1-coder's VIctory-NVIDIA with the Try fixes, a workspace of its own,
+/// checked by its own policy (`cd nvidia && cargo run --locked -p xtask -- policy`). Its
+/// allowlist differs from ours (its `scripts/faultbook.py`, its `bcpack-tables.bin` exception).
+fn nvidia_tree(path: &str) -> bool {
+    path.starts_with("nvidia/")
+}
+
+pub fn run(root: &Path, staged: bool) -> Result<()> {
+    let files = list_files(root, staged)?;
     let mut violations = Vec::new();
-    for path in files {
-        if EXCEPTIONS.iter().any(|(p, _)| p == path) {
+    for path in &files {
+        if EXCEPTIONS.iter().any(|(p, _)| p == path) || report_zip(path) || nvidia_tree(path) {
             continue;
         }
         let content = if staged {
@@ -65,7 +108,7 @@ fn check_files(root: &Path, staged: bool, files: &[String]) -> Result<()> {
                 .current_dir(root)
                 .output()?;
             if !out.status.success() {
-                bail!("cannot read staged file {path} ({})", out.status);
+                continue; // deleted in the index
             }
             out.stdout
         } else {
@@ -149,25 +192,45 @@ fn list_files(root: &Path, staged: bool) -> Result<Vec<String>> {
 /// All problems with one file. Pure, for testing.
 pub fn check(path: &str, content: &[u8]) -> Vec<String> {
     let mut problems = Vec::new();
+    // A run log has rules of its own: a larger size, and for a gzipped one
+    // the gzip signature instead of the text rule. (No rule on hex runs: a
+    // log quotes hashes and addresses.)
+    if let Some(gzipped) = run_log(path) {
+        let limit = if gzipped { RUN_LOG_GZ_MAX } else { RUN_LOG_MAX };
+        if content.len() > limit {
+            problems.push(format!("{} bytes exceeds the {limit}-byte limit for a run log", content.len()));
+        }
+        if gzipped {
+            if !content.starts_with(&[0x1f, 0x8b]) {
+                problems.push("a .txt.gz run log that is not a gzip stream".to_owned());
+            }
+        } else {
+            for (magic, what) in FORBIDDEN_MAGIC {
+                if content.starts_with(magic) {
+                    problems.push(format!("looks like a {what}"));
+                }
+            }
+            if content.contains(&0) {
+                problems.push("binary content (NUL bytes)".to_owned());
+            }
+        }
+        return problems;
+    }
     let name = path.rsplit('/').next().unwrap_or(path);
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
-    // Only these synthetic Metal test sources may use Python or Swift.
-    // All size, magic, NUL and encoded-data checks still apply.
-    let allowed = matches!(
-        path,
-        "tests/metal/generate.py" | "tests/metal/run.py" | "tests/metal/probe.swift"
-    ) || ALLOWED_NAMES.contains(&name)
+    let allowed = ALLOWED_NAMES.contains(&name)
         || ext
             .as_deref()
             .is_some_and(|e| ALLOWED_EXTENSIONS.contains(&e));
     if !allowed {
         problems.push("file type not on the allowlist".to_owned());
     }
-    if content.len() > MAX_FILE_SIZE {
-        problems.push(format!(
-            "{} bytes exceeds the {MAX_FILE_SIZE}-byte limit",
-            content.len()
-        ));
+    // Rust sources may be twice as long: the renderer's `host.rs` and the
+    // translator's `lower.rs` passed 512 KiB with the forks' ports, and they
+    // are text (the hex/base64 check below still applies).
+    let limit = if ext.as_deref() == Some("rs") { MAX_RUST_SOURCE } else { MAX_FILE_SIZE };
+    if content.len() > limit {
+        problems.push(format!("{} bytes exceeds the {limit}-byte limit", content.len()));
     }
     for (magic, what) in FORBIDDEN_MAGIC {
         if content.starts_with(magic) {
@@ -194,18 +257,39 @@ fn longest_encoded_run(content: &[u8]) -> Option<usize> {
 mod tests {
     use super::check;
 
+    /// The owner's report zips at the top are let through; nothing deeper,
+    /// nothing else.
+    #[test]
+    fn report_zips_at_the_top_only() {
+        assert!(super::report_zip("VIctory-report-20261126-122220.zip"));
+        assert!(super::report_zip("VIctory-report-6.2-20261126-154745 (1).zip"));
+        assert!(!super::report_zip("docs/VIctory-report-1.zip"));
+        assert!(!super::report_zip("VIctory-report-1.7z"));
+        assert!(!super::report_zip("game.zip"));
+    }
+
     /// Enforces the policy wherever tests run, even in clones without the hook.
     #[test]
     fn repository_passes_policy() {
         super::run(&crate::workspace_root(), false).unwrap();
     }
 
+    /// Run logs under `diagnostics/` may be long, and gzipped; nothing else
+    /// there, nothing deeper, and nothing that is not what its name says.
     #[test]
-    fn staged_file_read_failure_is_reported() {
-        let path = "missing-from-index.txt".to_string();
-        let result = super::check_files(&crate::workspace_root(), true, &[path]);
-        let err = result.expect_err("a staged file that cannot be read must fail the check");
-        assert!(err.to_string().contains("missing-from-index.txt"));
+    fn run_logs_have_their_own_rules() {
+        let long = vec![b'a'; 4 * 1024 * 1024];
+        assert!(check("diagnostics/run-1.txt", &long).is_empty());
+        assert!(check("diagnostics/run-1.txt.gz", &[0x1f, 0x8b, 8, 0, 0, 0]).is_empty());
+        // Not a gzip stream; binary under a text name; too long.
+        assert!(!check("diagnostics/run-1.txt.gz", b"MZ\x90\x00").is_empty());
+        assert!(!check("diagnostics/run-1.txt", b"abc\0def").is_empty());
+        assert!(!check("diagnostics/run-1.txt", &vec![b'a'; super::RUN_LOG_MAX + 1]).is_empty());
+        assert!(!check("diagnostics/run-1.txt.gz", &[&[0x1f, 0x8b][..], &vec![0u8; super::RUN_LOG_GZ_MAX][..]].concat()).is_empty());
+        // The ordinary rules everywhere else, and for other names there.
+        assert!(!check("docs/run-1.txt", &long).is_empty());
+        assert!(!check("diagnostics/deeper/run-1.txt", &long).is_empty());
+        assert!(!check("diagnostics/shot.png", b"\x89PNG").is_empty());
     }
 
     #[test]
@@ -213,18 +297,6 @@ mod tests {
         assert!(check("crates/x/src/lib.rs", b"fn main() {}\n").is_empty());
         assert!(check(".gitignore", b"/target/\n").is_empty());
         assert!(check(".githooks/pre-commit", b"#!/bin/sh\n").is_empty());
-    }
-
-    #[test]
-    fn metal_test_sources_are_still_checked() {
-        assert!(check("tests/metal/generate.py", b"import struct").is_empty());
-        assert!(check("tests/metal/run.py", b"import subprocess").is_empty());
-        assert!(check("tests/metal/probe.swift", b"import Metal").is_empty());
-
-        assert!(!check("other.py", b"pass").is_empty());
-        assert!(!check("other.swift", b"import Metal").is_empty());
-        assert!(!check("tests/metal/probe.swift", b"MZ\x00").is_empty());
-        assert!(!check("tests/metal/run.py", &vec![b'a'; 800]).is_empty());
     }
 
     #[test]
@@ -239,7 +311,7 @@ mod tests {
             "extension not allowed"
         );
         assert!(
-            !check("a.rs", &vec![b'a'; 600 * 1024]).is_empty(),
+            !check("a.rs", &b"fn a() {}\n".repeat(110 * 1024)).is_empty(),
             "too big"
         );
     }

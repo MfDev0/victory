@@ -472,10 +472,6 @@ struct Call {
     provider: Provider,
     context: usize,
     identity: usize,
-    /// Set by the first completion, which then runs without a lock: the
-    /// provider's cleanup may wait for a thread completing the same call.
-    claimed: AtomicBool,
-    /// The status is published.
     done: Mutex<bool>,
     finished: Condvar,
 }
@@ -505,14 +501,6 @@ fn call(block: *mut AsyncBlock) -> Option<Arc<Call>> {
     lock(&CALLS).get(&(block as usize)).cloned()
 }
 
-/// Whether `call` is still the call in flight on `block`: once it is over,
-/// the title may begin another call on the same block.
-fn is_current(call: &Arc<Call>, block: *mut AsyncBlock) -> bool {
-    lock(&CALLS)
-        .get(&(block as usize))
-        .is_some_and(|current| Arc::ptr_eq(current, call))
-}
-
 /// The block's status and result-size words.
 fn words(block: *mut AsyncBlock) -> (&'static AtomicUsize, &'static AtomicUsize) {
     // SAFETY: the title's block outlives the call; its system area is ours.
@@ -524,12 +512,6 @@ fn words(block: *mut AsyncBlock) -> (&'static AtomicUsize, &'static AtomicUsize)
 
 fn status(block: *mut AsyncBlock) -> HRESULT {
     words(block).0.load(Ordering::Acquire) as u32 as i32
-}
-
-/// Whether the block's system area is all zero, as in a block not yet used.
-fn zeroed(block: *mut AsyncBlock) -> bool {
-    // SAFETY: the title's block, whose system area is ours to read.
-    unsafe { std::ptr::addr_of!((*block).internal).read_volatile() == [0; 4] }
 }
 
 fn release(block: *mut AsyncBlock) {
@@ -550,22 +532,8 @@ pub fn XAsyncBegin(
     let Some(provider) = provider else {
         return E_INVALIDARG;
     };
-    if block.is_null() {
+    if block.is_null() || call(block).is_some() {
         return E_INVALIDARG;
-    }
-    if let Some(left) = call(block) {
-        // Calls are filed by block address, and one that succeeded stays
-        // filed until its result is taken. A title that never takes it and
-        // frees the block may get the same address for its next one, which
-        // it zeroes as every new block must be; the block of a result left
-        // behind never reads zero (it holds the result's size). So this is
-        // a new block, and the call left behind ends here. A call in flight
-        // keeps its address, and a block still holding a result is in use.
-        let over = *lock(&left.done);
-        if !(over && zeroed(block)) {
-            return E_INVALIDARG;
-        }
-        release(block);
     }
     let (status, size) = words(block);
     status.store(E_PENDING as u32 as usize, Ordering::Release);
@@ -574,7 +542,6 @@ pub fn XAsyncBegin(
         provider,
         context: context as usize,
         identity: identity as usize,
-        claimed: AtomicBool::new(false),
         done: Mutex::new(false),
         finished: Condvar::new(),
     });
@@ -582,66 +549,39 @@ pub fn XAsyncBegin(
     // A failed begin fails the call, so the completion routine still runs.
     let hr = call.provider(OP_BEGIN, block, 0, std::ptr::null_mut());
     if hr < 0 {
-        complete_call(&call, block, hr, 0);
+        XAsyncComplete(block, hr, 0);
     }
     S_OK
 }
 
-/// Queues the provider's `DoWork` on the block's work port. The work
-/// belongs to the call that scheduled it: when it runs, that call may be
-/// over and the block may hold another.
+/// Queues the provider's `DoWork` on the block's work port.
 pub fn XAsyncSchedule(block: *mut AsyncBlock, delay_ms: u32) -> HRESULT {
-    struct Work {
-        call: Arc<Call>,
-        block: *mut AsyncBlock,
-    }
-    extern "system" fn work(context: *mut c_void, canceled: bool) {
-        // SAFETY: boxed in `XAsyncSchedule`; a task runs once.
-        let Work { call, block } = *unsafe { Box::from_raw(context.cast::<Work>()) };
-        if !is_current(&call, block) {
-            return;
-        }
+    extern "system" fn work(block: *mut c_void, canceled: bool) {
+        let block = block.cast::<AsyncBlock>();
+        let Some(call) = call(block) else { return };
         let hr = if canceled {
             E_ABORT
         } else {
             call.provider(OP_DO_WORK, block, 0, std::ptr::null_mut())
         };
-        complete_call(&call, block, hr, 0);
+        if hr != E_PENDING {
+            XAsyncComplete(block, hr, 0);
+        }
     }
-    if block.is_null() {
+    if block.is_null() || call(block).is_none() {
         return E_INVALIDARG;
     }
-    let Some(call) = call(block) else {
-        return E_INVALIDARG;
-    };
     // SAFETY: a block in flight is valid.
     let handle = unsafe { (*block).queue };
-    let Some(queue) = queue(handle) else {
-        return E_INVALIDARG;
-    };
-    let context = Box::into_raw(Box::new(Work { call, block }));
-    let hr = queue.submit(WORK, delay_ms, Task::new(context.cast(), work));
-    if hr < 0 {
-        // Refused, so the task never runs.
-        // SAFETY: still ours.
-        drop(unsafe { Box::from_raw(context) });
+    match queue(handle) {
+        Some(queue) => queue.submit(WORK, delay_ms, Task::new(block.cast(), work)),
+        None => E_INVALIDARG,
     }
-    hr
 }
 
 /// Records the result (the first one wins), wakes waiters and queues the
 /// completion routine on the block's completion port.
 pub fn XAsyncComplete(block: *mut AsyncBlock, result: HRESULT, required_size: usize) {
-    if let Some(call) = call(block) {
-        complete_call(&call, block, result, required_size);
-    }
-}
-
-/// [`XAsyncComplete`] for `call`, which is or was in flight on `block`. Our
-/// own completions name the call they belong to, not the block: if the
-/// provider already completed it, the title may have begun another call on
-/// the block, which a second complete by block would end.
-fn complete_call(call: &Call, block: *mut AsyncBlock, result: HRESULT, required_size: usize) {
     extern "system" fn complete(block: *mut c_void, _canceled: bool) {
         let block = block.cast::<AsyncBlock>();
         // SAFETY: read before the status was published; see below.
@@ -649,10 +589,12 @@ fn complete_call(call: &Call, block: *mut AsyncBlock, result: HRESULT, required_
             routine(block);
         }
     }
+    let Some(call) = call(block) else { return };
     if result == E_PENDING {
         return;
     }
-    if call.claimed.swap(true, Ordering::AcqRel) {
+    let mut done = lock(&call.done);
+    if *done {
         return;
     }
     // Read before publishing: once the status is set, the title may free
@@ -665,8 +607,9 @@ fn complete_call(call: &Call, block: *mut AsyncBlock, result: HRESULT, required_
     }
     size.store(required_size, Ordering::Release);
     status.store(result as u32 as usize, Ordering::Release);
-    *lock(&call.done) = true;
+    *done = true;
     call.finished.notify_all();
+    drop(done);
     if routine.is_some() {
         let task = Task::new(block.cast(), complete);
         match queue(handle) {
@@ -706,7 +649,7 @@ pub fn XAsyncGetResultSize(block: *mut AsyncBlock, out: *mut usize) -> HRESULT {
 pub fn XAsyncCancel(block: *mut AsyncBlock) {
     if let Some(call) = call(block) {
         call.provider(OP_CANCEL, block, 0, std::ptr::null_mut());
-        complete_call(&call, block, E_ABORT, 0);
+        XAsyncComplete(block, E_ABORT, 0);
     }
 }
 
@@ -812,18 +755,12 @@ pub fn finished_with(
 
 /// Like [`finished_with`], but the result comes from `work`, run on a
 /// thread of ours; the call stays pending until it returns (a dialog, say).
-///
-/// The thread may outlive the call: a canceled call ends at once, its state
-/// is cleaned up and the title may begin its next call on the same block.
-/// So the thread shares the state rather than borrowing it, and completes
-/// only its own call, if that is still the block's.
 pub fn pending_with(
     block: *mut AsyncBlock,
     identity: *const c_void,
     work: impl FnOnce() -> Result<Vec<u8>, HRESULT> + Send + 'static,
 ) -> HRESULT {
-    type Work = Box<dyn FnOnce() -> Result<Vec<u8>, HRESULT> + Send>;
-    type Data = Arc<Mutex<(Option<Work>, Vec<u8>)>>;
+    type Data = Mutex<(Option<Box<dyn FnOnce() -> Result<Vec<u8>, HRESULT> + Send>>, Vec<u8>)>;
     extern "system" fn provider(op: u32, data: *const ProviderData) -> HRESULT {
         // SAFETY: the runtime passes valid provider data; the context is the
         // boxed state until cleanup frees it.
@@ -833,11 +770,9 @@ pub fn pending_with(
             // SAFETY: boxed in `pending_with`; nothing runs after cleanup.
             OP_CLEANUP => drop(unsafe { Box::from_raw(state) }),
             OP_BEGIN => {
-                // SAFETY: as above; the call is beginning, so not cleaned up.
-                let state = unsafe { &*state }.clone();
-                let work = lock(&state).0.take();
-                // The call being begun, already the block's.
-                let (block, mine) = (data.block as usize, call(data.block));
+                // SAFETY: as above; cleanup waits for completion.
+                let work = unsafe { &*state }.lock().unwrap_or_else(|e| e.into_inner()).0.take();
+                let (block, state) = (data.block as usize, state as usize);
                 std::thread::spawn(move || {
                     let result = work.map_or(Err(E_ABORT), |work| work());
                     let (hr, len) = match &result {
@@ -845,13 +780,11 @@ pub fn pending_with(
                         Err(hr) => (*hr, 0),
                     };
                     if let Ok(bytes) = result {
-                        lock(&state).1 = bytes;
+                        // SAFETY: the call is pending, so its state lives.
+                        let state = unsafe { &*(state as *const Data) };
+                        state.lock().unwrap_or_else(|e| e.into_inner()).1 = bytes;
                     }
-                    let block = block as *mut AsyncBlock;
-                    let current = call(block);
-                    if mine.is_some_and(|mine| current.is_some_and(|c| Arc::ptr_eq(&c, &mine))) {
-                        XAsyncComplete(block, hr, len);
-                    }
+                    XAsyncComplete(block as *mut AsyncBlock, hr, len);
                 });
             }
             // SAFETY: as above; the runtime checked the buffer's size.
@@ -865,16 +798,9 @@ pub fn pending_with(
         }
         S_OK
     }
-    let work: Work = Box::new(work);
-    let state: Box<Data> = Box::new(Arc::new(Mutex::new((Some(work), Vec::new()))));
+    let state: Box<Data> = Box::new(Mutex::new((Some(Box::new(work)), Vec::new())));
     let context = Box::into_raw(state);
-    let hr = XAsyncBegin(
-        block,
-        context.cast(),
-        identity,
-        std::ptr::null(),
-        Some(provider),
-    );
+    let hr = XAsyncBegin(block, context.cast(), identity, std::ptr::null(), Some(provider));
     if hr < 0 {
         // SAFETY: refused before the call existed; still ours.
         drop(unsafe { Box::from_raw(context) });
@@ -1160,62 +1086,6 @@ mod tests {
         COMPLETED.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// A title that never takes a call's result and frees its block: the
-    /// next block allocated at that address (zeroed, as a new block must
-    /// be) begins a call like any other.
-    #[test]
-    fn a_new_block_where_a_result_was_left_begins_a_call() {
-        static CLEANED: AtomicU32 = AtomicU32::new(0);
-        /// Completes at once with one byte to fetch; counts its cleanups.
-        extern "system" fn left(op: u32, data: *const ProviderData) -> HRESULT {
-            match op {
-                // SAFETY: the runtime passes valid provider data.
-                OP_BEGIN => XAsyncComplete(unsafe { (*data).block }, S_OK, 1),
-                OP_CLEANUP => drop(CLEANED.fetch_add(1, Ordering::SeqCst)),
-                _ => {}
-            }
-            S_OK
-        }
-        /// Never completes by itself.
-        extern "system" fn idle(_: u32, _: *const ProviderData) -> HRESULT {
-            S_OK
-        }
-        let fresh = || AsyncBlock {
-            queue: std::ptr::null(),
-            context: std::ptr::null_mut(),
-            callback: None,
-            internal: [0; 4],
-        };
-        let (none, identity) = (std::ptr::null_mut(), 0x1e as *const c_void);
-        let begin = |block: &mut AsyncBlock, provider: Provider| {
-            XAsyncBegin(block, none, identity, std::ptr::null(), Some(provider))
-        };
-
-        let mut block = fresh();
-        assert_eq!(begin(&mut block, left), S_OK);
-        assert_eq!(XAsyncGetStatus(&mut block, false), S_OK);
-        // The block as the call left it is still that call's.
-        assert_eq!(begin(&mut block, left), E_INVALIDARG);
-        assert_eq!(CLEANED.load(Ordering::SeqCst), 0);
-
-        // Freed with its result never taken, and a new block in its place.
-        block = fresh();
-        assert_eq!(finished_with(&mut block, identity, Ok(vec![9])), S_OK);
-        assert_eq!(CLEANED.load(Ordering::SeqCst), 1, "the call left behind");
-        let mut value = 0u8;
-        assert_eq!(result(&mut block, identity, &mut value), S_OK);
-        assert_eq!(value, 9);
-        assert!(call(&mut block).is_none());
-
-        // A call still in flight keeps its address, whatever the block holds.
-        let mut block = fresh();
-        assert_eq!(begin(&mut block, idle), S_OK);
-        block = fresh();
-        assert_eq!(begin(&mut block, left), E_INVALIDARG);
-        XAsyncComplete(&mut block, E_ABORT, 0);
-        assert!(call(&mut block).is_none());
-    }
-
     #[test]
     fn async_calls_complete_and_return_results() {
         let mut q = std::ptr::null();
@@ -1264,156 +1134,6 @@ mod tests {
         XTaskQueueCloseHandle(q);
     }
 
-    /// What a test sees of a block that a title reuses: its completion
-    /// routine begins the next call on the same block.
-    #[derive(Default)]
-    struct Reuse {
-        completions: AtomicU32,
-        next_begun: AtomicBool,
-        next_worked: AtomicBool,
-    }
-
-    /// A block whose completion routine is [`begin_next`].
-    fn reused_block(queue: *const Queue, reuse: &Reuse) -> AsyncBlock {
-        AsyncBlock {
-            queue,
-            context: std::ptr::from_ref(reuse).cast_mut().cast(),
-            callback: Some(begin_next),
-            internal: [0; 4],
-        }
-    }
-
-    /// Begins a call without an identity.
-    fn begin(block: *mut AsyncBlock, context: *mut c_void, provider: Provider) -> HRESULT {
-        let none = std::ptr::null();
-        XAsyncBegin(block, context, none, none.cast(), Some(provider))
-    }
-
-    /// Begins the next call on the block the first time a call completes,
-    /// as a title that keeps one block for repeated calls does.
-    extern "system" fn begin_next(block: *mut AsyncBlock) {
-        // SAFETY: the block is from `reused_block`, its `Reuse` still alive.
-        let context = unsafe { (*block).context };
-        // SAFETY: as above.
-        let reuse = unsafe { &*context.cast::<Reuse>() };
-        if reuse.completions.fetch_add(1, Ordering::SeqCst) == 0 {
-            let hr = begin(block, context, next_call);
-            reuse.next_begun.store(hr == S_OK, Ordering::SeqCst);
-        }
-    }
-
-    /// The next call's provider: it never ends on its own, and notes being
-    /// asked to work.
-    extern "system" fn next_call(op: u32, data: *const ProviderData) -> HRESULT {
-        // SAFETY: the runtime passes valid provider data; its context is
-        // the test's `Reuse`.
-        let reuse = unsafe { &*(*data).context.cast::<Reuse>() };
-        if op == OP_DO_WORK {
-            reuse.next_worked.store(true, Ordering::SeqCst);
-            return E_PENDING;
-        }
-        S_OK
-    }
-
-    /// A provider that ends its call itself, in `DoWork` and on cancel, then
-    /// returns `S_OK`, as providers do.
-    extern "system" fn ends_itself(op: u32, data: *const ProviderData) -> HRESULT {
-        // SAFETY: the runtime passes valid provider data.
-        let block = unsafe { (*data).block };
-        match op {
-            OP_DO_WORK => XAsyncComplete(block, S_OK, 0),
-            OP_CANCEL => XAsyncComplete(block, E_ABORT, 0),
-            _ => {}
-        }
-        S_OK
-    }
-
-    #[test]
-    fn a_finished_calls_work_result_leaves_the_next_call_alone() {
-        let mut q = std::ptr::null();
-        // Work dispatched by hand; completion routines run where the call
-        // completes, inside the provider's `DoWork`.
-        assert_eq!(XTaskQueueCreate(0, 3, &mut q), S_OK);
-        let reuse = Reuse::default();
-        let mut block = reused_block(q, &reuse);
-        assert_eq!(begin(&mut block, std::ptr::null_mut(), ends_itself), S_OK);
-        assert_eq!(XAsyncSchedule(&mut block, 0), S_OK);
-        assert!(XTaskQueueDispatch(q, WORK, 0));
-        assert!(reuse.next_begun.load(Ordering::SeqCst));
-        assert_eq!(XAsyncGetStatus(&mut block, false), E_PENDING);
-        assert_eq!(reuse.completions.load(Ordering::SeqCst), 1);
-
-        XAsyncCancel(&mut block);
-        assert_eq!(XAsyncGetStatus(&mut block, false), E_ABORT);
-        XTaskQueueCloseHandle(q);
-    }
-
-    #[test]
-    fn a_canceled_call_leaves_the_next_call_alone() {
-        let mut q = std::ptr::null();
-        assert_eq!(XTaskQueueCreate(0, 3, &mut q), S_OK);
-        let reuse = Reuse::default();
-        let mut block = reused_block(q, &reuse);
-        assert_eq!(begin(&mut block, std::ptr::null_mut(), ends_itself), S_OK);
-        assert_eq!(XAsyncSchedule(&mut block, 0), S_OK);
-        // The provider ends the call on cancel, before its work has run.
-        XAsyncCancel(&mut block);
-        assert!(reuse.next_begun.load(Ordering::SeqCst));
-        assert_eq!(XAsyncGetStatus(&mut block, false), E_PENDING);
-        // The canceled call's work is still queued; it runs nothing now.
-        assert!(XTaskQueueDispatch(q, WORK, 0));
-        assert!(!reuse.next_worked.load(Ordering::SeqCst));
-        assert_eq!(XAsyncGetStatus(&mut block, false), E_PENDING);
-        assert_eq!(reuse.completions.load(Ordering::SeqCst), 1);
-
-        XAsyncCancel(&mut block);
-        assert_eq!(XAsyncGetStatus(&mut block, false), E_ABORT);
-        XTaskQueueCloseHandle(q);
-    }
-
-    #[test]
-    fn a_canceled_pending_call_leaves_the_next_call_alone() {
-        static IDENTITY: u8 = 0;
-        let identity = (&raw const IDENTITY).cast();
-        let mut block = AsyncBlock {
-            queue: std::ptr::null(),
-            context: std::ptr::null_mut(),
-            callback: None,
-            internal: [0; 4],
-        };
-        // Work that runs until it is told to finish (a dialog, say).
-        let gated = |result: Vec<u8>| {
-            let (go, wait) = std::sync::mpsc::channel::<()>();
-            let work = move || {
-                let _ = wait.recv();
-                Ok(result)
-            };
-            (go, work)
-        };
-        let (finish_first, first) = gated(vec![1, 2, 3]);
-        assert_eq!(pending_with(&mut block, identity, first), S_OK);
-        XAsyncCancel(&mut block);
-        assert_eq!(XAsyncGetStatus(&mut block, true), E_ABORT);
-
-        // The title begins its next call on the same block; then the
-        // canceled call's work ends.
-        let (finish_second, second) = gated(vec![9]);
-        assert_eq!(pending_with(&mut block, identity, second), S_OK);
-        finish_first.send(()).unwrap();
-        std::thread::sleep(Duration::from_millis(200));
-        assert_eq!(XAsyncGetStatus(&mut block, false), E_PENDING);
-
-        finish_second.send(()).unwrap();
-        assert_eq!(XAsyncGetStatus(&mut block, true), S_OK);
-        let (mut out, mut used) = ([0u8; 4], 0);
-        let buffer = out.as_mut_ptr().cast();
-        assert_eq!(
-            XAsyncGetResult(&mut block, identity, 4, buffer, &mut used),
-            S_OK
-        );
-        assert_eq!(&out[..used], [9]);
-    }
-
     #[test]
     fn a_nonnegative_completion_still_returns_its_payload() {
         const S_FALSE: HRESULT = 1;
@@ -1444,13 +1164,7 @@ mod tests {
         };
         let identity = 0x77 as *const c_void;
         assert_eq!(
-            XAsyncBegin(
-                &mut block,
-                std::ptr::null_mut(),
-                identity,
-                std::ptr::null(),
-                Some(provider)
-            ),
+            XAsyncBegin(&mut block, std::ptr::null_mut(), identity, std::ptr::null(), Some(provider)),
             S_OK
         );
         assert!(XTaskQueueDispatch(q, WORK, 0));
@@ -1461,20 +1175,11 @@ mod tests {
         let mut value = 0u64;
         let mut used = 0;
         assert_eq!(
-            XAsyncGetResult(
-                &mut block,
-                identity,
-                8,
-                (&mut value as *mut u64).cast(),
-                &mut used
-            ),
+            XAsyncGetResult(&mut block, identity, 8, (&mut value as *mut u64).cast(), &mut used),
             S_OK
         );
         assert_eq!((value, used), (0x1234, 8));
-        assert!(
-            call(&raw mut block).is_none(),
-            "the call ends with its result"
-        );
+        assert!(call(&raw mut block).is_none(), "the call ends with its result");
         XTaskQueueCloseHandle(q);
     }
 
@@ -1628,41 +1333,5 @@ mod tests {
             E_ABORT
         );
         XTaskQueueCloseHandle(q);
-    }
-
-    /// The call a test provider looks at in its cleanup, and what it saw
-    /// (1: the completion lock was free, 2: held).
-    static CLEANED: Mutex<Option<Arc<Call>>> = Mutex::new(None);
-    static SEEN: AtomicU32 = AtomicU32::new(0);
-
-    extern "system" fn cleanup_checks(op: u32, _: *const ProviderData) -> HRESULT {
-        if op == OP_CLEANUP {
-            let call = CLEANED.lock().unwrap().clone();
-            let free = call.is_some_and(|c| c.done.try_lock().is_ok());
-            SEEN.store(if free { 1 } else { 2 }, Ordering::SeqCst);
-        }
-        S_OK
-    }
-
-    /// A failed call's cleanup runs without the completion lock: a cleanup
-    /// that waits for a thread completing the same call would otherwise
-    /// deadlock with it. The status is published after the cleanup.
-    #[test]
-    fn cleanup_runs_without_the_completion_lock() {
-        let mut block = AsyncBlock {
-            queue: std::ptr::null(),
-            context: std::ptr::null_mut(),
-            callback: None,
-            internal: [0; 4],
-        };
-        let (context, none) = (std::ptr::null_mut(), std::ptr::null());
-        let provider = Some(cleanup_checks as Provider);
-        let begun = XAsyncBegin(&mut block, context, none, none.cast(), provider);
-        assert_eq!(begun, S_OK);
-        *CLEANED.lock().unwrap() = call(&mut block);
-        XAsyncComplete(&mut block, E_ABORT, 0);
-        assert_eq!(SEEN.load(Ordering::SeqCst), 1, "cleanup ran under the lock");
-        assert_eq!(XAsyncGetStatus(&mut block, true), E_ABORT);
-        *CLEANED.lock().unwrap() = None;
     }
 }

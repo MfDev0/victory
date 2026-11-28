@@ -1,0 +1,32 @@
+name: VIctoryTry.exe
+
+# Builds VIctoryTry.exe (scripts/try/build-exe.sh) from the newest try.ps1 and
+# puts it on the v1 release, so a download is never an old version (an exe
+# holds the try.ps1 it was built with). Runs when try.ps1 changes.
+
+on:
+  push:
+    branches: [arena/59fabb00-victory]
+    paths: [scripts/try/try.ps1, scripts/try/build-exe.sh, .github/workflows/tryexe.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  exe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build
+        run: |
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install --quiet ziglang
+          if ! bash scripts/try/build-exe.sh "$PWD/out" > b.log 2>&1; then
+            echo "::error title=build::$(tail -c 3000 b.log | tr '\n\r%' '   ')"
+            exit 1
+          fi
+      - name: Put it on the v1 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload v1 out/VIctoryTry.exe --clobber -R "$GITHUB_REPOSITORY"

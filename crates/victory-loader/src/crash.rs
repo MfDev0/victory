@@ -8,26 +8,29 @@
 //! exception too), is reported from the unhandled-exception filter
 //! (`report_unhandled`, which the runtime calls ahead of the title's own)
 //! and appended to the crash log, with the title's last debug output, which
-//! often states the reason. Diagnostics builds can also append first-chance
-//! breakpoints with `VICTORY_CRASH_BREAKPOINTS=1`. Panics of ours go to the
-//! crash log too.
+//! often states the reason. Panics of ours go to the crash log too.
 
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, Ordering};
 use windows_sys::Win32::Foundation::{
     EXCEPTION_ACCESS_VIOLATION, EXCEPTION_BREAKPOINT, EXCEPTION_ILLEGAL_INSTRUCTION,
     EXCEPTION_INT_DIVIDE_BY_ZERO, EXCEPTION_PRIV_INSTRUCTION, EXCEPTION_STACK_OVERFLOW, HMODULE,
 };
 
 use windows_sys::Win32::System::Diagnostics::Debug::{
-    AddVectoredExceptionHandler, CONTEXT, EXCEPTION_POINTERS, M128A, RtlLookupFunctionEntry,
-    RtlVirtualUnwind, SetUnhandledExceptionFilter, UNW_FLAG_NHANDLER,
+    AddVectoredExceptionHandler, CONTEXT, EXCEPTION_POINTERS, IMAGE_RUNTIME_FUNCTION_ENTRY, M128A,
+    ReadProcessMemory, RtlLookupFunctionEntry, RtlVirtualUnwind, SetUnhandledExceptionFilter,
+    UNW_FLAG_NHANDLER,
 };
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
     GetModuleFileNameW, GetModuleHandleExW,
 };
-use windows_sys::Win32::System::Threading::GetCurrentThreadStackLimits;
+use windows_sys::Win32::System::Memory::{
+    MEM_COMMIT, MEM_IMAGE, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
+    PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
+    VirtualQuery,
+};
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThreadStackLimits};
 
 const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 /// Frames listed per report.
@@ -48,21 +51,17 @@ pub fn save_on_crash(ranges: Vec<(usize, usize, std::path::PathBuf)>) {
 /// The file crash reports are appended to, besides being printed.
 static LOG: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
-/// Read before installing the exception handler.
-static LOG_FIRST_CHANCE_BREAKPOINTS: AtomicBool = AtomicBool::new(false);
-
 /// Also appends every unhandled-exception report and panic to `file`, so a
 /// crash can be read after the console is gone.
 pub fn log_crashes_to(file: std::path::PathBuf) {
     if LOG.set(file).is_ok() {
-        let _ = HOST.set(host());
         let print = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             print(info);
             append_to_log(&format!(
                 "VIctory: panic on thread {:?}: {info}\n{}",
                 std::thread::current().name().unwrap_or("?"),
-                report_end()
+                title_output()
             ));
         }));
     }
@@ -71,11 +70,8 @@ pub fn log_crashes_to(file: std::path::PathBuf) {
 /// Appends a failure that is not an exception (the host GPU's) to the crash
 /// log, with the title's last debug output, and prints it.
 pub fn log_crash(text: &str) {
-    let text = format!(
-        "{text}
-{}",
-        report_end()
-    );
+    let text = format!("{text}
+{}", title_output());
     eprint!("{text}");
     append_to_log(&text);
 }
@@ -86,16 +82,9 @@ fn append_to_log(text: &str) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let opened = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(file);
+    let opened = std::fs::OpenOptions::new().create(true).append(true).open(file);
     if let Ok(mut f) = opened {
-        let _ = write!(
-            f,
-            "unix time {now}, process {}\n{text}\n",
-            std::process::id()
-        );
+        let _ = write!(f, "unix time {now}, process {}\n{text}\n", std::process::id());
     }
 }
 
@@ -122,60 +111,7 @@ fn title_output() -> String {
     let Ok(said) = SAID.try_lock() else {
         return String::new();
     };
-    said.iter()
-        .map(|l| format!("  title said: {l}\n"))
-        .collect()
-}
-
-/// The host's line in a crash report. Its CPU and Windows build decide what
-/// title code runs (Intel CPUs lack some of the console's AMD-only
-/// instructions) and which D3D12 runtime there is, so a report needs both.
-/// Set along with the crash log, so a crash queries nothing.
-static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-
-/// What ends a crash report: the host, then the title's last debug output.
-fn report_end() -> String {
-    let host = HOST.get().map_or("", String::as_str);
-    format!("{host}{}", title_output())
-}
-
-/// The line [`HOST`] holds.
-fn host() -> String {
-    format!("  host: {}, Windows {}\n", cpu_name(), windows_version())
-}
-
-/// The CPU's brand string, e.g. `AMD Ryzen 7 5700X3D 8-Core Processor`.
-fn cpu_name() -> String {
-    use std::arch::x86_64::__cpuid;
-    if __cpuid(0x8000_0000).eax < 0x8000_0004 {
-        return "an unnamed CPU".into();
-    }
-    let bytes: Vec<u8> = (0x8000_0002..=0x8000_0004)
-        .flat_map(|leaf| {
-            let r = __cpuid(leaf);
-            [r.eax, r.ebx, r.ecx, r.edx]
-        })
-        .flat_map(u32::to_le_bytes)
-        .collect();
-    let padding = |c: char| c == '\0' || c.is_whitespace();
-    let name = String::from_utf8_lossy(&bytes);
-    name.trim_matches(padding).to_owned()
-}
-
-/// The running Windows as `major.minor.build`. `RtlGetVersion` gives the
-/// real one; `GetVersionEx` gives what the executable's manifest declares.
-fn windows_version() -> String {
-    use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
-    use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
-    // SAFETY: a zeroed OSVERSIONINFOW is valid; its size field is set.
-    let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
-    info.dwOSVersionInfoSize = size_of::<OSVERSIONINFOW>() as u32;
-    // SAFETY: fills the structure passed, whose size it was told.
-    if unsafe { RtlGetVersion(&mut info) } != 0 {
-        return "of unknown version".into();
-    }
-    let (major, minor, build) = (info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber);
-    format!("{major}.{minor}.{build}")
+    said.iter().map(|l| format!("  title said: {l}\n")).collect()
 }
 
 /// Installs the handlers; call once before running title code.
@@ -185,11 +121,8 @@ pub fn report_crashes() {
         unsafe { report_unhandled(info) };
         EXCEPTION_CONTINUE_SEARCH
     }
-    LOG_FIRST_CHANCE_BREAKPOINTS.store(
-        cfg!(feature = "diagnostics")
-            && std::env::var_os("VICTORY_CRASH_BREAKPOINTS").is_some_and(|value| value == "1"),
-        Ordering::Relaxed,
-    );
+    // Read the switch now, not first inside a handler.
+    unwind_checks_enabled();
     // SAFETY: registers handlers that only read the exception they are
     // given; the title's own filter, once it sets one, takes the place of
     // ours and calls `report_unhandled` first.
@@ -211,12 +144,8 @@ const FATAL: [i32; 6] = [
 
 /// Console CPUs are Zen 2: titles use AMD-only instructions Intel CPUs
 /// lack. Does their job instead: `clzero` (`0f 01 fc`) zeroes the 64-byte
-/// line at `rax` (see [`clzero`] for the loops around it);
-/// `monitorx`/`mwaitx` (`0f 01 fa`/`fb`) are wait hints, so a spin loop
-/// around them works with mwaitx as a yield; `rdpru` (`0f 01 fd`) reads
-/// MPERF (`ecx` 0) or APERF (1), cycles at the nominal and the actual
-/// frequency, and gets the time-stamp counter for both: a core that never
-/// changes frequency.
+/// line at `rax`; `monitorx`/`mwaitx` (`0f 01 fa`/`fb`) are wait hints, so
+/// a spin loop around them works with mwaitx as a yield.
 unsafe fn emulate_amd_only(info: *mut EXCEPTION_POINTERS) -> bool {
     // SAFETY: the system passes valid exception pointers; the faulting
     // instruction's bytes are readable, as the CPU just fetched them.
@@ -228,21 +157,9 @@ unsafe fn emulate_amd_only(info: *mut EXCEPTION_POINTERS) -> bool {
         }
         let code = context.Rip as *const u8;
         match code.cast::<[u8; 3]>().read_unaligned() {
-            [0x0f, 0x01, 0xfc] => return clzero(context),
+            [0x0f, 0x01, 0xfc] => ((context.Rax & !63) as *mut u8).write_bytes(0, 64),
             [0x0f, 0x01, 0xfa] => {}
             [0x0f, 0x01, 0xfb] => std::thread::yield_now(),
-            [0x0f, 0x01, 0xfd] => {
-                // Flags are left as they are: a Zen 3 changes none, for
-                // known counters or not (measured in user mode).
-                let known = context.Rcx as u32 <= 1;
-                let cycles = if known {
-                    std::arch::x86_64::_rdtsc()
-                } else {
-                    0
-                };
-                context.Rax = cycles & 0xffff_ffff;
-                context.Rdx = cycles >> 32;
-            }
             _ => {
                 // Only bytes inside the faulting instruction's page are read: the next page may
                 // not be mapped.
@@ -264,7 +181,9 @@ unsafe fn emulate_amd_only(info: *mut EXCEPTION_POINTERS) -> bool {
                     context.Rip += pass.len as u64;
                     return true;
                 }
-                if let Some(len) = clwb_len(&bytes[..n]) {
+                if n >= 15
+                    && let Some(len) = clwb_len(bytes[..15].try_into().unwrap_or([0; 15]))
+                {
                     // A write-back hint: the PC's memory is coherent, so it has nothing to do.
                     context.Rip += len as u64;
                     return true;
@@ -283,12 +202,12 @@ unsafe fn emulate_amd_only(info: *mut EXCEPTION_POINTERS) -> bool {
 
 /// `clwb m8` (`66 [rex] 0f ae /6`, a memory operand), which Intel CPUs before
 /// Ice Lake lack: its length, or `None` for any other instruction.
-fn clwb_len(code: &[u8]) -> Option<usize> {
-    let at = if *code.get(1)? & 0xf0 == 0x40 { 2 } else { 1 };
-    if *code.first()? != 0x66 || code.get(at..at + 2)? != [0x0f, 0xae] {
+fn clwb_len(code: [u8; 15]) -> Option<usize> {
+    let at = if code[1] & 0xf0 == 0x40 { 2 } else { 1 };
+    if code[0] != 0x66 || code[at] != 0x0f || code[at + 1] != 0xae {
         return None;
     }
-    let modrm = *code.get(at + 2)?;
+    let modrm = code[at + 2];
     let (mode, rm) = (modrm >> 6, modrm & 7);
     if mode == 3 || (modrm >> 3) & 7 != 6 {
         return None;
@@ -296,7 +215,7 @@ fn clwb_len(code: &[u8]) -> Option<usize> {
     let mut len = at + 3;
     let mut base = rm;
     if rm == 4 {
-        base = *code.get(len)? & 7;
+        base = code[len] & 7;
         len += 1;
     }
     len += match mode {
@@ -305,7 +224,7 @@ fn clwb_len(code: &[u8]) -> Option<usize> {
         2 => 4,
         _ => 0,
     };
-    (len <= code.len()).then_some(len)
+    Some(len)
 }
 
 /// A `clwb` write-back loop as the title's compilers build it, one cache line a
@@ -364,109 +283,6 @@ fn clwb_loop(code: &[u8]) -> Option<ClwbLoop> {
         return None;
     }
     (limit != base).then_some(ClwbLoop { base, limit, len })
-}
-
-/// `clzero` at `context.Rip`. An exception costs about a microsecond and
-/// titles clear tens of kilobytes at a time, a line per pass, so the two
-/// loops compilers build around the instruction are done whole in one
-/// exception, leaving registers and flags as their last pass would (`a`
-/// and `b` any registers but `rax`):
-///
-/// ```text
-/// top: clzero                 top: mov rax, a
-///      add rax, 0x40               add a, 0x40
-///      cmp rax, b                  clzero
-///      jb  top                     cmp a, b
-///                                  jb  top
-/// ```
-///
-/// Anything else around it is one line and the next instruction.
-///
-/// # Safety
-/// `context` is the state of a thread that faulted at a `clzero`; the
-/// lines its registers name are the title's to zero.
-unsafe fn clzero(context: &mut CONTEXT) -> bool {
-    // SAFETY: (every use) a line the title asked to zero.
-    let zero = |rax: u64| unsafe { ((rax & !63) as *mut u8).write_bytes(0, 64) };
-    let at = context.Rip as usize;
-    // The loops' other instructions are read only where that stays inside
-    // the faulting instruction's page (the next one may not be mapped).
-    let page = at & 0xfff;
-    if page + 12 <= 0x1000 {
-        // SAFETY: inside the page the CPU fetched the instruction from.
-        let after = unsafe { &*((at + 3) as *const [u8; 9]) };
-        if let [0x48, 0x83, 0xc0, 0x40, cmp @ .., 0x72, 0xf4] = after
-            && let Some((0, limit)) = compare_registers(cmp)
-            && limit != 0
-        {
-            let limit = *gpr(context, limit);
-            loop {
-                zero(context.Rax);
-                context.Rax = context.Rax.wrapping_add(0x40);
-                if context.Rax >= limit {
-                    break;
-                }
-            }
-            context.EFlags = context.EFlags & !CMP_FLAGS | cmp_flags(context.Rax, limit);
-            context.Rip += 12;
-            return true;
-        }
-    }
-    if (7..=0x1000 - 8).contains(&page) {
-        // SAFETY: inside the page the CPU fetched the instruction from.
-        let (before, after) = unsafe {
-            (
-                &*((at - 7) as *const [u8; 7]),
-                &*((at + 3) as *const [u8; 5]),
-            )
-        };
-        if let [
-            rex @ (0x48 | 0x4c),
-            0x89,
-            load,
-            add_rex @ (0x48 | 0x49),
-            0x83,
-            add,
-            0x40,
-        ] = *before
-            && let [cmp @ .., 0x72, 0xf1] = after
-            && let Some((a, b)) = compare_registers(cmp)
-            && load & 0xc7 == 0xc0
-            && a == (load >> 3) & 7 | (rex & 4) << 1
-            && add & 0xf8 == 0xc0
-            && a == add & 7 | (add_rex & 1) << 3
-            && a != 0
-            && b != 0
-        {
-            let limit = *gpr(context, b);
-            loop {
-                zero(context.Rax);
-                let next = *gpr(context, a);
-                if next >= limit {
-                    break;
-                }
-                context.Rax = next;
-                *gpr(context, a) = next.wrapping_add(0x40);
-            }
-            context.EFlags = context.EFlags & !CMP_FLAGS | cmp_flags(*gpr(context, a), limit);
-            context.Rip += 8;
-            return true;
-        }
-    }
-    zero(context.Rax);
-    context.Rip += 3;
-    true
-}
-
-/// `cmp rm, reg` between 64-bit registers (`REX.W 39 /r`): (`rm`, `reg`).
-fn compare_registers(code: &[u8]) -> Option<(u8, u8)> {
-    let &[rex @ 0x48..=0x4f, 0x39, modrm] = code else {
-        return None;
-    };
-    (modrm >> 6 == 3).then_some((
-        modrm & 7 | (rex & 1) << 3,
-        (modrm >> 3) & 7 | (rex & 4) << 1,
-    ))
 }
 
 /// The general register numbered `n` as instructions encode it.
@@ -528,20 +344,12 @@ unsafe fn sse4a(code: *const u8, xmm: &mut [M128A; 16]) -> Option<usize> {
         ((b(at + 3), b(at + 4)), at + 5)
     } else {
         // extrq reads its fields from src's low half, insertq from its high.
-        let f = if prefix == 0x66 {
-            xmm[src].Low
-        } else {
-            xmm[src].High as u64
-        };
+        let f = if prefix == 0x66 { xmm[src].Low } else { xmm[src].High as u64 };
         ((f as u8, (f >> 8) as u8), at + 3)
     };
     let (n, at_bit) = (u32::from(fields.0 & 63), u32::from(fields.1 & 63));
     let bits = if n == 0 { 64 } else { n };
-    let mask = if bits == 64 {
-        u64::MAX
-    } else {
-        (1u64 << bits) - 1
-    };
+    let mask = if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
     if prefix == 0x66 {
         // extrq: register form takes its fields from src, works on dst.
         if immediate && (modrm >> 3) & 7 != 0 {
@@ -557,17 +365,23 @@ unsafe fn sse4a(code: *const u8, xmm: &mut [M128A; 16]) -> Option<usize> {
 }
 
 unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
+    // an instruction of the console's CPU this one lacks: emulated, the title goes on
+    // SAFETY: the system passes valid exception pointers.
+    if unsafe { (*(*info).ExceptionRecord).ExceptionCode } == EXCEPTION_ILLEGAL_INSTRUCTION {
+        // SAFETY: the faulting thread's context, for the exception being dispatched.
+        let r = unsafe { crate::console_insn::emulate(&mut *(*info).ContextRecord) };
+        if r != 0 {
+            return r;
+        }
+    }
     // SAFETY: the system passes valid exception pointers.
     if unsafe { emulate_amd_only(info) } {
         return -1; // EXCEPTION_CONTINUE_EXECUTION
     }
     // SAFETY: as above.
-    let code = unsafe { (*(*info).ExceptionRecord).ExceptionCode };
-    if FATAL.contains(&code) {
-        let to_file =
-            code == EXCEPTION_BREAKPOINT && LOG_FIRST_CHANCE_BREAKPOINTS.load(Ordering::Relaxed);
+    if FATAL.contains(&unsafe { (*(*info).ExceptionRecord).ExceptionCode }) {
         // SAFETY: as above.
-        unsafe { report("first-chance exception", info, to_file) };
+        unsafe { report("first-chance exception", info, false) };
     }
     EXCEPTION_CONTINUE_SEARCH
 }
@@ -598,6 +412,43 @@ unsafe fn instruction_bytes(at: usize) -> String {
     hex.join(" ")
 }
 
+/// `len` bytes at `address` as hex, if all of them are committed, readable
+/// and not a guard page; `None` otherwise (nothing is read then).
+fn readable_hex(address: usize, len: usize) -> Option<String> {
+    use windows_sys::Win32::System::Memory::{
+        MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
+        PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
+        VirtualQuery,
+    };
+    if address < 0x10000 || address.checked_add(len).is_none() {
+        return None;
+    }
+    let mut at = address;
+    while at < address + len {
+        // SAFETY: a zeroed MEMORY_BASIC_INFORMATION is valid.
+        let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: reads the address space's bookkeeping only.
+        if unsafe { VirtualQuery(at as *const _, &mut info, size_of_val(&info)) } == 0 {
+            return None;
+        }
+        let readable = PAGE_READONLY
+            | PAGE_READWRITE
+            | PAGE_WRITECOPY
+            | PAGE_EXECUTE_READ
+            | PAGE_EXECUTE_READWRITE
+            | PAGE_EXECUTE_WRITECOPY;
+        if info.State != MEM_COMMIT || info.Protect & readable == 0 || info.Protect & PAGE_GUARD != 0
+        {
+            return None;
+        }
+        at = info.BaseAddress as usize + info.RegionSize;
+    }
+    // SAFETY: every page of the range is committed and readable.
+    let bytes = unsafe { std::slice::from_raw_parts(address as *const u8, len) };
+    let hex: Vec<_> = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    Some(hex.join(""))
+}
+
 /// MSVC's code for a C++ `throw`, and its magic first parameter.
 const CPP_EXCEPTION: i32 = 0xE06D_7363_u32 as i32;
 const CPP_MAGIC: usize = 0x1993_0520;
@@ -617,7 +468,8 @@ unsafe fn thrown(p: &[usize]) -> String {
         let types = p[3] + rva(p[2] + 12);
         let name = |i: usize| {
             let descriptor = p[3] + rva(p[3] + rva(types + 4 + 4 * i) + 4);
-            std::ffi::CStr::from_ptr((descriptor + 16) as *const std::ffi::c_char).to_string_lossy()
+            std::ffi::CStr::from_ptr((descriptor + 16) as *const std::ffi::c_char)
+                .to_string_lossy()
         };
         let first = name(0);
         let value = match &*first {
@@ -699,13 +551,59 @@ unsafe fn report(what: &str, info: *const EXCEPTION_POINTERS, to_file: bool) {
         context.R14,
         context.R15
     ));
-    for (i, pc) in unwind(*context).into_iter().enumerate() {
-        line(format!("  #{i:<2} {}", locate(pc as usize)));
+    let frames = unwind(*context);
+    for (i, pc) in frames.iter().enumerate() {
+        line(format!("  #{i:<2} {}", locate(*pc as usize)));
+    }
+    if code == EXCEPTION_ACCESS_VIOLATION {
+        // The code that faulted and its callers, and what the registers
+        // point at: enough to read the faulting function without the
+        // title's files. One print, so other threads' reports do not
+        // interleave with it.
+        // SAFETY: a plain query.
+        let thread = unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() };
+        let mut dump = format!("  dump of thread {thread}:");
+        let mut line = |l: String| {
+            dump.push('\n');
+            dump.push_str(&l);
+        };
+        if let Some(hex) = readable_hex(at.wrapping_sub(64), 64) {
+            line(format!("  code  {hex} |"));
+        }
+        if let Some(hex) = readable_hex(at, 32) {
+            line(format!("  code| {hex}"));
+        }
+        for (i, pc) in frames.iter().enumerate().skip(1).take(4) {
+            if let Some(hex) = readable_hex((*pc as usize).wrapping_sub(48), 48) {
+                line(format!("  #{i} called by  {hex} |"));
+            }
+        }
+        let registers = [
+            ("rax", context.Rax),
+            ("rcx", context.Rcx),
+            ("rdx", context.Rdx),
+            ("rsi", context.Rsi),
+            ("rdi", context.Rdi),
+            ("r8", context.R8),
+            ("r12", context.R12),
+            ("r15", context.R15),
+        ];
+        for (name, value) in registers {
+            if let Some(hex) = readable_hex(value as usize, 64) {
+                line(format!("  [{name}] {hex}"));
+            }
+        }
+        if let Some(hex) = readable_hex(context.Rsp as usize, 128) {
+            line(format!("  [rsp] {hex}"));
+        }
+        eprintln!("{dump}");
+        text.push_str(&dump);
+        text.push('\n');
     }
     if to_file {
-        let end = report_end();
-        eprint!("{end}");
-        text.push_str(&end);
+        let said = title_output();
+        eprint!("{said}");
+        text.push_str(&said);
         append_to_log(&text);
     }
     #[cfg(feature = "diagnostics")]
@@ -723,13 +621,14 @@ unsafe fn report(what: &str, info: *const EXCEPTION_POINTERS, to_file: bool) {
 /// Return addresses of the faulting thread's frames, from the faulting
 /// instruction up, by the unwind data of each image (the Windows loader
 /// registered it for title images too). Code without unwind data (our
-/// thunks, leaf functions) is taken to have its return address at `rsp`.
+/// thunks, leaf functions) is taken to have its return address at `rsp`;
+/// with `VICTORY_UNWIND_CHECKS` on (the default), only at the first frame.
 fn unwind(context: CONTEXT) -> Vec<u64> {
     let (mut low, mut high) = (0, 0);
     // SAFETY: writes the current thread's stack bounds.
     unsafe { GetCurrentThreadStackLimits(&mut low, &mut high) };
     let mut frames = Vec::with_capacity(MAX_FRAMES);
-    unwind_into(context, low, high, &mut frames);
+    unwind_into(context, low, high, &mut frames, unwind_checks_enabled());
     frames
 }
 
@@ -737,10 +636,26 @@ fn unwind(context: CONTEXT) -> Vec<u64> {
 #[repr(C, align(16))]
 pub(crate) struct Aligned16(pub(crate) CONTEXT);
 
+/// Whether the stack walk checks each code address, unwind record and stack
+/// range before it reads them. Read once: [`report_crashes`] reads it before
+/// title code runs, so the exception handler and a walk of a suspended
+/// thread never take the environment's lock.
+pub(crate) fn unwind_checks_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    // VICTORY_UNWIND_CHECKS=0 selects the original stack walk for A/B runs.
+    *ON.get_or_init(|| std::env::var_os("VICTORY_UNWIND_CHECKS").is_none_or(|value| value != "0"))
+}
+
 /// [`unwind`] for any thread of the process, its stack being `low..high`;
 /// pushes no more than `MAX_FRAMES`, so it does not allocate when `frames`
 /// has that capacity (another thread may be suspended holding the heap).
-pub(crate) fn unwind_into(context: CONTEXT, low: usize, high: usize, frames: &mut Vec<u64>) {
+pub(crate) fn unwind_into(
+    context: CONTEXT,
+    low: usize,
+    high: usize,
+    frames: &mut Vec<u64>,
+    checks: bool,
+) {
     // `RtlVirtualUnwind` writes the context with 16-byte aligned stores, and
     // windows-sys declares `CONTEXT` without that alignment: a by-value copy on
     // the stack can land 8 bytes off and fault (seen in a debug build).
@@ -750,19 +665,56 @@ pub(crate) fn unwind_into(context: CONTEXT, low: usize, high: usize, frames: &mu
     while frames.len() < MAX_FRAMES {
         // Stop where reading the stack would fault inside this handler.
         let rsp = context.Rsp as usize;
-        if rsp < low || rsp + 8 > high {
+        if rsp < low || rsp.checked_add(8).is_none_or(|end| end > high) {
             break;
         }
+        // With checks, code must be executable. Code outside an image (our
+        // thunks and stubs, made with `VirtualAlloc`) has no unwind data and
+        // is only taken at the first frame, by the leaf rule below.
+        let code_image = if checks {
+            let Some(region) = readable_region(context.Rip as usize) else {
+                break;
+            };
+            let in_image = region.Type == MEM_IMAGE;
+            if !executable(&region) || (!in_image && frames.len() != 1) {
+                break;
+            }
+            in_image.then_some(region.AllocationBase as usize)
+        } else {
+            None
+        };
         let mut image = 0;
-        // SAFETY: looks up the function table entry covering `Rip`, if any.
-        let entry = unsafe { RtlLookupFunctionEntry(context.Rip, &mut image, null_mut()) };
+        let entry = if checks && code_image.is_none() {
+            null_mut()
+        } else {
+            // SAFETY: looks up the function table entry covering `Rip`, if any.
+            unsafe { RtlLookupFunctionEntry(context.Rip, &mut image, null_mut()) }
+        };
         if entry.is_null() {
-            // SAFETY: `rsp` is inside this thread's stack.
-            context.Rip = unsafe { (rsp as *const u64).read() };
+            context.Rip = if checks {
+                let mut address = [0; 8];
+                if frames.len() != 1
+                    || readable_range(rsp, rsp + 8, None).is_none()
+                    || !read_memory(rsp, &mut address)
+                {
+                    break;
+                }
+                u64::from_le_bytes(address)
+            } else {
+                // SAFETY: `rsp` is inside this thread's stack.
+                unsafe { (rsp as *const u64).read_unaligned() }
+            };
             context.Rsp += 8;
         } else {
+            if checks
+                && (code_image != Some(image as usize)
+                    || stack_reads_end(context, image as usize, entry, low, high).is_none())
+            {
+                break;
+            }
             let (mut data, mut frame) = (null_mut(), 0);
-            // SAFETY: `entry` belongs to `image`; the context is our copy.
+            // SAFETY: `entry` belongs to `image` and the context is our aligned copy.
+            // The checked path bounds the stack reads and checks the image ranges above.
             unsafe {
                 RtlVirtualUnwind(
                     UNW_FLAG_NHANDLER,
@@ -776,11 +728,286 @@ pub(crate) fn unwind_into(context: CONTEXT, low: usize, high: usize, frames: &mu
                 )
             };
         }
-        if context.Rip == 0 {
+        if context.Rip == 0 || (checks && (context.Rsp <= rsp as u64 || context.Rsp >= high as u64))
+        {
             break;
         }
         frames.push(context.Rip);
     }
+}
+
+struct UnwindInfo {
+    stack_bytes: usize,
+    save_end: usize,
+    saves_xmm: bool,
+    frame: u8,
+    chained_rva: Option<usize>,
+}
+
+/// Bounds the stack accesses described by one x64 UNWIND_INFO record.
+fn parse_unwind_info(bytes: &[u8]) -> Option<UnwindInfo> {
+    let &[version_flags, prolog, count, frame] = bytes.get(..4)? else {
+        return None;
+    };
+    let flags = version_flags >> 3;
+    let chained = flags == 4;
+    let register = frame & 15;
+    if !matches!(version_flags & 7, 1 | 2)
+        || (!chained && flags > 3)
+        || (register == 0 && frame != 0)
+        || (register != 0 && !nonvolatile(register))
+    {
+        return None;
+    }
+    let count = usize::from(count);
+    let tail = 4 + count.next_multiple_of(2) * 2;
+    let chained_rva = if chained {
+        Some(u32::from_le_bytes(bytes.get(tail + 8..tail + 12)?.try_into().ok()?) as usize)
+    } else {
+        // The handler RVA, when present, follows the padded unwind codes.
+        bytes.get(..tail + usize::from(flags != 0) * 4)?;
+        None
+    };
+    let mut codes = bytes.get(4..4 + count * 2)?;
+    let mut stack_bytes: usize = 0;
+    let mut save_end = 0;
+    let mut saves_xmm = false;
+    let mut sets_frame = false;
+    let mut previous_offset = prolog;
+    while !codes.is_empty() {
+        let offset = codes[0];
+        if offset > previous_offset {
+            return None;
+        }
+        previous_offset = offset;
+        let (op, info) = (codes[1] & 15, codes[1] >> 4);
+        codes = &codes[2..];
+        let (extra, growth) = match op {
+            // Chained records can add saves but cannot move RSP.
+            0 if !chained && nonvolatile(info) && (info != register || sets_frame) => (0, 8),
+            1 if !chained && info == 0 => (2, unwind_operand(codes, 2)? * 8),
+            1 if !chained && info == 1 => (4, unwind_operand(codes, 4)?),
+            2 if !chained => (0, (usize::from(info) + 1) * 8),
+            3 if !chained && info == 0 && register != 0 && !sets_frame => {
+                sets_frame = true;
+                (0, 0)
+            }
+            4 | 5 | 8 | 9 => {
+                let xmm = op >= 8;
+                let valid_register = if xmm {
+                    info >= 6
+                } else {
+                    nonvolatile(info) && (info != register || sets_frame)
+                };
+                if !valid_register {
+                    return None;
+                }
+                let width = if xmm { 16 } else { 8 };
+                let extra = if op & 1 == 0 { 2 } else { 4 };
+                let mut offset = unwind_operand(codes, extra)?;
+                if extra == 2 {
+                    offset *= width;
+                }
+                if !offset.is_multiple_of(width) {
+                    return None;
+                }
+                save_end = save_end.max(offset.checked_add(width)?);
+                saves_xmm |= xmm;
+                (extra, 0)
+            }
+            // The machine frame holds the saved RIP and RSP, with an optional error code.
+            10 if !chained && info <= 1 && codes.is_empty() => (0, 40 + usize::from(info) * 8),
+            _ => return None,
+        };
+        if !growth.is_multiple_of(8) {
+            return None;
+        }
+        stack_bytes = stack_bytes.checked_add(growth)?;
+        codes = codes.get(extra..)?;
+    }
+    if !chained && sets_frame != (register != 0) {
+        return None;
+    }
+    Some(UnwindInfo {
+        stack_bytes,
+        save_end,
+        saves_xmm,
+        frame,
+        chained_rva,
+    })
+}
+
+fn unwind_operand(bytes: &[u8], width: usize) -> Option<usize> {
+    let mut value = [0; 4];
+    value[..width].copy_from_slice(bytes.get(..width)?);
+    Some(u32::from_le_bytes(value) as usize)
+}
+
+fn nonvolatile(register: u8) -> bool {
+    matches!(register, 3 | 5..=7 | 12..=15)
+}
+
+fn frame_register(context: &CONTEXT, register: u8) -> Option<usize> {
+    Some(match register {
+        3 => context.Rbx,
+        5 => context.Rbp,
+        6 => context.Rsi,
+        7 => context.Rdi,
+        12 => context.R12,
+        13 => context.R13,
+        14 => context.R14,
+        15 => context.R15,
+        _ => return None,
+    } as usize)
+}
+
+fn readable_region(address: usize) -> Option<MEMORY_BASIC_INFORMATION> {
+    let mut region = MEMORY_BASIC_INFORMATION::default();
+    // SAFETY: queries metadata for an address and writes only our local buffer.
+    let read = unsafe { VirtualQuery(address as *const _, &mut region, size_of_val(&region)) };
+    let readable = matches!(
+        region.Protect & 0xff,
+        PAGE_READONLY
+            | PAGE_READWRITE
+            | PAGE_WRITECOPY
+            | PAGE_EXECUTE_READ
+            | PAGE_EXECUTE_READWRITE
+            | PAGE_EXECUTE_WRITECOPY
+    );
+    (read != 0 && region.State == MEM_COMMIT && region.Protect & PAGE_GUARD == 0 && readable)
+        .then_some(region)
+}
+
+fn executable(region: &MEMORY_BASIC_INFORMATION) -> bool {
+    matches!(
+        region.Protect & 0xff,
+        PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
+    )
+}
+
+fn readable_range(mut start: usize, end: usize, image: Option<usize>) -> Option<()> {
+    while start < end {
+        let region = readable_region(start)?;
+        if image
+            .is_some_and(|base| region.Type != MEM_IMAGE || region.AllocationBase as usize != base)
+        {
+            return None;
+        }
+        start = (region.BaseAddress as usize).checked_add(region.RegionSize)?;
+    }
+    Some(())
+}
+
+fn read_memory(address: usize, bytes: &mut [u8]) -> bool {
+    // SAFETY: Windows copies into our slice and reports failure for unreadable memory.
+    unsafe {
+        ReadProcessMemory(
+            GetCurrentProcess(),
+            address as *const _,
+            bytes.as_mut_ptr().cast(),
+            bytes.len(),
+            null_mut(),
+        ) != 0
+    }
+}
+
+fn read_image(image: usize, address: usize, bytes: &mut [u8]) -> Option<()> {
+    readable_range(address, address.checked_add(bytes.len())?, Some(image))?;
+    read_memory(address, bytes).then_some(())
+}
+
+fn stack_reads_end(
+    context: &CONTEXT,
+    image: usize,
+    entry: *const IMAGE_RUNTIME_FUNCTION_ENTRY,
+    low: usize,
+    high: usize,
+) -> Option<usize> {
+    let mut function = [0; 12];
+    read_image(image, entry as usize, &mut function)?;
+    let pc = context.Rip as usize;
+    let rva = pc.checked_sub(image)?;
+    let begin = unwind_operand(&function, 4)?;
+    let end = unwind_operand(&function[4..], 4)?;
+    if !(begin..end).contains(&rva) {
+        return None;
+    }
+
+    let mut instruction = [0; 8];
+    read_image(image, pc, &mut instruction)?;
+    // Version 1 can simulate an epilogue directly from code. These prefixes can
+    // move RSP by amounts that the unwind record alone does not establish.
+    let opcode = if matches!(instruction[0], 0x40..=0x4f) {
+        instruction[1]
+    } else {
+        instruction[0]
+    };
+    if matches!(opcode, 0x58..=0x5f)
+        || (matches!(instruction[0], 0x48..=0x4f)
+            && (opcode == 0x8d && instruction[2] & 0x38 == 0x20
+                || matches!(opcode, 0x81 | 0x83) && instruction[2] == 0xc4))
+    {
+        return None;
+    }
+
+    let mut unwind_rva = unwind_operand(&function[8..], 4)?;
+    let rsp = context.Rsp as usize;
+    let mut frame = None;
+    let mut save_end = 0;
+    // A limit also stops cycles in damaged chained records.
+    for _ in 0..32 {
+        if unwind_rva == 0 || !unwind_rva.is_multiple_of(4) {
+            return None;
+        }
+        let address = image.checked_add(unwind_rva)?;
+        let mut header = [0; 4];
+        read_image(image, address, &mut header)?;
+        let flags = header[0] >> 3;
+        let size = 4
+            + usize::from(header[2]).next_multiple_of(2) * 2
+            + match flags {
+                0 => 0,
+                1..=3 => 4,
+                4 => 12,
+                _ => return None,
+            };
+        let mut bytes = [0; 4 + 256 * 2 + 12];
+        let bytes = &mut bytes[..size];
+        read_image(image, address, bytes)?;
+        let info = parse_unwind_info(bytes)?;
+        if *frame.get_or_insert(info.frame) != info.frame {
+            return None;
+        }
+        // Windows subtracts the scaled offset from the register to recover
+        // the fixed frame base. In a partial prologue it may use RSP instead.
+        let base = if info.frame == 0 {
+            rsp
+        } else {
+            let register = frame_register(context, info.frame & 15)?;
+            if !(low..high).contains(&register) {
+                return None;
+            }
+            register.checked_sub(usize::from(info.frame >> 4) * 16)?
+        };
+        if !(low..high).contains(&base)
+            || (info.saves_xmm && (!base.is_multiple_of(16) || !rsp.is_multiple_of(16)))
+        {
+            return None;
+        }
+        save_end = save_end.max(info.save_end);
+        if let Some(next) = info.chained_rva {
+            unwind_rva = next;
+            continue;
+        }
+        let span = info.stack_bytes.checked_add(8)?.max(save_end);
+        let end = rsp.max(base).checked_add(span)?;
+        if end > high {
+            return None;
+        }
+        readable_range(rsp.min(base), end, None)?;
+        return Some(end);
+    }
+    None
 }
 
 /// `module+rva`, or the bare address.
@@ -963,83 +1190,26 @@ mod tests {
 
     #[test]
     fn clwb_lengths() {
-        assert_eq!(clwb_len(&[0x66, 0x41, 0x0f, 0xae, 0x31]), Some(5)); // clwb [r9]
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae, 0x30]), Some(4)); // clwb [rax]
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae, 0x70, 0x40]), Some(5)); // clwb [rax+0x40]
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae, 0xb0, 0, 1, 0, 0]), Some(8)); // [rax+disp32]
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae, 0x34, 0x24]), Some(5)); // clwb [rsp]
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae, 0x35, 0, 0, 0, 0]), Some(8)); // [rip+disp32]
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae, 0x38]), None); // clflushopt, /7
-        assert_eq!(clwb_len(&[0x0f, 0xae, 0x30]), None); // xsaveopt, no 66
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae, 0xf0]), None); // register form
-    }
-
-    #[test]
-    fn a_clwb_at_the_end_of_a_page_is_decoded() {
-        // Exact-length slices, as at the end of a page.
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae, 0x30]), Some(4));
-        assert_eq!(clwb_len(&[0x66, 0x41, 0x0f, 0xae, 0x31]), Some(5));
-        // Cut short by the slice: returns None without panicking.
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae, 0xb0, 0, 1]), None); // disp32, 6 of 8 bytes
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae, 0x70]), None); // disp8, 4 of 5 bytes
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae, 0x34]), None); // SIB missing
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae, 0x34, 0x25, 0, 0]), None); // SIB disp32 cut short
-        assert_eq!(clwb_len(&[0x66, 0x0f, 0xae]), None); // ModRM missing
-        assert_eq!(clwb_len(&[0x66]), None);
-        assert_eq!(clwb_len(&[]), None);
-
-        // Emulation at the last 4 and 5 bytes of a page with an unreadable page after it.
-        use windows_sys::Win32::System::Memory::{
-            MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_NOACCESS, PAGE_READWRITE, VirtualAlloc,
-            VirtualFree, VirtualProtect,
+        let pad = |b: &[u8]| {
+            let mut c = [0u8; 15];
+            c[..b.len()].copy_from_slice(b);
+            c
         };
-        // SAFETY: two pages of ours, the second unreadable so reading past the first faults.
-        unsafe {
-            let page = VirtualAlloc(
-                std::ptr::null(),
-                0x2000,
-                MEM_RESERVE | MEM_COMMIT,
-                PAGE_READWRITE,
-            )
-            .cast::<u8>();
-            assert!(!page.is_null());
-            let mut old = 0;
-            let guard = page.add(0x1000).cast();
-            assert_ne!(VirtualProtect(guard, 0x1000, PAGE_NOACCESS, &mut old), 0);
-            for insn in [
-                &[0x66, 0x0f, 0xae, 0x30][..],
-                &[0x66, 0x41, 0x0f, 0xae, 0x31][..],
-            ] {
-                let end = page.add(0x1000 - insn.len());
-                end.copy_from_nonoverlapping(insn.as_ptr(), insn.len());
-                let mut record: EXCEPTION_RECORD = std::mem::zeroed();
-                record.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION;
-                let mut context: CONTEXT = std::mem::zeroed();
-                context.Rip = end as u64;
-                let mut pointers = EXCEPTION_POINTERS {
-                    ExceptionRecord: &mut record,
-                    ContextRecord: &mut context,
-                };
-                assert!(emulate_amd_only(&mut pointers));
-                assert_eq!(context.Rip, end as u64 + insn.len() as u64);
-            }
-            VirtualFree(page.cast(), 0, MEM_RELEASE);
-        }
-    }
-
-    #[test]
-    fn the_host_line_names_the_cpu_and_windows() {
-        // e.g. "  host: AMD EPYC 7763 64-Core Processor, Windows 10.0.26100\n"
-        let line = host();
-        let framed = line.starts_with("  host: ") && line.ends_with('\n');
-        assert!(framed, "{line:?}");
-        let inner = line.trim_start_matches("  host: ").trim_end();
-        let (cpu, windows) = inner.rsplit_once(", Windows ").expect(&line);
-        let named = !cpu.is_empty() && cpu == cpu.trim() && !cpu.contains('\0');
-        assert!(named, "{line:?}");
-        let version: Vec<u32> = windows.split('.').filter_map(|n| n.parse().ok()).collect();
-        assert!(version.len() == 3 && version[0] >= 10, "{line:?}");
-        println!("{line}");
+        assert_eq!(clwb_len(pad(&[0x66, 0x41, 0x0f, 0xae, 0x31])), Some(5)); // clwb [r9]
+        assert_eq!(clwb_len(pad(&[0x66, 0x0f, 0xae, 0x30])), Some(4)); // clwb [rax]
+        assert_eq!(clwb_len(pad(&[0x66, 0x0f, 0xae, 0x70, 0x40])), Some(5)); // clwb [rax+0x40]
+        assert_eq!(
+            clwb_len(pad(&[0x66, 0x0f, 0xae, 0xb0, 0, 1, 0, 0])),
+            Some(8)
+        ); // [rax+disp32]
+        assert_eq!(clwb_len(pad(&[0x66, 0x0f, 0xae, 0x34, 0x24])), Some(5)); // clwb [rsp]
+        assert_eq!(
+            clwb_len(pad(&[0x66, 0x0f, 0xae, 0x35, 0, 0, 0, 0])),
+            Some(8)
+        ); // [rip+disp32]
+        assert_eq!(clwb_len(pad(&[0x66, 0x0f, 0xae, 0x38])), None); // clflushopt, /7
+        assert_eq!(clwb_len(pad(&[0x0f, 0xae, 0x30])), None); // xsaveopt, no 66
+        assert_eq!(clwb_len(pad(&[0x66, 0x0f, 0xae, 0xf0])), None); // register form
     }
 
     #[test]
@@ -1072,85 +1242,6 @@ mod tests {
             std::arch::asm!(".byte 0x0f, 0x01, 0xfa", ".byte 0x0f, 0x01, 0xfb",
                 in("rax") at, in("ecx") 0, in("edx") 0)
         };
-        // rdpru of MPERF: a count in edx:eax, their high halves clear.
-        let (low, high): (u64, u64);
-        // SAFETY: touches only the named registers.
-        unsafe {
-            std::arch::asm!(".byte 0x0f, 0x01, 0xfd",
-                out("rax") low, inout("rcx") 0u64 => _, out("rdx") high)
-        };
-        assert_ne!(high << 32 | low, 0);
-        assert!(high >> 32 == 0 && low >> 32 == 0);
-    }
-
-    /// The flags a native `cmp a, b` leaves.
-    fn native_compare(a: u64, b: u64) -> u32 {
-        let flags: u64;
-        // SAFETY: compares two registers and reads the flags.
-        unsafe {
-            std::arch::asm!("cmp {a}, {b}", "pushfq", "pop {f}",
-                a = in(reg) a, b = in(reg) b, f = out(reg) flags)
-        };
-        flags as u32 & CMP_FLAGS
-    }
-
-    #[test]
-    fn compare_sets_flags_like_the_cpu() {
-        let values = [
-            0,
-            1,
-            0x40,
-            0x7f,
-            0x80,
-            0xff,
-            1 << 63,
-            (1 << 63) - 1,
-            !0,
-            !0 - 0x40,
-        ];
-        for a in values {
-            for b in values {
-                assert_eq!(cmp_flags(a, b), native_compare(a, b), "cmp {a:#x}, {b:#x}");
-            }
-        }
-    }
-
-    #[test]
-    fn clzero_loops_end_like_their_last_pass() {
-        report_crashes();
-        #[repr(align(64))]
-        struct Lines([u8; 192]);
-        let zeroed = |l: &Lines| [l.0[0] == 0, l.0[64] == 0, l.0[128] == 0];
-        // clzero; add rax, 0x40; cmp rax, r10; jb
-        let mut mem = Lines([0xff; 192]);
-        let start = mem.0.as_mut_ptr() as u64;
-        let (end, flags): (u64, u64);
-        // SAFETY: zeroes the first two lines of `mem`.
-        unsafe {
-            std::arch::asm!(
-                ".byte 0x0f, 0x01, 0xfc, 0x48, 0x83, 0xc0, 0x40, 0x4c, 0x39, 0xd0, 0x72, 0xf4",
-                "pushfq", "pop {f}",
-                inout("rax") start => end, in("r10") start + 100, f = out(reg) flags)
-        };
-        assert_eq!(end, start + 128);
-        assert_eq!(flags as u32 & CMP_FLAGS, native_compare(end, start + 100));
-        assert_eq!(zeroed(&mem), [true, true, false]);
-        // mov rax, rdx; add rdx, 0x40; clzero; cmp rdx, r8; jb
-        let mut mem = Lines([0xff; 192]);
-        let start = mem.0.as_mut_ptr() as u64;
-        let (last, next, flags): (u64, u64, u64);
-        // SAFETY: zeroes the last two lines of `mem`.
-        unsafe {
-            std::arch::asm!(
-                ".byte 0x48, 0x89, 0xd0, 0x48, 0x83, 0xc2, 0x40, 0x0f, 0x01, 0xfc",
-                ".byte 0x4c, 0x39, 0xc2, 0x72, 0xf1",
-                "pushfq", "pop {f}",
-                out("rax") last, inout("rdx") start + 64 => next, in("r8") start + 192,
-                f = out(reg) flags)
-        };
-        assert_eq!((last, next), (start + 128, start + 192));
-        assert_eq!(flags as u32 & CMP_FLAGS, native_compare(next, start + 192));
-        assert_eq!(zeroed(&mem), [false, true, true]);
     }
 
     fn reg(low: u64, high: u64) -> M128A {
@@ -1209,123 +1300,6 @@ mod tests {
         assert_eq!(emulate(&[0x0f, 0x01, 0xfc], at, &mut xmm), Some(3));
         assert!(line.0[..64].iter().all(|&b| b == 0));
         assert!(line.0[64..].iter().all(|&b| b == 0xff));
-    }
-
-    /// Gives `code` to the emulation as if it faulted at `code[at]` with
-    /// `context` as the saved state, on any CPU; returns whether it
-    /// emulated and leaves the state after in `context`.
-    fn emulate_in(code: &[u8], at: usize, context: &mut CONTEXT) -> bool {
-        // At a fixed place in a page, so the loops' neighbours are always
-        // read (they are not near a page's edges).
-        #[repr(align(4096))]
-        struct Page([u8; 4096]);
-        let mut page = Box::new(Page([0xcc; 4096]));
-        let bytes = &mut page.0[0x800..];
-        bytes[..code.len()].copy_from_slice(code);
-        context.Rip = bytes.as_ptr() as u64 + at as u64;
-        // SAFETY: a zeroed record is valid; the emulation reads only
-        // `bytes` and writes `context` and the lines the caller owns.
-        unsafe {
-            let mut record: EXCEPTION_RECORD = std::mem::zeroed();
-            record.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION;
-            let mut pointers = EXCEPTION_POINTERS {
-                ExceptionRecord: &mut record,
-                ContextRecord: context,
-            };
-            let emulated = emulate_amd_only(&mut pointers);
-            context.Rip -= bytes.as_ptr() as u64;
-            emulated
-        }
-    }
-
-    #[test]
-    fn emulated_clzero_loops_end_like_their_last_pass() {
-        #[repr(align(64))]
-        struct Lines([u8; 192]);
-        let zeroed = |l: &Lines| [l.0[0] == 0, l.0[64] == 0, l.0[128] == 0];
-        // clzero; add rax, 0x40; cmp rax, r10; jb
-        let mut mem = Lines([0xff; 192]);
-        let start = mem.0.as_mut_ptr() as u64;
-        // SAFETY: an all-zero context is valid.
-        let mut context: CONTEXT = unsafe { std::mem::zeroed() };
-        context.Rax = start;
-        context.R10 = start + 100;
-        context.EFlags = 0x202 | CMP_FLAGS;
-        let code = [
-            0x0f, 0x01, 0xfc, 0x48, 0x83, 0xc0, 0x40, 0x4c, 0x39, 0xd0, 0x72, 0xf4,
-        ];
-        assert!(emulate_in(&code, 0, &mut context));
-        assert_eq!((context.Rip, context.Rax), (12, start + 128));
-        assert_eq!(
-            context.EFlags,
-            0x202 | native_compare(start + 128, start + 100)
-        );
-        assert_eq!(zeroed(&mem), [true, true, false]);
-        // mov rax, rdx; add rdx, 0x40; clzero; cmp rdx, r8; jb (faults at clzero,
-        // after the first pass's mov and add)
-        let mut mem = Lines([0xff; 192]);
-        let start = mem.0.as_mut_ptr() as u64;
-        // SAFETY: an all-zero context is valid.
-        let mut context: CONTEXT = unsafe { std::mem::zeroed() };
-        context.Rax = start + 64;
-        context.Rdx = start + 128;
-        context.R8 = start + 192;
-        let code = [
-            0x48, 0x89, 0xd0, 0x48, 0x83, 0xc2, 0x40, 0x0f, 0x01, 0xfc, 0x4c, 0x39, 0xc2, 0x72,
-            0xf1,
-        ];
-        assert!(emulate_in(&code, 7, &mut context));
-        assert_eq!(
-            (context.Rip, context.Rax, context.Rdx),
-            (15, start + 128, start + 192)
-        );
-        assert_eq!(context.EFlags, native_compare(start + 192, start + 192));
-        assert_eq!(zeroed(&mem), [false, true, true]);
-        // cmp rax, rax is not the loop (the limit would move with rax): one
-        // line, flags untouched.
-        let mut mem = Lines([0xff; 192]);
-        // SAFETY: an all-zero context is valid.
-        let mut context: CONTEXT = unsafe { std::mem::zeroed() };
-        context.Rax = mem.0.as_mut_ptr() as u64;
-        context.EFlags = 0x202;
-        let code = [
-            0x0f, 0x01, 0xfc, 0x48, 0x83, 0xc0, 0x40, 0x48, 0x39, 0xc0, 0x72, 0xf4,
-        ];
-        assert!(emulate_in(&code, 0, &mut context));
-        assert_eq!((context.Rip, context.EFlags), (3, 0x202));
-        assert_eq!(zeroed(&mem), [true, false, false]);
-        // Any other neighbours: one line, then the next instruction.
-        let mut mem = Lines([0xff; 192]);
-        // SAFETY: an all-zero context is valid.
-        let mut context: CONTEXT = unsafe { std::mem::zeroed() };
-        context.Rax = mem.0.as_mut_ptr() as u64 + 70;
-        context.R10 = !0;
-        let code = [
-            0x0f, 0x01, 0xfc, 0x48, 0x83, 0xc0, 0x20, 0x4c, 0x39, 0xd0, 0x72, 0xf4,
-        ];
-        assert!(emulate_in(&code, 0, &mut context));
-        assert_eq!(context.Rip, 3);
-        assert_eq!(zeroed(&mem), [false, true, false]);
-    }
-
-    #[test]
-    fn emulated_rdpru_reads_known_counters_and_keeps_flags() {
-        let cases = [(0, true), (1, true), (2, false), (0x1_0000_0000, true)];
-        let starts = [0x202, 0x202 | CMP_FLAGS];
-        for ((ecx, known), flags) in cases.into_iter().flat_map(|c| starts.map(|f| (c, f))) {
-            // SAFETY: an all-zero context is valid.
-            let mut context: CONTEXT = unsafe { std::mem::zeroed() };
-            context.Rcx = ecx;
-            context.Rax = !0;
-            context.Rdx = !0;
-            context.EFlags = flags;
-            assert!(emulate_in(&[0x0f, 0x01, 0xfd], 0, &mut context));
-            assert_eq!(context.Rip, 3);
-            assert_eq!(context.EFlags, flags, "ecx {ecx:#x}");
-            let count = context.Rdx << 32 | context.Rax;
-            assert!(context.Rax >> 32 == 0 && context.Rdx >> 32 == 0);
-            assert_eq!(count != 0, known, "ecx {ecx:#x}");
-        }
     }
 
     #[test]
@@ -1452,5 +1426,102 @@ mod tests {
             assert_eq!(instruction_bytes(end as usize), "0f 01 fd");
             VirtualFree(page.cast(), 0, MEM_RELEASE);
         }
+    }
+
+    #[test]
+    fn bounds_unwind_allocations_and_saves() {
+        // SET_FPREG rbp,16; ALLOC_SMALL 32; PUSH_NONVOL rbp.
+        let info = parse_unwind_info(&[1, 9, 3, 0x15, 9, 3, 5, 0x32, 1, 0x50, 0, 0]).unwrap();
+        assert_eq!(info.frame, 0x15);
+        assert_eq!(info.stack_bytes, 40);
+
+        // SAVE_XMM128 xmm6 at 48; ALLOC_LARGE (scaled) 64.
+        let info = parse_unwind_info(&[1, 9, 4, 0, 9, 0x68, 3, 0, 5, 1, 8, 0]).unwrap();
+        assert_eq!(info.stack_bytes, 64);
+        assert_eq!(info.save_end, 64);
+        assert!(info.saves_xmm);
+
+        // SAVE_NONVOL_FAR rbx at 256; ALLOC_LARGE (unscaled) 128.
+        let info =
+            parse_unwind_info(&[1, 9, 6, 0, 9, 0x35, 0, 1, 0, 0, 5, 0x11, 128, 0, 0, 0]).unwrap();
+        assert_eq!(info.stack_bytes, 128);
+        assert_eq!(info.save_end, 264);
+    }
+
+    #[test]
+    fn bounds_machine_frames_and_reads_chained_rva_after_padding() {
+        for (op, size) in [(0x0a, 40), (0x1a, 48)] {
+            let info = parse_unwind_info(&[1, 0, 1, 0, 0, op, 0, 0]).unwrap();
+            assert_eq!(info.stack_bytes, size);
+        }
+        // One save consumes two slots, and adding a second far save uses
+        // three more slots, so the chained function entry starts after padding.
+        let info = parse_unwind_info(&[
+            0x21, 9, 5, 0, 9, 0x34, 4, 0, 5, 0x65, 40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x34,
+            0x12, 0, 0,
+        ])
+        .unwrap();
+        assert_eq!(info.save_end, 48);
+        assert_eq!(info.chained_rva, Some(0x1234));
+    }
+
+    #[test]
+    fn rejects_unwind_codes_without_known_stack_bounds() {
+        for bytes in [
+            &[3, 0, 0, 0][..],               // Unsupported version.
+            &[1, 1, 1, 0, 1, 6, 0, 0],       // Unsupported opcode.
+            &[1, 1, 1, 0, 1, 0x11, 0, 0],    // Allocation operand cut short.
+            &[1, 1, 1, 0, 1, 0x34, 0, 0],    // Save operand cut short.
+            &[1, 1, 1, 0x15, 1, 0x02, 0, 0], // Missing frame setup.
+            &[0x21, 0, 0, 0, 0, 0, 0, 0],    // Chained entry cut short.
+        ] {
+            assert!(parse_unwind_info(bytes).is_none(), "{bytes:?}");
+        }
+    }
+
+    #[test]
+    fn stops_at_a_pc_outside_an_image() {
+        let pc = unwinds_like_the_system_walk as *const () as u64;
+        let stack = [pc, pc];
+        let low = stack.as_ptr() as usize;
+        // SAFETY: zeroed is a valid CONTEXT. Only RIP and RSP are used in this test.
+        let mut context: CONTEXT = unsafe { std::mem::zeroed() };
+        context.Rip = low as u64;
+        context.Rsp = low as u64;
+        let mut frames = Vec::with_capacity(MAX_FRAMES);
+        unwind_into(context, low, low + size_of_val(&stack), &mut frames, true);
+        assert_eq!(frames, [low as u64]);
+    }
+
+    #[test]
+    fn takes_the_caller_of_a_first_frame_in_our_own_stub_memory() {
+        use windows_sys::Win32::System::Memory::{
+            MEM_RELEASE, MEM_RESERVE, VirtualAlloc, VirtualFree,
+        };
+        // Executable memory outside any image, as our thunks and stubs are made.
+        // SAFETY: reserves and commits one fresh page; nothing runs in it.
+        let stub = unsafe {
+            VirtualAlloc(
+                null_mut(),
+                4096,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_EXECUTE_READWRITE,
+            )
+        };
+        assert!(!stub.is_null());
+        let pc = unwinds_like_the_system_walk as *const () as u64;
+        let stack = [pc, pc];
+        let low = stack.as_ptr() as usize;
+        // SAFETY: zeroed is a valid CONTEXT. Only RIP and RSP are used in this test.
+        let mut context: CONTEXT = unsafe { std::mem::zeroed() };
+        context.Rip = stub as u64;
+        context.Rsp = low as u64;
+        let mut frames = Vec::with_capacity(MAX_FRAMES);
+        unwind_into(context, low, low + size_of_val(&stack), &mut frames, true);
+        // SAFETY: frees the page reserved above.
+        unsafe { VirtualFree(stub, 0, MEM_RELEASE) };
+        // The caller comes from the leaf rule; the walk may stop after it,
+        // since the rest of the caller's frame is not in `stack`.
+        assert!(frames.starts_with(&[stub as u64, pc]), "{frames:x?}");
     }
 }

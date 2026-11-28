@@ -219,7 +219,66 @@ struct Mode {
 }
 const _: () = assert!(size_of::<Mode>() == 32);
 
-/// The console's mode list: one 4K mode at 60 Hz (Grand Theft Auto VI looks
+/// The size of the display the console reports: `VICTORY_DISPLAY_MODE=WxH`
+/// if set (as a console reports the television it is plugged into: a
+/// Series X on a 1080p set lists a 1080p mode), else 3840x2160; times
+/// [`render_scale`].
+/// shortcut: not yet the host display's own size by default; make it so
+/// once a title is seen to render for the mode it is given.
+fn display_size() -> (u32, u32) {
+    static SIZE: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+    *SIZE.get_or_init(|| {
+        let (w, h) = asked_size();
+        let scale = render_scale();
+        // Even sizes, and never below the smallest mode a title expects.
+        let size = (((w * scale / 100) & !1).max(640), ((h * scale / 100) & !1).max(360));
+        tracing::info!(
+            width = size.0,
+            height = size.1,
+            scale,
+            "display mode reported to the title (VICTORY_RENDER_SCALE: percent of the screen it renders at)"
+        );
+        size
+    })
+}
+
+/// `VICTORY_DISPLAY_MODE`'s size, else 3840x2160: the size frames are shown at.
+fn asked_size() -> (u32, u32) {
+    let asked = std::env::var("VICTORY_DISPLAY_MODE").ok().and_then(|v| {
+        let (w, h) = v.trim().split_once(['x', 'X'])?;
+        Some((w.trim().parse::<u32>().ok()?, h.trim().parse::<u32>().ok()?))
+    });
+    match asked {
+        Some((w, h)) if (640..=7680).contains(&w) && (360..=4320).contains(&h) => (w, h),
+        _ => (3840, 2160),
+    }
+}
+
+/// Render scale (Try 4.2, idea 6, after the DLSS/FSR enabler mods): the
+/// percent of the screen's size the title is told its display has
+/// (`VICTORY_RENDER_SCALE`, 50 to 100; 100, the whole size, by default).
+/// The title renders everything at that smaller size, and the present
+/// scales its frames up to the screen with a sharp filter (Catmull-Rom
+/// with FSR's ring clamp, and a little sharpening): 67 renders 44% of the
+/// pixels, 50 a quarter.
+pub(crate) fn render_scale() -> u32 {
+    static SCALE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *SCALE.get_or_init(|| {
+        std::env::var("VICTORY_RENDER_SCALE")
+            .ok()
+            .and_then(|v| v.trim().trim_end_matches('%').parse::<u32>().ok())
+            .map_or(100, |s| s.clamp(50, 100))
+    })
+}
+
+/// The size frames are shown at when the title renders smaller than the
+/// screen ([`render_scale`] below 100); `None` when it renders at it.
+#[cfg(windows)]
+pub(crate) fn output_size() -> Option<(u32, u32)> {
+    (render_scale() < 100).then(asked_size)
+}
+
+/// The console's mode list: one 4K mode at 60 Hz (the title looks
 /// for a 120 Hz one to allow 120 Hz frame intervals).
 /// shortcut: fixed mode, not the host display's; report the host's rates if
 /// a title paces by them.
@@ -242,9 +301,10 @@ extern "system" fn modes(
         return MORE_DATA;
     }
     *count = 1;
+    let (width, height) = display_size();
     let mode = Mode {
-        width: 3840,
-        height: 2160,
+        width,
+        height,
         refresh: [60, 1],
         format: 0,
         scanlines: 1, // progressive

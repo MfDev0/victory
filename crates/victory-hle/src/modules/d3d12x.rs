@@ -36,6 +36,19 @@ fn host_gpu_failed(what: &str) -> ! {
     unreachable!("the process has ended")
 }
 
+/// The offline warm-up: see `victory_gpu::shader_cache::warm`.
+pub fn warm_shader(container: &[u8]) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        victory_gpu::shader_cache::warm(container)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = container;
+        Err("no shader cache on this host".into())
+    }
+}
+
 /// Keeps the host's translations of the title's shaders in `dir` (a
 /// folder of the cache) across runs, and its compiled pipelines beside it
 /// (`pipelines`).
@@ -47,6 +60,69 @@ pub fn use_shader_cache(dir: std::path::PathBuf) {
     }
     #[cfg(not(windows))]
     let _ = dir;
+}
+
+/// `victory prepare`: the container's translation put in the shader cache
+/// [`use_shader_cache`] opened, as a run on this PC makes it. Why it does
+/// not translate, if not.
+#[cfg(windows)]
+pub fn prepare_shader(container: &[u8]) -> Result<(), String> {
+    victory_gpu::shader_cache::prepare(container)
+}
+
+/// Off Windows nothing runs: no translation is kept.
+#[cfg(not(windows))]
+pub fn prepare_shader(_container: &[u8]) -> Result<(), String> {
+    Err("no host on this system".into())
+}
+
+/// `victory prepare`: makes the host pipeline of every recipe earlier runs
+/// kept (each pipeline a draw or dispatch asked for) into the pipeline
+/// library [`use_shader_cache`] opened, on `threads` workers; `say` gets a
+/// progress line every 15 s and a last one. Whether there were recipes.
+#[cfg(windows)]
+pub fn prepare_pipelines(threads: usize, say: &(dyn Fn(String) + Sync)) -> bool {
+    let line = |p: &victory_gpu::pipeline::Prepared, last: bool| {
+        say(format!(
+            "{} {} of {} pipelines ready ({} already in the library, {} compiled now), {} cannot be made",
+            if last { "prepared    " } else { "preparing   " },
+            p.loaded + p.made,
+            p.usable,
+            p.loaded,
+            p.made,
+            p.failed
+        ));
+        // Try 6.23: the recipes not made, by why (none of them is a pipeline
+        // a run would make: those are all above).
+        if last && p.recipes > p.usable {
+            say(format!(
+                "prepared     {} recipes not made: {} with a shader no run kept, {} of programs a run leaves out (rays only, denied, skipped), {} with a graphics state that does not read",
+                p.recipes - p.usable,
+                p.no_container,
+                p.left_out,
+                p.bad_state
+            ));
+        }
+    };
+    victory_gpu::pipeline::prepare_recipes(threads, &line).recipes > 0
+}
+
+/// Off Windows nothing runs: there are no recipes.
+#[cfg(not(windows))]
+pub fn prepare_pipelines(_threads: usize, _say: &(dyn Fn(String) + Sync)) -> bool {
+    false
+}
+
+/// Translations found in the shader cache and made, since the start.
+#[cfg(windows)]
+pub fn prepared_shader_counts() -> (u64, u64) {
+    victory_gpu::shader_cache::prepared_counts()
+}
+
+/// Off Windows nothing runs.
+#[cfg(not(windows))]
+pub fn prepared_shader_counts() -> (u64, u64) {
+    (0, 0)
 }
 
 pub(crate) fn module() -> HleModule {

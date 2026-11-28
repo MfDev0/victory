@@ -15,33 +15,80 @@
 //! share, [`console`] which console model the title sees. Planned:
 //! `present` (swap chain).
 
+#[cfg(windows)]
+mod ambient;
+#[cfg(all(windows, feature = "diagnostics"))]
+mod backreads;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod capture;
+#[cfg(windows)]
+mod cardmeter;
+#[cfg(all(windows, feature = "diagnostics"))]
+mod renderdoc;
+#[cfg(all(windows, feature = "diagnostics"))]
+mod shot;
 pub mod console;
+pub mod cutscene;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod copystat;
+#[cfg(windows)]
+pub mod oom;
+// The process's allocator, which says so when memory runs out (`oom`); in
+// diagnostics builds `copystat`'s, which counts blocks too and allocates
+// through it.
+#[cfg(all(windows, not(feature = "diagnostics")))]
+#[global_allocator]
+static HEAP: oom::Reporting = oom::Reporting;
 pub mod descriptor;
 pub mod device;
 #[cfg(windows)]
+mod drvwatch;
+#[cfg(windows)]
+mod fpsbox;
+#[cfg(windows)]
+mod menu;
+#[cfg(windows)]
+mod stats;
+#[cfg(windows)]
+mod spread;
+#[cfg(windows)]
 mod draw;
 pub mod dxgi;
+#[cfg(windows)]
+pub mod external;
+#[cfg(windows)]
+pub mod streamline;
 pub mod fence;
 pub mod frame;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod heap_pass;
+#[cfg(windows)]
+pub mod framelog;
+#[cfg(windows)]
+mod heap_worker;
 #[cfg(windows)]
 mod host;
 #[cfg(windows)]
+mod over;
+#[cfg(windows)]
 mod indirect;
-#[cfg_attr(not(windows), allow(dead_code))]
-mod indirect_plan;
+#[cfg(windows)]
+mod inplace;
+mod launch;
 pub mod list;
 pub mod object;
 pub mod pipeline;
 #[cfg(windows)]
+mod pressure;
+mod plaincopy;
+#[cfg(windows)]
 mod primitive;
+#[cfg(all(windows, feature = "diagnostics"))]
+mod profile;
 pub mod query;
 pub mod queue;
 #[cfg(windows)]
-mod rectangles;
+mod queue2;
 pub mod resource;
 pub mod root;
 #[cfg(windows)]
@@ -49,15 +96,31 @@ mod sampler;
 #[cfg(windows)]
 pub mod shader_cache;
 #[cfg(windows)]
+mod lazy;
+#[cfg(windows)]
+mod memory;
+#[cfg(windows)]
 mod shadow;
+#[cfg(windows)]
+mod tiles;
 pub mod signature;
 #[cfg(windows)]
 mod texture;
-mod timeline;
 #[cfg(windows)]
 mod watch;
+#[cfg(windows)]
+mod texback;
 
 #[cfg(windows)]
-pub use host::{HdrDisplayInfo, display_hdr_info, on_failure};
+/// Whether the F1 settings menu is open (Try 6.24): the input module then
+/// gives the title no keyboard.
+pub static SETTINGS_MENU_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub use host::on_failure;
 #[cfg(windows)]
-pub use watch::{title_memory_remapped, writing as kernel_will_write};
+pub use inplace::{title_memory_freeing, title_memory_section, title_memory_view};
+#[cfg(windows)]
+pub use watch::{
+    title_memory_committed, title_memory_reading, title_memory_remapped, title_memory_remapping, title_memory_written,
+    writing as kernel_will_write,
+};

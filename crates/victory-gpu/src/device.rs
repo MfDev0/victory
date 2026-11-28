@@ -29,7 +29,7 @@ pub static IID: Iid = guid(
 );
 
 /// The levels the device answers to, as on PC: `ID3D12Device1` to
-/// `ID3D12Device8`, and `ID3D12Device11`, which Grand Theft Auto VI creates
+/// `ID3D12Device8`, and `ID3D12Device11`, which the title creates
 /// its device as. Each level's table is the one before plus its methods.
 const LEVEL_IIDS: [Iid; 9] = [
     guid(
@@ -94,7 +94,7 @@ pub(crate) fn is_device(iid: *const Iid) -> bool {
 }
 
 /// The interface version these layouts were checked against (2.4). Both
-/// Minecraft (March 2022) and Grand Theft Auto VI (April 2026) pass it.
+/// Minecraft (March 2022) and the title (April 2026) pass it.
 pub const CHECKED_VERSION: u32 = 0x0002_0004;
 
 /// Feature level 12_2, what the console hardware supports.
@@ -160,7 +160,7 @@ pub extern "system" fn create(
 /// queues then have the newer layouts (two more methods each; see
 /// `list` and `queue`), although the interface version stays 2.4.
 /// shortcut: the creation interface is the only sign of the newer layouts
-/// we have (Grand Theft Auto VI, April 2026, versus Minecraft, March 2022);
+/// we have (the title, April 2026, versus Minecraft, March 2022);
 /// look for a better one if a title breaks the rule.
 static NEWER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -273,16 +273,12 @@ extern "system" fn check_feature_support(
     const FEATURE_LEVELS: u32 = 2;
     const FORMAT_SUPPORT: u32 = 3;
     const MULTISAMPLE: u32 = 4;
-    const FORMAT_INFO: u32 = 5;
-    const VIRTUAL_ADDRESS: u32 = 6;
     let expected = match feature {
         OPTIONS_QUERY => size_of_val(&OPTIONS),
         ARCHITECTURE => 16,
         FEATURE_LEVELS => size_of::<FeatureLevels>(),
         FORMAT_SUPPORT => 12,
         MULTISAMPLE => 16,
-        FORMAT_INFO => 8,
-        VIRTUAL_ADDRESS => 8,
         _ => {
             tracing::warn!(feature, size, "device feature query not implemented");
             return E_NOTIMPL;
@@ -324,31 +320,8 @@ extern "system" fn check_feature_support(
             q[3] = u32::from(matches!(q[1], 1 | 2 | 4 | 8));
             S_OK
         }
-        FORMAT_INFO => {
-            // SAFETY: checked size and non-null.
-            let q = unsafe { &mut *data.cast::<[u32; 2]>() };
-            // DXGI_FORMAT in, plane count out (the byte is padded to 8).
-            q[1] = plane_count(q[0]);
-            S_OK
-        }
-        VIRTUAL_ADDRESS => {
-            // SAFETY: checked size and non-null.
-            let q = unsafe { &mut *data.cast::<[u32; 2]>() };
-            // The bits OPTIONS reports for a resource, and user space's
-            // 48 bits for the process (addresses are CPU addresses here).
-            q[0] = OPTIONS[9];
-            q[1] = 48;
-            S_OK
-        }
         _ => feature_levels(data),
     }
-}
-
-/// The planes of the depth/stencil format families; everything else has
-/// one. These are the DXGI format numbers, including the typeless and
-/// read-only views of the same two planes.
-fn plane_count(format: u32) -> u32 {
-    1 + u32::from(matches!(format, 19..=22 | 44..=47))
 }
 
 fn feature_levels(data: *mut c_void) -> HRESULT {
@@ -373,16 +346,177 @@ fn feature_levels(data: *mut c_void) -> HRESULT {
     }
 }
 
-/// The host device's state: the console's device is removed when the host's is.
-extern "system" fn removed_reason(_: This) -> HRESULT {
-    #[cfg(windows)]
-    if let Some(host) = crate::host::host() {
-        // SAFETY: a plain query.
-        if let Err(e) = unsafe { host.device.GetDeviceRemovedReason() } {
-            return e.code().0;
+/// Device methods 0x1c8 and 0x218 (`SLOT`). The title calls both
+/// (title+0x2477578 and title+0x24800d5) as `(this, description, interface
+/// id, out)`, asks for `ID3D12PipelineState`, and on success keeps the
+/// object `out` names and draws with it. They are the console's
+/// pipelines from precompiled binaries (code and metadata per stage, the
+/// title's root signature, a register image), called in one burst while
+/// loading: a cache. On failure the title makes the same pipeline later the
+/// usual way (`create_stream`), so nothing goes missing (run 335: every call
+/// in the first 36 s, then 727 mesh and 1,016 pixel pipelines made normally;
+/// upstream VIctory #3163 says the same, and that answering them made things
+/// worse there). The calls fail as they always did, with `out` null, and the
+/// first ones log what the description holds.
+/// shortcut: not implemented. Answering `S_OK` here without making the
+/// pipeline would hand the title whatever its stack held as an object.
+extern "system" fn unknown_pipeline<const SLOT: usize>(
+    _: This,
+    desc: *const u8,
+    _iid: *const Iid,
+    out: *mut This,
+) -> HRESULT {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static CALLS: [AtomicU32; 2] = [const { AtomicU32::new(0) }; 2];
+    let calls = CALLS[usize::from(SLOT == 0x218)].fetch_add(1, Ordering::Relaxed) + 1;
+    if !out.is_null() {
+        // SAFETY: the title's out pointer (a local of its own).
+        unsafe { *out = std::ptr::null() };
+    }
+    // 6.20: this is expected, not a fault: the title asks for its console
+    // pipeline cache first and makes every pipeline the usual way when the
+    // cache says no (run 335; upstream #3163). One line a method says so;
+    // the description dump is for writing the methods and only with
+    // VICTORY_NATIVE_PSO_LOG=1 (it was 29 + 25 warnings a run).
+    if calls == 1 {
+        tracing::info!(
+            slot = format_args!("{:#x}", SLOT),
+            "the title's console pipeline cache is declined: it makes these pipelines the usual way (expected; VICTORY_NATIVE_PSO_LOG=1 logs the descriptions)"
+        );
+    }
+    static LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let log = *LOG.get_or_init(|| std::env::var("VICTORY_NATIVE_PSO_LOG").is_ok_and(|v| v.trim() == "1"));
+    if log && (calls <= 4 || calls.is_power_of_two()) {
+        // Sixteen 64-bit words at `at`, read through the kernel: neither
+        // pointer is known to be mapped.
+        #[cfg(windows)]
+        let words = |at: usize| -> Option<Vec<u64>> {
+            let mut bytes = [0u8; 128];
+            (at != 0 && crate::host::read_into(at as *const u8, &mut bytes)).then(|| {
+                bytes
+                    .as_chunks::<8>().0.iter()
+                    .map(|c| c.iter().rev().fold(0u64, |v, &b| v << 8 | u64::from(b)))
+                    .collect()
+            })
+        };
+        #[cfg(not(windows))]
+        let words = |_: usize| None::<Vec<u64>>;
+        let description = words(desc as usize);
+        let first = description
+            .as_ref()
+            .and_then(|w| words(w[0] as usize));
+        tracing::info!(
+            slot = format_args!("{:#x}", SLOT),
+            calls,
+            description = format_args!("{description:x?}"),
+            first_points_at = format_args!("{first:x?}"),
+            "a console pipeline cache description (VICTORY_NATIVE_PSO_LOG)"
+        );
+        // The first calls also log the bytes of each (address, length) pair
+        // of the description (words 1-12: the root signature is word 0), for
+        // writing the methods from them.
+        #[cfg(windows)]
+        if calls <= 3
+            && let Some(w) = &description
+        {
+            for i in (1..12).step_by(2) {
+                let (at, len) = (w[i] as usize, w[i + 1] as usize);
+                if at == 0 || len == 0 || len > 0x800 {
+                    continue;
+                }
+                let mut bytes = vec![0u8; len];
+                if crate::host::read_into(at as *const u8, &mut bytes) {
+                    let hex: String = bytes
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|c| format!("{:08x} ", u32::from_le_bytes(*c)))
+                        .collect();
+                    tracing::info!(
+                        slot = format_args!("{:#x}", SLOT),
+                        calls,
+                        word = i,
+                        at = format_args!("{at:#x}"),
+                        len = format_args!("{len:#x}"),
+                        "pipeline description piece: {hex}"
+                    );
+                }
+            }
         }
     }
-    S_OK
+    #[cfg(windows)]
+    if let Some(dir) = std::env::var_os("VICTORY_NATIVE_PSO_DUMP") {
+        dump_native(SLOT, desc as usize, std::path::Path::new(&dir));
+    }
+    E_NOTIMPL
+}
+
+/// `VICTORY_NATIVE_PSO_DUMP=<dir>` (diagnostics; off unless set): the blobs
+/// a 0x1c8 / 0x218 description names, once per description key (0x218: its
+/// word 11, a 64-bit hash; 0x1c8: the code pointers of words 5 and 9).
+/// Files: `<dir>/<slot>_<key>/desc.bin` (the first 0x80 bytes), `root.bin`
+/// (0x80 bytes at word 0), `w<i>_<size>.bin` for each (pointer, size) pair
+/// at words (1,2) (3,4) (5,6) (7,8) (9,10) (11,12), and `p9.bin` /
+/// `p10.bin` (0x100 bytes at 0x218's two unsized pointers). Everything is
+/// read through the kernel (`host::read_into`): an unmapped pointer is
+/// skipped, never touched.
+#[cfg(windows)]
+fn dump_native(slot: usize, desc: usize, dir: &std::path::Path) {
+    use std::sync::Mutex;
+    static SEEN: Mutex<Vec<(usize, u64)>> = Mutex::new(Vec::new());
+    let read = |at: usize, n: usize| -> Option<Vec<u8>> {
+        let mut b = vec![0u8; n];
+        (at != 0 && n <= 1 << 20 && crate::host::read_into(at as *const u8, &mut b)).then_some(b)
+    };
+    let Some(d) = read(desc, 0x100) else {
+        return;
+    };
+    let w = |i: usize| u64::from_le_bytes(d[8 * i..8 * i + 8].try_into().unwrap_or([0; 8]));
+    // 0x218: its code pointer (word 11 is not a key: gfx41); 0x1c8: the
+    // code pointers of words 5 and 9.
+    let key = if slot == 0x218 { w(5) } else { w(5) ^ (w(9) << 1) };
+    {
+        let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+        if seen.contains(&(slot, key)) || seen.len() >= 16384 {
+            return;
+        }
+        seen.push((slot, key));
+    }
+    let sub = dir.join(format!("{slot:x}_{key:016x}"));
+    let _ = std::fs::create_dir_all(&sub);
+    let _ = std::fs::write(sub.join("desc.bin"), &d);
+    if let Some(r) = read(w(0) as usize, 0x80) {
+        let _ = std::fs::write(sub.join("root.bin"), r);
+    }
+    // The root signature's serialized form, once per root object.
+    {
+        static ROOTS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+        let mut roots = ROOTS.lock().unwrap_or_else(|e| e.into_inner());
+        if !roots.contains(&w(0)) {
+            roots.push(w(0));
+            if let Some(b) = crate::root::blob(w(0) as usize as crate::object::This) {
+                let _ = std::fs::create_dir_all(dir.join("roots"));
+                let _ = std::fs::write(dir.join("roots").join(format!("{:x}.bin", w(0))), b);
+            }
+        }
+    }
+    let pairs: &[usize] = if slot == 0x218 { &[1, 3, 5, 7] } else { &[1, 3, 5, 7, 9, 11, 13, 15] };
+    for &i in pairs {
+        let (at, size) = (w(i) as usize, w(i + 1) as usize);
+        if at == 0 || size == 0 || size > 1 << 20 {
+            continue;
+        }
+        if let Some(b) = read(at, size) {
+            let _ = std::fs::write(sub.join(format!("w{i}_{size:x}.bin")), b);
+        }
+    }
+    if slot == 0x218 {
+        for i in [9usize, 10] {
+            if let Some(b) = read(w(i) as usize, 0x100) {
+                let _ = std::fs::write(sub.join(format!("p{i}.bin")), b);
+            }
+        }
+    }
 }
 
 /// IUnknown 3, object methods 4, device methods 76 (0x18-0x290), then the
@@ -417,15 +551,15 @@ static FUNCTIONS: Table<160> = {
     f[28] = resource::create_heap as *const (); // 0xe0
     f[29] = resource::create_placed as *const (); // 0xe8
     f[36] = fence::create as *const (); // 0x120
-    f[37] = removed_reason as *const (); // 0x128
     f[38] = resource::copyable_footprints as *const (); // 0x130
     f[39] = query::create as *const (); // 0x138
     f[41] = signature::create as *const (); // 0x148
     f[48] = queue::create_x as *const (); // 0x180
-    f[57] = object::ignore as *const (); // 0x1c8
+    f[55] = pipeline::create_derived as *const (); // 0x1b8
+    f[57] = unknown_pipeline::<0x1c8> as *const (); // 0x1c8
     f[61] = descriptor::create_sampler_x as *const (); // 0x1e8
     f[62] = pipeline::create_compute_x as *const (); // 0x1f0
-    f[67] = object::ignore as *const (); // 0x218
+    f[67] = unknown_pipeline::<0x218> as *const (); // 0x218
     f[69] = object::ignore as *const (); // 0x228 debug error filter
     f[70] = descriptor::create_placed_srv as *const (); // 0x230
     f[71] = descriptor::create_placed_uav as *const (); // 0x238
@@ -473,15 +607,11 @@ mod tests {
         );
         let missing = slot::<extern "system" fn() -> HRESULT>(device, 0xf0);
         assert_eq!(missing(), E_NOTIMPL);
-        let s1c8 = slot::<extern "system" fn() -> HRESULT>(device, 0x1c8);
-        assert_eq!(s1c8(), S_OK);
-        let s218 = slot::<extern "system" fn() -> HRESULT>(device, 0x218);
-        assert_eq!(s218(), S_OK);
     }
 
     #[test]
     fn newer_device_levels_are_the_same_device() {
-        // ID3D12Device11, as Grand Theft Auto VI asks for it.
+        // ID3D12Device11, as the title asks for it.
         let (hr, device) = create_as(&LEVEL_IIDS[8]);
         assert_eq!((hr, device), (S_OK, super::device()));
         let mut same = std::ptr::null();
@@ -574,90 +704,5 @@ mod tests {
         assert_eq!(query(&levels, 0x18), (S_OK, 0xc100));
         assert_eq!(query(&levels, 0x10).0, E_INVALIDARG);
         assert_eq!(query(&levels[4..], 0x18).0, UNSUPPORTED);
-    }
-
-    #[test]
-    fn format_info_reports_the_planes_of_depth_formats() {
-        type Check = extern "system" fn(This, u32, *mut c_void, u32) -> HRESULT;
-        let check = slot::<Check>(device(), 0x68);
-        let query = |format: u32, size| {
-            let mut info = [format, u32::MAX];
-            let hr = check(device(), 5, (&raw mut info).cast(), size);
-            (hr, info[1])
-        };
-        assert_eq!(query(28, 8), (S_OK, 1), "R8G8B8A8_UNORM");
-        assert_eq!(query(45, 8), (S_OK, 2), "D24_UNORM_S8_UINT");
-        assert_eq!(query(20, 8), (S_OK, 2), "D32_FLOAT_S8X24_UINT");
-        assert_eq!(query(19, 8), (S_OK, 2), "R32G8X24_TYPELESS");
-        assert_eq!(query(47, 8), (S_OK, 2), "X24_TYPELESS_G8_UINT");
-        assert_eq!(query(28, 4).0, E_INVALIDARG, "wrong size");
-    }
-
-    #[test]
-    fn virtual_address_support_matches_the_reported_address_space() {
-        type Check = extern "system" fn(This, u32, *mut c_void, u32) -> HRESULT;
-        let check = slot::<Check>(device(), 0x68);
-        let mut info = [0u32; 2];
-        assert_eq!(check(device(), 6, (&raw mut info).cast(), 8), S_OK);
-        assert_eq!(info[0], OPTIONS[9], "resource bits agree with OPTIONS");
-        assert_eq!(info[1], 48);
-        assert_eq!(check(device(), 6, (&raw mut info).cast(), 4), E_INVALIDARG);
-    }
-
-    #[test]
-    fn feature_options_report_the_rdna2_tiers() {
-        type Check = extern "system" fn(This, u32, *mut c_void, u32) -> HRESULT;
-        let device = device();
-        let check = slot::<Check>(device, 0x68);
-        let mut options = [0u32; 16];
-        assert_eq!(check(device, 0, options.as_mut_ptr().cast(), 64), S_OK);
-        assert_eq!(options, OPTIONS);
-        assert_eq!(
-            (options[3], options[4], options[8], options[9], options[15]),
-            (3, 3, 3, 40, 2)
-        );
-        assert_eq!(
-            check(device, 0, options.as_mut_ptr().cast(), 60),
-            E_INVALIDARG
-        );
-        assert_eq!(check(device, 0, std::ptr::null_mut(), 64), E_INVALIDARG);
-    }
-
-    #[test]
-    fn feature_architecture_is_unified_and_coherent() {
-        type Check = extern "system" fn(This, u32, *mut c_void, u32) -> HRESULT;
-        let device = device();
-        let check = slot::<Check>(device, 0x68);
-        let mut arch = [0u32; 4];
-        assert_eq!(check(device, 1, arch.as_mut_ptr().cast(), 16), S_OK);
-        assert_eq!(arch, [0, 0, 1, 1]);
-        arch[0] = 1;
-        assert_eq!(check(device, 1, arch.as_mut_ptr().cast(), 16), E_INVALIDARG);
-    }
-
-    #[test]
-    fn feature_multisample_has_one_level_for_the_hardware_counts() {
-        type Check = extern "system" fn(This, u32, *mut c_void, u32) -> HRESULT;
-        let device = device();
-        let check = slot::<Check>(device, 0x68);
-        let levels = |samples: u32| {
-            // Format, sample count, flags in; quality levels out.
-            let mut query = [28, samples, 0, 99];
-            assert_eq!(check(device, 4, query.as_mut_ptr().cast(), 16), S_OK);
-            query[3]
-        };
-        for samples in [1, 2, 4, 8] {
-            assert_eq!(levels(samples), 1, "{samples} samples");
-        }
-        for samples in [0, 3, 16] {
-            assert_eq!(levels(samples), 0, "{samples} samples");
-        }
-    }
-
-    #[test]
-    fn a_healthy_device_reports_no_removal() {
-        let device = device();
-        let reason = slot::<extern "system" fn(This) -> HRESULT>(device, 0x128);
-        assert_eq!(reason(device), S_OK);
     }
 }

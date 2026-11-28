@@ -34,17 +34,15 @@ by the project owner's decision (2026-11-23), entered as an exception in
 repository's licence does not cover them. Nothing else of this kind is
 accepted.
 
+Not game data, so outside the rule but listed as the binary file it is:
+`docs/media/catez.gif`, the fork's README picture (owner's decision,
+2026-11-24).
+
 ## Where data lives
 
 Outside the repository, configured in `victory.toml`: `game_dir` (the
 user's dump), `test_titles`, and `cache_dir` for everything derived
 (default `%LOCALAPPDATA%\victory\cache`).
-
-Under Wine/Proton, vkd3d-proton and DXVK write shader caches
-(`vkd3d-proton.cache`, `*.dxvk-cache`) into the current directory. They are
-derived data and `.gitignore` covers them; to keep them out of the checkout
-entirely, run from elsewhere or point `VKD3D_SHADER_CACHE_PATH` /
-`DXVK_STATE_CACHE_PATH` at a directory outside the repository.
 
 ## Enforcement
 

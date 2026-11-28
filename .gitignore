@@ -24,13 +24,8 @@
 /extracted/
 /cache/
 /out/
-
-# Shader caches Wine/Proton (vkd3d-proton, DXVK) write into the working
-# directory when VIctory runs from the repo. Derived data; never commit.
-vkd3d-proton.cache
-vkd3d-proton.cache.write
-vkd3d_shader_cache/
-*.dxvk-cache
+# NVIDIA's DLSS files (Get-NVIDIA-DLSS.cmd): NVIDIA's, under NVIDIA's licences.
+/nvidia-sdk/
 
 # Executables, libraries, symbols
 *.exe

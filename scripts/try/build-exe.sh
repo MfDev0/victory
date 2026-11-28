@@ -73,6 +73,16 @@ int main(void) {
     /* Ctrl+C stops PowerShell (the child), not this window's last message. */
     SetConsoleCtrlHandler(NULL, TRUE);
 
+    /* Started from inside a game run (the game path named this exe): stop
+       at once instead of running VIctory Try inside itself. */
+    wchar_t running[8];
+    DWORD got = GetEnvironmentVariableW(L"VICTORY_TRY_RUNNING", running, 8);
+    if (got > 0 && got < 8 && wcscmp(running, L"1") == 0) {
+        wprintf(L"VIctory Try was started from inside a game run: not running it again.\n"
+                L"In the first VIctory Try window press G and give the game's own exe.\n");
+        return 3;
+    }
+
     wchar_t home[MAX_PATH], script[MAX_PATH], ps[MAX_PATH];
     DWORD len = ExpandEnvironmentStringsW(L"%LOCALAPPDATA%\\VIctoryTry", home,
                                           MAX_PATH);

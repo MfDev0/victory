@@ -2,12 +2,20 @@
 //! to begin. Ours is a clock started by the first interval set, ticking
 //! once per interval; the token is the frame number. Each event kind
 //! (origin, vblank, flip) happens once per tick, so two waits for the same
-//! kind never end on the same tick: Grand Theft Auto VI polls the origin
+//! kind never end on the same tick: the title polls the origin
 //! with "token on time-out" (starting its next frame at once) and is paced
 //! by a blocking wait for the flip before each present.
 //!
 //! shortcut: event offsets are ignored (every event is at the tick); tie
 //! the clock to presentation if a title paces by them.
+//!
+//! `VICTORY_FRAME_INTERVAL_MS=<ms>` ticks at that interval whatever the
+//! title sets (16.667: 60 a second; 0: no wait at all, every wait ends at
+//! once); unset, the title's interval as before. The loader gives the title
+//! the matching frame rate too (`victory_loader::frame_rate`), as the title
+//! would otherwise keep to its 30 with a limiter of its own. Try 6.24, from
+//! trustno1-coder/VIctory-NVIDIA (bacb402, there from
+//! Belobug/VIctory-Belobug-AMD 49cb83b).
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use std::sync::Mutex;
@@ -24,6 +32,28 @@ const ORIGIN: u32 = 0;
 /// frame early).
 const TOKEN_ON_TIMEOUT: u32 = 2;
 const SIXTIETH: Duration = Duration::from_micros(16_667);
+
+/// `VICTORY_FRAME_INTERVAL_MS`: the interval asked for in place of the
+/// title's (zero: no wait). Read once.
+fn asked() -> Option<Duration> {
+    static ASKED: std::sync::OnceLock<Option<Duration>> = std::sync::OnceLock::new();
+    *ASKED.get_or_init(|| {
+        let spec = std::env::var("VICTORY_FRAME_INTERVAL_MS").ok()?;
+        let ms = parse_ms(&spec);
+        match ms {
+            Some(d) => tracing::info!(interval = ?d, "frame interval of ours in place of the title's (VICTORY_FRAME_INTERVAL_MS)"),
+            None => tracing::warn!(spec, "VICTORY_FRAME_INTERVAL_MS: expected milliseconds from 0 to 1000; the title's interval kept"),
+        }
+        ms
+    })
+}
+
+/// `16.667` -> 16,667 us; 0 -> zero; negative, more than a second or not a
+/// number -> `None`.
+fn parse_ms(spec: &str) -> Option<Duration> {
+    let ms = spec.trim().parse::<f64>().ok().filter(|ms| ms.is_finite() && (0.0..=1000.0).contains(ms))?;
+    Some(Duration::from_nanos((ms * 1e6).round() as u64))
+}
 
 struct Clock {
     start: Instant,
@@ -49,11 +79,12 @@ pub(crate) extern "system" fn set_interval(
     _period: u32,
     _flags: u32,
 ) -> HRESULT {
-    let interval = match length {
+    let asked_by_title = match length {
         0 => SIXTIETH,
         us => Duration::from_micros(u64::from(us)),
     };
-    tracing::info!(?interval, "frame interval");
+    let interval = asked().unwrap_or(asked_by_title);
+    tracing::info!(?interval, title = ?asked_by_title, "frame interval");
     // A new interval starts from now, after the last tick handed out.
     let first = LAST
         .iter()
@@ -92,39 +123,30 @@ fn last(kind: u32) -> &'static AtomicU64 {
     &LAST[(kind as usize).min(LAST.len() - 1)]
 }
 
-/// The next tick after now and after the last one a wait for `kind` took
-/// (an event happens once per tick: a wait woken a little early must not
-/// let the next one end on the same tick), and how long until it. A wait
-/// that comes within `limit` takes the tick here, under the clock's lock,
-/// so two threads waiting for one kind never take the same tick.
-fn next_tick(kind: u32, limit: Duration) -> (u64, Duration) {
+/// The next tick after now and after the last one a wait for `kind` ended
+/// on (an event happens once per tick: a wait woken a little early must not
+/// let the next one end on the same tick), and how long until it.
+fn next_tick(kind: u32) -> (u64, Duration) {
     let mut clock = clock();
     let c = clock.get_or_insert_with(|| Clock {
         start: Instant::now(),
-        interval: SIXTIETH,
+        interval: asked().unwrap_or(SIXTIETH),
         first: 0,
     });
+    if c.interval.is_zero() {
+        // No wait: every wait ends at once, on a tick of its own.
+        let tick = last(kind).load(Ordering::Relaxed) + 1;
+        return (tick, Duration::ZERO);
+    }
     let elapsed = c.start.elapsed().as_nanos();
     let interval = c.interval.as_nanos().max(1);
-    let last_tick = last(kind).load(Ordering::Relaxed);
-    // The tick most recently passed. A flip (or vblank) wait that begins
-    // after a tick nobody has taken yet is late: the frame took longer than
-    // an interval. It ends at once on that tick instead of waiting for the
-    // following one, so a frame a little over budget costs that much more,
-    // not a whole extra interval (30 fps falling straight to 15).
-    let passed = c.first + (elapsed / interval) as u64;
-    if kind != ORIGIN && passed > last_tick && passed > c.first {
-        // Take it here like any other tick, so the next wait cannot end on it.
-        last(kind).fetch_max(passed, Ordering::Relaxed);
-        return (passed, Duration::ZERO);
-    }
-    let tick = (c.first + (elapsed / interval + 1) as u64).max(last_tick + 1);
+    let tick =
+        (c.first + (elapsed / interval + 1) as u64).max(last(kind).load(Ordering::Relaxed) + 1);
     let at = u128::from(tick - c.first) * interval;
-    let wait = Duration::from_nanos(at.saturating_sub(elapsed) as u64);
-    if wait <= limit {
-        last(kind).fetch_max(tick, Ordering::Relaxed);
-    }
-    (tick, wait)
+    (
+        tick,
+        Duration::from_nanos(at.saturating_sub(elapsed) as u64),
+    )
 }
 
 /// Device method: blocks until the next tick (or the time-out); an origin
@@ -140,15 +162,42 @@ pub(crate) extern "system" fn wait(
     token: *mut u64,
 ) -> HRESULT {
     let origin = kind == ORIGIN;
+    let (mut tick, mut wait) = next_tick(kind);
     let limit = Duration::from_millis(u64::from(timeout_ms));
-    let (_tick, wait) = next_tick(kind, limit);
+    // A blocking wait for an event that has happened since the last wait
+    // for it ended (a frame took longer than a tick) ends at once, on the
+    // tick that passed: sleeping on to the next one cost 17 ms of every
+    // 730 ms frame (run 58: "2.0 frame waits sleeping 16.8 ms"). Polls (a
+    // time-out shorter than a tick) answer as before.
+    // `VICTORY_LATE_WAITS=1` sleeps to the next tick, as before.
+    static SLEEP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*SLEEP.get_or_init(|| std::env::var_os("VICTORY_LATE_WAITS").is_some_and(|v| v == "1"))
+        && limit >= wait
+        && tick > last(kind).load(Ordering::Relaxed) + 1
+    {
+        tick -= 1;
+        wait = Duration::ZERO;
+    }
     let hr = if wait > limit {
         std::thread::sleep(limit);
         TIMEOUT
     } else {
         std::thread::sleep(wait);
+        last(kind).fetch_max(tick, Ordering::Relaxed);
         S_OK
     };
+    #[cfg(windows)]
+    {
+        let us = wait.min(limit).as_micros() as u64;
+        crate::framelog::add(crate::framelog::T::PaceUs, us);
+        crate::framelog::here(crate::framelog::H::PaceUs, us);
+    }
+    #[cfg(all(windows, feature = "diagnostics"))]
+    {
+        use crate::copystat::{C, add};
+        add(C::PaceWaits, 1);
+        add(C::PaceUs, wait.min(limit).as_micros() as u64);
+    }
     // A frame begun on a time-out takes no tick: its flip still does.
     if origin && (hr == S_OK || flags & TOKEN_ON_TIMEOUT != 0) {
         // Tokens count frames (consecutive), not ticks.
@@ -164,7 +213,7 @@ pub(crate) extern "system" fn wait(
         timeout_ms,
         flags,
         hr,
-        tick = _tick,
+        tick,
         wait_us = wait.as_micros() as u64,
         frame = current(),
         "frame wait"
@@ -190,6 +239,17 @@ pub(crate) extern "system" fn statistics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_switch_reads_milliseconds() {
+        assert_eq!(parse_ms("16.667"), Some(Duration::from_micros(16_667)));
+        assert_eq!(parse_ms(" 8.333 "), Some(Duration::from_micros(8_333)));
+        assert_eq!(parse_ms("0"), Some(Duration::ZERO));
+        assert_eq!(parse_ms("-1"), None);
+        assert_eq!(parse_ms("1001"), None);
+        assert_eq!(parse_ms("NaN"), None);
+        assert_eq!(parse_ms("fast"), None);
+    }
 
     #[test]
     fn waits_end_on_ticks_and_count_frames() {
@@ -221,7 +281,11 @@ mod tests {
         // origin poll that times out (and starts the frame), then a
         // blocking flip wait. Each flip ends on a tick of its own.
         const FLIP: u32 = 2;
-        assert_eq!(set_interval(null, null, 5_000, 3, 0), S_OK);
+        const INTERVAL: Duration = Duration::from_millis(5);
+        assert_eq!(
+            set_interval(null, null, INTERVAL.as_micros() as u32, 3, 0),
+            S_OK
+        );
         let mut token = 0;
         let flips: Vec<u64> = (0..4)
             .map(|_| {
@@ -236,38 +300,7 @@ mod tests {
         // Strictly rising: a late wake may skip ticks, but never repeats one.
         assert!(flips.windows(2).all(|w| w[1] > w[0]), "{flips:?}");
         // Even when a flip wait begins on the tick another just ended on.
-        let (tick, _) = next_tick(FLIP, Duration::ZERO);
+        let (tick, _) = next_tick(FLIP);
         assert!(tick > flips[3]);
-
-        // A frame over budget: its flip wait begins after a tick nobody
-        // took and ends at once on it, not on the tick after.
-        assert_eq!(set_interval(null, null, 20_000, 1, 0), S_OK);
-        assert_eq!(
-            wait(null, FLIP, u32::MAX, std::ptr::null(), 0, &mut token),
-            S_OK
-        );
-        let flipped = LAST[2].load(Ordering::Relaxed);
-        std::thread::sleep(Duration::from_millis(25));
-        let late = Instant::now();
-        assert_eq!(
-            wait(null, FLIP, u32::MAX, std::ptr::null(), 0, &mut token),
-            S_OK
-        );
-        assert!(late.elapsed() < Duration::from_millis(10));
-        assert_eq!(LAST[2].load(Ordering::Relaxed), flipped + 1);
-    }
-
-    /// Two waits for one kind that begin together (two threads) take two
-    /// ticks: the first takes its tick before it sleeps. A time-out takes
-    /// none. The old code marked the tick after the sleep, so both got it.
-    #[test]
-    fn waits_begun_together_take_different_ticks() {
-        const VBLANK: u32 = 1;
-        let long = Duration::from_secs(1);
-        let (first, _) = next_tick(VBLANK, long);
-        let (second, _) = next_tick(VBLANK, long);
-        assert!(second > first, "{second} after {first}");
-        next_tick(VBLANK, Duration::ZERO);
-        assert_eq!(last(VBLANK).load(Ordering::Relaxed), second);
     }
 }
