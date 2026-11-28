@@ -8,10 +8,45 @@ test. Everything (the menu, Discord) is built into `victory.exe`.
 
 ## Build and start
 
-```bat
-BUILD_VICTORY.cmd
-TESTER_MENU.cmd
+In PowerShell (it needs the `.\` in front), or double-click the files:
+
+```powershell
+.\BUILD_VICTORY.cmd
+.\TESTER_MENU.cmd
 ```
+
+### Trying a newer version
+
+Clone it into a new folder, then build it there:
+
+```powershell
+cd $HOME
+git clone -b arena/59fabb00-victory https://github.com/MfDev0/victory victory-try-2
+cd victory-try-2\nvidia
+.\BUILD_VICTORY.cmd
+```
+
+`BUILD_VICTORY.cmd` remembers where the project was built last
+(`%LOCALAPPDATA%\victory\try-project.txt`). A copy made before that is
+found at `%USERPROFILE%\victory-try`. When it finds an older copy, it shows
+its folder and version, then asks:
+
+- **1 Replace.** The older copy's `target` build folder and its downloaded
+  `D3D12`, `nvidia-sdk`, `amd-sdk` and `fidelityfx` folders are moved over,
+  so the build is faster and nothing is downloaded again. Then the older
+  folder is deleted. Your F1 settings, game path, saves, logs, reports and
+  NVIDIA's DLSS files are in `%LOCALAPPDATA%\victory`, not in the project,
+  so they are kept.
+- **2 Keep both.** The new copy is the one remembered from now on.
+- **3 Cancel.** Nothing changes.
+
+It never deletes these, and keeps both instead:
+
+- a folder that holds `game_scarlett_master.exe`
+- the folder it runs from, or one it is in
+- a drive, or your user, Desktop, Documents or Downloads folder
+
+If `victory.exe` is running, it asks you to close it first.
 
 `BUILD_VICTORY.cmd` runs `cargo build --release --locked -p victory` and
 copies `victory.exe` into this folder. You need Rust from rustup.rs (it

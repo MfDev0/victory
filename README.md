@@ -17,7 +17,7 @@ huss huss huss huss huss huss
 face fix, 13 more of its pull requests, FG UNLOCK (3x-6x on RTX 20/30/40,
 from MfDev0/dlss-unlocked-), a crash report zip and a tester menu. It is a
 separate workspace, and this repository's own engine above is unchanged. To
-build it: `cd nvidia`, then `BUILD_VICTORY.cmd`. To test: `TESTER_MENU.cmd`.
+build it: `cd nvidia`, then `.\BUILD_VICTORY.cmd` (PowerShell needs the `.\`). To test: `.\TESTER_MENU.cmd`. A newer clone in another folder asks whether to replace the older one (see `nvidia/TRY-NOTES.md`).
 See [nvidia/TRY-NOTES.md](nvidia/TRY-NOTES.md).
 
 ## What this is
