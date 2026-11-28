@@ -862,6 +862,21 @@ fn warmup_mark(home: &Path, program: &Path) -> Option<PathBuf> {
     Some(home.join("warmed").join(&hash.as_str()[..16]))
 }
 
+/// The file naming the victory.exe whose warm-up ran last (its mark's name):
+/// `%LOCALAPPDATA%\victory\warmed\last.txt`. The shader caches there are shared by
+/// every copy of victory.exe, so another version run in between makes them cold again.
+fn warmup_last(home: &Path) -> PathBuf {
+    home.join("warmed").join("last.txt")
+}
+
+/// Whether the start that has `mark` (`warmup_mark`) needs the warm-up: no mark yet, or
+/// another version's warm-up ran since (`warmup_last`).
+fn warmup_needed(home: &Path, mark: &Path) -> bool {
+    let name = mark.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let last = std::fs::read_to_string(warmup_last(home)).unwrap_or_default();
+    !mark.exists() || last.trim() != name
+}
+
 /// What a start needs once its settings are in the environment.
 pub(crate) struct Ready {
     pub(crate) exe: PathBuf,
@@ -972,13 +987,34 @@ pub(crate) fn prepare(o: &Play) -> Result<Ready> {
     // exe's first run stays at about 14 fps. `--set VICTORY_WARMUP_RESTART=0`: not done.
     // Only with DLSS Frame Generation ready or on: its swap chain (Streamline's) is what held
     // a first run at 14 fps (#515, #574); without it a first run plays at full speed.
+    // FIRST START FIX: with the black face fix on, the warm-up start also runs with the fix
+    // off and goes on until the shaders are made (crates\victory-gpu\src\host\menu.rs,
+    // `warmup`); the restart then plays with it on. A tester's 6 GB card crashed on entering
+    // the world whenever the fix was on in a start that still had to make its shaders, and
+    // played when one start with it off came first. `VICTORY_FACE_WARMUP=0`: not done.
+    let face_pass = s.get("VICTORY_BLACK_FACE_FIX").is_none_or(|v| v != "0")
+        && s.get("VICTORY_FACE_WARMUP").is_none_or(|v| v != "0");
     if !s.contains_key("VICTORY_WARMUP_RESTART")
-        && s.get("VICTORY_FRAMEGEN").is_some_and(|v| v == "1")
+        && (face_pass || s.get("VICTORY_FRAMEGEN").is_some_and(|v| v == "1"))
         && let Some(mark) = warmup_mark(&home, &program)
-        && !mark.exists()
+        && warmup_needed(&home, &mark)
     {
-        println!("First start of this version of victory.exe: the game restarts by itself {WARMUP_SECONDS} seconds after it");
-        println!("loads into the game (press A at the title screen), once (a new version's first run otherwise stays at about 14 fps).");
+        if face_pass {
+            println!("First start of this version of victory.exe: it loads once with the black face fix off, until the");
+            println!("shaders are made (press A at the title screen), then restarts by itself and plays with the fix on.");
+            s.insert("VICTORY_BLACK_FACE_FIX".to_owned(), "0".to_owned());
+            s.insert("VICTORY_FACE_WARMUP_PASS".to_owned(), "1".to_owned());
+        } else {
+            println!("First start of this version of victory.exe: the game restarts by itself {WARMUP_SECONDS} seconds after it");
+            println!("loads into the game (press A at the title screen), once (a new version's first run otherwise stays at about 14 fps).");
+        }
+        // Noted now: a warm-up that never ends (no mark) is armed again at the next start all
+        // the same, and one that ends is not run again until another version's runs.
+        if let Some(dir) = mark.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let name = mark.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let _ = std::fs::write(warmup_last(&home), name);
         s.insert("VICTORY_WARMUP_RESTART".to_owned(), WARMUP_SECONDS.to_string());
         s.insert("VICTORY_WARMUP_MARK".to_owned(), mark.to_string_lossy().into_owned());
     }

@@ -20,7 +20,7 @@ as upstream. On top of that:
 - photo mode saving to `Downloads\VIctory-Photos`;
 - a trail fix (DLSS model K);
 - a crash fix for 8 GB cards in Lucia's robbery;
-- a first start fix: the black face fix waits while shaders compile, then turns itself on;
+- a first start fix: a new build's first start loads with the black face fix off, then restarts by itself with it on;
 - more of the upstream pull requests;
 - FG UNLOCK (3x-6x on RTX 20/30/40, from MfDev0/dlss-unlocked-);
 - a crash report zip and a tester menu.

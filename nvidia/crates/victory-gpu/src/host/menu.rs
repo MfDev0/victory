@@ -377,6 +377,16 @@ fn settings_file() -> Option<std::path::PathBuf> {
 /// title screen and menus (about 10).
 const SCENE_DRAWS: u64 = 100;
 
+/// The warm-up start runs with the black face fix off until the shaders are made
+/// (`VICTORY_FACE_WARMUP_PASS=1`, set by the launcher; apps\victory\src\play.rs).
+fn face_pass() -> bool {
+    get("VICTORY_FACE_WARMUP_PASS") == "1"
+}
+
+/// The longest the warm-up start with the black face fix off plays in the game's scenes
+/// waiting for the shaders before it restarts all the same.
+const FACE_PASS_MOST: Duration = Duration::from_secs(180);
+
 pub(crate) fn warmup_seconds() -> Option<u64> {
     get("VICTORY_WARMUP_RESTART").parse().ok().filter(|s| *s > 0)
 }
@@ -397,12 +407,15 @@ pub(super) fn warmup_notice(seconds: u64, language: Language) -> Vec<String> {
     let tr = |text| language.text(text).to_owned();
     vec![
         tr(["FIRST START OF THIS VERSION: A ONE-TIME WARM-UP", "首次启动此版本，游戏将进行一次预热", "首次啟動此版本，遊戲將進行一次預熱", "PRIMER INICIO DE ESTA VERSIÓN: PREPARACIÓN ÚNICA"]),
-        match language {
+        if face_pass() {
+            // The black face fix is off for this start: it goes on until the shaders are made.
+            tr(["BLACK FACE FIX OFF NOW; RESTARTS WITH IT ON", "黑脸修复暂关，生成着色器后重启并开启", "黑臉修復暫關，產生著色器後重啟並開啟", "SIN ARREGLO DE CARAS; REINICIA CON ÉL"])
+        } else { match language {
             Language::English => format!("RESTARTS AFTER {seconds} SECONDS IN-GAME"),
             Language::SimplifiedChinese => format!("进入游戏 {seconds} 秒后自动重启"),
             Language::TraditionalChinese => format!("進入遊戲 {seconds} 秒後自動重啟"),
             Language::Spanish => format!("REINICIA TRAS {seconds} S DE JUEGO"),
-        },
+        } },
         tr(["PRESS A AT THE TITLE SCREEN TO ENTER THE GAME", "请在标题画面按 A 进入游戏", "請在標題畫面按 A 進入遊戲", "PULSA A EN LA PANTALLA DE TÍTULO PARA JUGAR"]),
         tr(["THIS HAPPENS ONCE PER NEW VERSION, AND IS NEEDED:", "每个新版本只需预热一次", "每個新版本只需預熱一次", "SOLO OCURRE UNA VEZ POR CADA VERSIÓN NUEVA:"]),
         tr(["WITHOUT IT THE FIRST RUN STAYS AT ABOUT 14 FPS", "预热前首次运行约为 14 帧", "預熱前首次執行約為 14 FPS", "SIN ESTO, EL PRIMER INICIO QUEDA EN UNOS 14 FPS"]),
@@ -997,7 +1010,13 @@ impl Menu {
         if BEGAN.get().is_none() && this_frame < SCENE_DRAWS {
             return;
         }
-        if BEGAN.get_or_init(std::time::Instant::now).elapsed() < Duration::from_secs(seconds) {
+        let played = BEGAN.get_or_init(std::time::Instant::now).elapsed();
+        if played < Duration::from_secs(seconds) {
+            return;
+        }
+        // FIRST START FIX (the black face fix off for this start, `face_pass`): on until the
+        // shaders are made ([`crate::resource::pipelines_calm`]), at most [`FACE_PASS_MOST`].
+        if face_pass() && played < FACE_PASS_MOST && !crate::resource::pipelines_calm() {
             return;
         }
         DONE.store(true, Ordering::Relaxed);

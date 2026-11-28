@@ -2225,12 +2225,12 @@ pub(crate) fn targets_room_kept() -> u64 {
 ///
 /// FIRST START FIX (`VICTORY_FACE_WARMUP`, on unless 0): a tester's 6 GB card crashed on
 /// entering the world (device removed, or "a host command list did not close (0x8007000E)"
-/// with DLSS out of video memory) whenever the fix was on in a start that had to compile its
-/// pipelines (the first start after a new build or a cleared cache); a start with the fix off,
-/// then the next with it on, played. So the admission waits while host pipelines are being
-/// compiled ([`face_warm`]) and starts by itself when they have calmed, with no restart.
+/// with DLSS out of video memory) whenever the fix was on in a start that still had to make
+/// its shaders, and played when one start with it off came first. So the launcher's warm-up
+/// start (apps\victory\src\play.rs) runs with the fix off until [`pipelines_calm`], then
+/// restarts the game, which plays with it on from the start.
 pub(crate) fn face_admit() -> bool {
-    face_fix_on() && face_warm()
+    face_fix_on()
 }
 
 /// Whether the black face fix is set on (`VICTORY_BLACK_FACE_FIX`, on unless 0).
@@ -2248,55 +2248,44 @@ fn face_fix_on() -> bool {
     })
 }
 
-/// [`face_admit`]'s warm-up: false for the first [`WARM_FIRST_MS`] of the run, and while
-/// host pipelines are being compiled: more than [`WARM_BURST`] compiled in a second, or
-/// more than [`WARM_QUEUE`] waiting, within the last [`WARM_QUIET_MS`]. Looked at once a
-/// second. `VICTORY_FACE_WARMUP=0`: always true, as before.
+/// Whether making host pipelines has calmed: none of the last [`WARM_QUIET_MS`] had more
+/// than [`WARM_BURST`] compiled in a second or more than [`WARM_QUEUE`] waiting. For the
+/// warm-up start with the black face fix off (`host/menu.rs`, `warmup`): it restarts the
+/// game once the shaders are made. Looked at once a second.
 #[cfg(windows)]
-fn face_warm() -> bool {
+pub(crate) fn pipelines_calm() -> bool {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ON.get_or_init(|| std::env::var_os("VICTORY_FACE_WARMUP").is_none_or(|v| v != "0")) {
-        return true;
-    }
-    // When it was last looked at, the compiled count then, when compiling was last busy,
-    // and the answer.
+    // When it was last looked at, the compiled count then, when making was last busy, and
+    // the answer.
     static LOOKED: AtomicU64 = AtomicU64::new(0);
     static COMPILED: AtomicU64 = AtomicU64::new(0);
     static BUSY_AT: AtomicU64 = AtomicU64::new(0);
-    static WARM: AtomicBool = AtomicBool::new(false);
+    static CALM: AtomicBool = AtomicBool::new(false);
     let now = crate::host::now_ms();
     let looked = LOOKED.load(Relaxed);
     if now >= looked + 1000 && LOOKED.compare_exchange(looked, now, Relaxed, Relaxed).is_ok() {
         let compiled = crate::pipeline::compiled();
         let burst = compiled.saturating_sub(COMPILED.swap(compiled, Relaxed));
-        if burst > WARM_BURST || crate::pipeline::making() > WARM_QUEUE {
+        if looked == 0 || burst > WARM_BURST || crate::pipeline::making() > WARM_QUEUE {
             BUSY_AT.store(now, Relaxed);
         }
-        let warm = now >= WARM_FIRST_MS && now >= BUSY_AT.load(Relaxed) + WARM_QUIET_MS;
-        if WARM.swap(warm, Relaxed) != warm {
-            if warm {
-                tracing::info!(compiled, "black face fix (PR #669): on now, pipelines have calmed (VICTORY_FACE_WARMUP=0: on from the start)");
-            } else {
-                tracing::info!(compiled, burst, "black face fix (PR #669): waiting while pipelines are compiled");
-            }
+        let calm = now >= BUSY_AT.load(Relaxed) + WARM_QUIET_MS;
+        if CALM.swap(calm, Relaxed) != calm {
+            tracing::info!(calm, compiled, burst, "warm-up: making shaders has {}", if calm { "calmed" } else { "picked up" });
         }
     }
-    WARM.load(Relaxed)
+    CALM.load(Relaxed)
 }
 
-/// [`face_warm`]: the first part of a run it always waits through, in ms.
+/// [`pipelines_calm`]: how long making must have been calm, in ms.
 #[cfg(windows)]
-const WARM_FIRST_MS: u64 = 30_000;
-/// [`face_warm`]: how long compiling must have been calm, in ms.
+const WARM_QUIET_MS: u64 = 15_000;
+/// [`pipelines_calm`]: host pipelines compiled in a second that count as busy.
 #[cfg(windows)]
-const WARM_QUIET_MS: u64 = 20_000;
-/// [`face_warm`]: host pipelines compiled in a second that count as busy.
+const WARM_BURST: u64 = 2;
+/// [`pipelines_calm`]: host pipelines waiting to be made that count as busy.
 #[cfg(windows)]
-const WARM_BURST: u64 = 4;
-/// [`face_warm`]: host pipelines waiting to be made that count as busy.
-#[cfg(windows)]
-const WARM_QUEUE: u64 = 8;
+const WARM_QUEUE: u64 = 4;
 
 /// [`targets_room_kept`]'s record of the targets' bytes (`last`) and of
 /// when they last grew by 64 MiB (`since`, ms), with `targets` now: a fall

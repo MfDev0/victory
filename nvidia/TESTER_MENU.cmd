@@ -161,7 +161,7 @@ echo   9  PR 851  neutral probe light  %F9%
 echo   C  Trail fix (DLSS model K)     %FC%
 echo   D  Crash fix (8 GB cards)       %FD%
 echo   E  Photo mode saves             %FE%
-echo   J  First start fix (face fix)   %FJ%
+echo   J  First start restart (face)   %FJ%
 echo   F  PR 1179 8 GB textures        %FF%
 echo   G  PR 1197 mesh windows         %FG%
 echo   H  PR 1007 dynamic slots        %FH%

@@ -22,8 +22,8 @@ Clone it into a new folder, then build it there:
 
 ```powershell
 cd $HOME
-git clone -b arena/59fabb00-victory https://github.com/MfDev0/victory victory-try-6
-cd victory-try-6\nvidia
+git clone -b arena/59fabb00-victory https://github.com/MfDev0/victory victory-try-7
+cd victory-try-7\nvidia
 .\BUILD_VICTORY.cmd
 ```
 
@@ -99,12 +99,15 @@ game crashed on entering the world ("device removed", or "a host command list
 did not close (0x8007000E)" with DLSS out of video memory) in a start that had
 to compile its shaders: the first start after a new build, or after another
 version ran. One start with the fix off, then the next with it on, played.
-Now the black face fix does that by itself, with no restart: it waits for the
-first 30 seconds, and while shaders are being compiled (more than 4 a second,
-or more than 8 waiting, in the last 20 seconds), then turns itself on. The
-log says "black face fix (PR #669): waiting while pipelines are compiled" and
-"on now, pipelines have calmed". `TESTER_MENU.cmd` > `T` > J, or
-`VICTORY_FACE_WARMUP=0`, turns the wait off.
+Now the game does that by itself, as a real restart: the first start of a new
+build (or after another version ran) loads with the black face fix OFF. Press A
+at the title screen and play; once the shaders are made (nothing new compiled
+for about 15 seconds, at most 3 minutes) the game closes and starts again by
+itself, with the black face fix ON from the very start. No black faces in the
+start you play. The console and the corner notice say so; the log says
+"warm-up: making shaders has calmed". It joins the FG warm-up restart, so there
+is only one restart. `TESTER_MENU.cmd` > `T` > J, or `VICTORY_FACE_WARMUP=0`,
+turns it off (then the fix is on from the first start, as before).
 
 **The robbery crash is not fully fixed.** Two crashes are reported there. The
 first, out of memory on 8 GB cards, is what CRASH FIX (8 GB CARDS) and PR

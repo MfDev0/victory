@@ -485,7 +485,7 @@ pub(crate) fn making() -> u64 {
 }
 
 /// Host pipelines compiled since the start (not loaded from the pipeline library): for the
-/// black face fix's warm-up (`crate::resource::face_admit`).
+/// warm-up start with the black face fix off (`crate::resource::pipelines_calm`).
 #[cfg(windows)]
 pub(crate) fn compiled() -> u64 {
     library::MADE.load(std::sync::atomic::Ordering::Relaxed)
