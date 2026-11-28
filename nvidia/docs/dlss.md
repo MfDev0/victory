@@ -57,7 +57,7 @@ later), hardware-accelerated GPU scheduling on (frame generation needs it).
 | `VICTORY_DLSS` | `1` | off | DLSS in place of the title's FidelityFX upscaling |
 | `VICTORY_FRAMEGEN` | `1` | off | DLSS Frame Generation on our present; needs `VICTORY_THIN=1` or `VICTORY_ASYNC_SUBMIT=1` (the line of submissions) |
 | `VICTORY_DLSS_MODE` | `dlaa`, `quality`, `balanced`, `performance`, `ultraperformance` | `quality` (`dlaa` with frame generation alone) | the scene's size: 1, 2/3, 0.58, 1/2, 1/3 of the output; the DLSS mode follows the sizes the title then passes |
-| `VICTORY_DLSS_PRESET` | `default`, `j`, `k`, `l`, `m` (`e`, `f` deprecated) | `default` | the DLSS model, for every mode |
+| `VICTORY_DLSS_PRESET` | `default`, `auto`, `j`, `k`, `l`, `m` (`e`, `f` deprecated) | `default` | the DLSS model: one letter for every mode, or `auto` for what NVIDIA's own override recommends per mode (`m` at performance, `l` at ultra performance, `k` elsewhere). `m`/`l` cost extra tensor work without native FP8 (RTX 20 and 30), so `default` stays the shipped default |
 | `VICTORY_STREAMLINE_DIR` | a folder | see above | where `sl.interposer.dll` and the rest are |
 | `VICTORY_STREAMLINE_LOG` | a folder | none | Streamline's own log files there, verbose |
 | `VICTORY_DLSS_JITTER` | `x,y` | `1,1` | multipliers for the jitter DLSS is given (`-1,1` flips x) |

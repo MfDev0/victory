@@ -5334,7 +5334,7 @@ pub(crate) fn in_place_let_go(at: u64, len: u64) -> u64 {
     {
         let mut map = LOOSE.write().unwrap_or_else(|e| e.into_inner());
         let keys: Vec<(u64, u64)> = map
-            .range((at.saturating_sub(WINDOW), 0)..(end, 0))
+            .range((at.saturating_sub(WINDOW + reach()), 0)..(end, 0))
             .filter(|(key, shadow)| shadow.place.is_some() && key.0 + key.1 > at)
             .map(|(key, _)| *key)
             .collect();
@@ -5550,7 +5550,7 @@ const WINDOW: u64 = 4 << 20;
 /// asked for in them lay within 1.6 GB. On a grid of 1 MiB or 256 KiB a
 /// window ends nearer to what is read. An ask without a length keeps the
 /// 4 MiB grid whatever is set: a root view reads from its address to its
-/// window's end, and mesh streams bound that way reach megabytes.
+/// window's end ([`reach`] past the cell), and mesh streams bound that way reach megabytes.
 /// shortcut: the default stays 4 MiB until a run with the memory line's
 /// window counts has shown what the finer grids give; the same memory
 /// asked for with different ranges then lies in more than one window.
@@ -5571,6 +5571,44 @@ fn grid(kb: Option<u64>) -> u64 {
     }
 }
 
+/// What an ask without a length can read past the end of its 4 MiB cell,
+/// in bytes: 2 MiB unless `VICTORY_WINDOW_REACH_KB` says otherwise (a
+/// multiple of 64, 4096 at the most; 0: nothing, as before).
+/// A root view has no length: the console reads from its address as far as
+/// the program goes. The title binds each mesh's vertex block that way, and
+/// the block's streams lie megabytes apart (positions, then normals, texture
+/// coordinates, part numbers). A window that ended with the cell cut off
+/// every block that began near the cell's end: what lay past it read zeros,
+/// so a vehicle's body came out with triangles drawn to its origin and no
+/// normals or texture coordinates. (One captured frame: 3,613 such views, 4
+/// with a stream that began past its window; a van's block of 1.1 MB began
+/// 128 KiB below the line.)
+/// shortcut: a block longer than this that begins nearer than its length to
+/// the line is still cut off; the longest stream offset seen is 2.4 MB. The
+/// whole next cell would hold them all and makes every such window 8 MiB.
+fn reach() -> u64 {
+    static REACH: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *REACH.get_or_init(|| {
+        let kb = std::env::var("VICTORY_WINDOW_REACH_KB").ok().and_then(|v| v.trim().parse::<u64>().ok());
+        reach_of(kb)
+    })
+}
+
+/// The reach in bytes for a setting in KiB: a multiple of 64 KiB up to
+/// 4 MiB, 2 MiB for anything else.
+fn reach_of(kb: Option<u64>) -> u64 {
+    match kb {
+        Some(kb) if kb % 64 == 0 && kb <= 4096 => kb << 10,
+        _ => 2 << 20,
+    }
+}
+
+/// The window (start, bytes) of an ask without a length at `address`: its
+/// 4 MiB cell and `reach` bytes of the next ([`reach`]).
+fn unsized_window(address: u64, reach: u64) -> (u64, u64) {
+    (address & !(WINDOW - 1), WINDOW + reach)
+}
+
 /// The window (start, bytes) of title memory for an ask of `[address,
 /// end)` on a grid of `grid` bytes.
 fn window_of(address: u64, end: u64, grid: u64) -> (u64, u64) {
@@ -5580,7 +5618,7 @@ fn window_of(address: u64, end: u64, grid: u64) -> (u64, u64) {
 
 /// Whether the window of an ask without a length begins at the ask instead
 /// of at the 4 MiB line below it. Such an ask (a root view) reads from its
-/// address to the end of its 4 MiB cell; what lies below the lowest
+/// address to the end of its 4 MiB cell and [`reach`] on; what lies below the lowest
 /// address ever asked for in the cell is memory the host zeroed and nothing
 /// reads (513 of run 65's 782 windows were asked for that way, 2,052 MB;
 /// of all windows' 3,236 MB, 1,988 MB were ever copied). With this on, the
@@ -5608,11 +5646,12 @@ fn tails() -> bool {
 const TAIL_STEP: u64 = 256 << 10;
 
 /// The window (start, bytes) a tail ask at `address` makes: from the ask's
-/// step ([`TAIL_STEP`]) to the end of its 4 MiB cell.
-fn tail_of(address: u64, end: u64) -> (u64, u64) {
+/// step ([`TAIL_STEP`]) to the end of its 4 MiB cell and `reach` bytes on
+/// ([`reach`]).
+fn tail_of(address: u64, end: u64, reach: u64) -> (u64, u64) {
     let (cell, len) = window_of(address, end, WINDOW);
     let start = address & !(TAIL_STEP - 1);
-    (start, cell + len - start)
+    (start, cell + len + reach - start)
 }
 
 /// Of `windows` (start, bytes), the one an ask of `[address, end)` that
@@ -5658,11 +5697,11 @@ fn cover(windows: impl Iterator<Item = (u64, u64)>) -> u64 {
 /// Of `windows` (start, bytes; in order), the longest tail a tail ask at
 /// `address` can take: the first that begins in the ask's cell at or below
 /// the ask's page and ends where the cell ends.
-fn longest_tail(windows: impl Iterator<Item = (u64, u64)>, address: u64, end: u64) -> Option<(u64, u64)> {
+fn longest_tail(windows: impl Iterator<Item = (u64, u64)>, address: u64, end: u64, reach: u64) -> Option<(u64, u64)> {
     let (cell, len) = window_of(address, end, WINDOW);
     let step = address & !(TAIL_STEP - 1);
     windows
-        .filter(|&(start, bytes)| start >= cell && start <= step && start + bytes == cell + len)
+        .filter(|&(start, bytes)| start >= cell && start <= step && start + bytes == cell + len + reach)
         .min()
 }
 
@@ -5743,7 +5782,7 @@ static LOOSE: std::sync::RwLock<BTreeMap<(u64, u64), Arc<Shadow>>> = std::sync::
 
 fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Shadow>> {
     let (cell, _) = window_of(address, end, WINDOW);
-    let named = window_of(address, end, if unsized_ask { WINDOW } else { window() });
+    let named = if unsized_ask { unsized_window(address, reach()) } else { window_of(address, end, window()) };
     // Under the lock, with the handing out: see `let_go_idle`.
     let note = |shadow: &Shadow| {
         // (Read first: the lines are shared by all recording threads.)
@@ -5772,7 +5811,7 @@ fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Sha
     let mut map = LOOSE.write().unwrap_or_else(|e| e.into_inner());
     let (start, len) = if unsized_ask && tails() {
         let there = map.range((cell, 0)..=(address, u64::MAX)).map(|(key, _)| *key);
-        longest_tail(there, address, end).unwrap_or_else(|| tail_of(address, end))
+        longest_tail(there, address, end, reach()).unwrap_or_else(|| tail_of(address, end, reach()))
     } else if any && fine() && !unsized_ask {
         // The windows that begin in the ask's cell at or below the ask (one
         // that begins in a cell below and reaches this far is passed over:
@@ -5968,7 +6007,7 @@ mod write_combined_tests {
 mod window_tests {
     use super::{
         WINDOW, cover, default_card_limits_mb, grid, holder, longest_tail, resolve_card_limits,
-        tail_of, window_of,
+        reach_of, tail_of, unsized_window, window_of,
     };
 
     #[test]
@@ -6055,14 +6094,14 @@ mod window_tests {
     fn tails_run_to_the_cells_end_and_the_longest_is_taken() {
         let cell = 0xd_1200_0000u64;
         let ask = cell + 0x12_3456;
-        assert_eq!(tail_of(ask, ask + 1), (cell + 0x10_0000, WINDOW - 0x10_0000));
+        assert_eq!(tail_of(ask, ask + 1, 0), (cell + 0x10_0000, WINDOW - 0x10_0000));
         // The cell's first page: the whole cell, the window there always was.
-        assert_eq!(tail_of(cell + 0xffff, cell + 0x1_0000), (cell, WINDOW));
+        assert_eq!(tail_of(cell + 0xffff, cell + 0x1_0000, 0), (cell, WINDOW));
         let end = cell + WINDOW;
         let tail = |from: u64| (cell + from, WINDOW - from);
         // Nothing there, or only tails that begin above the ask.
-        assert_eq!(longest_tail([].into_iter(), ask, ask + 1), None);
-        assert_eq!(longest_tail([tail(0x20_0000)].into_iter(), ask, ask + 1), None);
+        assert_eq!(longest_tail([].into_iter(), ask, ask + 1, 0), None);
+        assert_eq!(longest_tail([tail(0x20_0000)].into_iter(), ask, ask + 1, 0), None);
         // The longest of those that hold the ask; windows that do not reach
         // the cell's end (cut on a finer grid for asks with a length) and
         // windows of other cells are not tails.
@@ -6074,12 +6113,49 @@ mod window_tests {
             (cell + 0x10_0000, 0x4_0000),
             tail(0x20_0000),
         ];
-        assert_eq!(longest_tail(there.into_iter(), ask, ask + 1), Some(tail(0x8_0000)));
+        assert_eq!(longest_tail(there.into_iter(), ask, ask + 1, 0), Some(tail(0x8_0000)));
         let (start, bytes) = tail(0x8_0000);
         assert!(start <= ask && start + bytes == end);
         // The whole cell's window is the longest tail of all.
         let with_whole = [(cell, WINDOW), tail(0x8_0000)];
-        assert_eq!(longest_tail(with_whole.into_iter(), ask, ask + 1), Some((cell, WINDOW)));
+        assert_eq!(longest_tail(with_whole.into_iter(), ask, ask + 1, 0), Some((cell, WINDOW)));
+    }
+
+    /// An ask without a length reads past the end of its 4 MiB cell: a mesh's
+    /// vertex block that begins 128 KiB below the line and is 1.1 MB long
+    /// (a van's, in a captured frame) lies whole in its window.
+    #[test]
+    fn an_unsized_ask_reads_past_its_cells_end() {
+        let cell = 0xc_9a80_0000u64;
+        let (ask, block) = (cell + 0x3e_0040, 1_155_028u64);
+        // As it was: the window ends with the cell, 131,008 bytes on.
+        let (start, bytes) = unsized_window(ask, 0);
+        assert_eq!((start, bytes), (cell, WINDOW));
+        assert_eq!(start + bytes - ask, 131_008);
+        assert!(start + bytes < ask + block);
+        // With the default reach the block is whole, and so is one of the
+        // reach's length that begins on the cell's last byte.
+        let reach = reach_of(None);
+        assert_eq!(reach, 2 << 20);
+        let (start, bytes) = unsized_window(ask, reach);
+        assert_eq!((start, bytes), (cell, WINDOW + reach));
+        assert!(start + bytes >= ask + block);
+        let last = cell + WINDOW - 1;
+        let (start, bytes) = unsized_window(last, reach);
+        assert!(start == cell && start + bytes >= last + reach);
+        // Every ask of a cell names the same window.
+        assert_eq!(unsized_window(cell, reach), unsized_window(last, reach));
+        // A tail reaches as far.
+        assert_eq!(tail_of(ask, ask + 1, reach), (cell + 0x3c_0000, 0x4_0000 + reach));
+        let tail = tail_of(ask, ask + 1, reach);
+        assert_eq!(longest_tail([(cell, WINDOW), tail].into_iter(), ask, ask + 1, reach), Some(tail));
+        // The setting: multiples of 64 KiB up to 4 MiB, 0 for none.
+        assert_eq!(reach_of(Some(0)), 0);
+        assert_eq!(reach_of(Some(1024)), 1 << 20);
+        assert_eq!(reach_of(Some(4096)), 4 << 20);
+        for bad in [1, 100, 8192] {
+            assert_eq!(reach_of(Some(bad)), 2 << 20, "{bad}");
+        }
     }
 
     /// The setting takes powers of two from 64 KiB to 4 MiB; anything else

@@ -13,10 +13,18 @@ huss huss huss huss huss huss
 
 ## nvidia/: the VIctory-NVIDIA Try build
 
-`nvidia/` holds trustno1-coder's VIctory-NVIDIA (`63b902f`) with the diner
-face fix, 13 more of its pull requests, FG UNLOCK (3x-6x on RTX 20/30/40,
-from MfDev0/dlss-unlocked-), a crash report zip and a tester menu. It is a
-separate workspace, and this repository's own engine above is unchanged. To
+`nvidia/` holds trustno1-coder's VIctory-NVIDIA (main at `9ce3cf9`, with its
+mouse and keyboard controls) plus the fixes testers found working, on by
+default: black faces (#669), sky shine (#393), wide dispatch (#1005), movies
+as upstream. On top of that:
+- photo mode saving to `Downloads\VIctory-Photos`;
+- a trail fix (DLSS model K);
+- a crash fix for 8 GB cards in Lucia's robbery;
+- more of the upstream pull requests;
+- FG UNLOCK (3x-6x on RTX 20/30/40, from MfDev0/dlss-unlocked-);
+- a crash report zip and a tester menu.
+
+It is a separate workspace, and this repository's own engine above is unchanged. To
 build it: `cd nvidia`, then `.\BUILD_VICTORY.cmd` (PowerShell needs the `.\`). To test: `.\TESTER_MENU.cmd`. A newer clone in another folder asks whether to replace the older one (see `nvidia/TRY-NOTES.md`).
 See [nvidia/TRY-NOTES.md](nvidia/TRY-NOTES.md).
 

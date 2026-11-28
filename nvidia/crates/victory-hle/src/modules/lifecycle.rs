@@ -452,6 +452,18 @@ extern "system" fn window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if message == wm::WM_SETCURSOR
+        && (lparam as u16) == wm::HTCLIENT as u16
+        && super::gameinput::mnk::enabled()
+        && unsafe { wm::GetForegroundWindow() } == hwnd
+    {
+        // F1 open: the arrow, for the mouse is free then.
+        let menu = victory_gpu::SETTINGS_MENU_OPEN.load(std::sync::atomic::Ordering::Relaxed);
+        unsafe {
+            wm::SetCursor(if menu { wm::LoadCursorW(std::ptr::null_mut(), wm::IDC_ARROW) } else { std::ptr::null_mut() })
+        };
+        return 1;
+    }
     if message == wm::WM_SETFOCUS {
         english_input();
     }

@@ -1,7 +1,8 @@
 # Try build on VIctory-NVIDIA
 
 This folder is [trustno1-coder/VIctory-NVIDIA](https://github.com/trustno1-coder/VIctory-NVIDIA)
-at `63b902f` (tag v2026.11.28.01, the newest when this was made). The fixes,
+at `9ce3cf9` (its main branch on 2026-11-24, with the mouse and keyboard
+controls). The fixes,
 pull requests and tester features below are added on top. None of it was
 built or run here: it is source for you to build (`BUILD_VICTORY.cmd`) and
 test. Everything (the menu, Discord) is built into `victory.exe`.
@@ -21,8 +22,8 @@ Clone it into a new folder, then build it there:
 
 ```powershell
 cd $HOME
-git clone -b arena/59fabb00-victory https://github.com/MfDev0/victory victory-try-2
-cd victory-try-2\nvidia
+git clone -b arena/59fabb00-victory https://github.com/MfDev0/victory victory-try-4
+cd victory-try-4\nvidia
 .\BUILD_VICTORY.cmd
 ```
 
@@ -56,11 +57,44 @@ unit tests.
 
 ## Fixes
 
+**Tested and working: on, and no longer in F1.** Testers found these work,
+so they are on by default. F1 no longer shows them; `TESTER_MENU.cmd` > `T`
+still turns each one off or on.
+
+| What you see | Change | Switch (TESTER_MENU T) |
+|---|---|---|
+| Black faces and objects when video memory is full | PR #669 by Mit1123: a texture that was never uploaded is let in just over the line, up to 80% of the card. Headroom: `VICTORY_FACE_HEADROOM_MB` (256), `VICTORY_TEXTURE_FIRST_UPLOAD_MB` (128) | 1, `VICTORY_BLACK_FACE_FIX=0` |
+| Movie cutscenes with DLSS frame generation | As upstream: the setting that worked. SMOOTH (a reset on every movie frame) did not help and PAUSE (#669's) stuttered; both stay in the tester menu | 2, `VICTORY_MOVIE_FG=smooth` / `pause` |
+| Something flickers or is missing where the game dispatches wide | PR #1005: indirect dispatches wider than 65,535 groups run in one go on NVIDIA too | 3, `VICTORY_INDIRECT_WIDE_NVIDIA=0` |
+| Indoors: blue sky in reflections (blue sheen on skin, eyes, glass; white patches on the prison day-room floor) | PR #393 by tippythetaidum, carrying #63 by wasonidas: the sky's light is bounded at 1x the light around | A, `VICTORY_SKY_BOUND=0` |
+
+**New in this round: on, and in F1 so you can turn them off.**
+
 | What you see | Change | Switch |
 |---|---|---|
-| Black faces and objects when video memory is full | PR #669 by Mit1123: a texture that was never uploaded is let in just over the line, up to 80% of the card. Headroom: `VICTORY_FACE_HEADROOM_MB` (256), `VICTORY_TEXTURE_FIRST_UPLOAD_MB` (128) | F1 BLACK FACE FIX (on), `VICTORY_BLACK_FACE_FIX=0` |
-| Black boxes in movie cutscenes with DLSS frame generation | Ours, using #669's movie detection: frame generation stays on, and every movie frame (and the first game frame after one) is sent to DLSS as a reset, so nothing is blended across it (below) | F1 MOVIE CUTSCENES: SMOOTH (default), PAUSE (#669's pause), AS UPSTREAM; `VICTORY_MOVIE_FG=pause` / `off` |
-| Indoors: blue sky in reflections (blue sheen on skin, eyes, glass; white patches on the prison day-room floor) | PR #393 by tippythetaidum, carrying #63 by wasonidas: the sky's light is bounded at 1x the light around | F1 SKY SHINE FIX (on), `VICTORY_SKY_BOUND=0` |
+| Photo mode: "can't save photo" | The game saves a photo by asking the console for a screenshot (`XAppCaptureTakeScreenshot`), and was always told "not supported". Now the next frame is saved, as the game drew it (without F1, the panel or notices), as a full-size PNG in **`Downloads\VIctory-Photos`** (`GTAVI-<date>-<time>.png`). `VICTORY_PHOTOS=<folder>` picks another folder | F1 PHOTO MODE SAVES, T E, `VICTORY_PHOTOS=0` |
+| Moving cars and people leave a trail of frames behind them | With F1 DLSS MODEL on DEFAULT, DLSS uses model K, the transformer model, which smears much less than the older CNN models. A model picked in DLSS MODEL is kept. If trails remain with frame generation on, try it once with frame generation off and say which it was | F1 TRAIL FIX, T C, `VICTORY_TRAIL_FIX=0` |
+| Lucia's store robbery (the first mission): the game closes on 8 GB cards, "a host command list did not close (0x8007000E)" | Textures stop at 75% of an 8 GB card's memory. That value stopped this crash for a tester in issue #232. Cards with 9 GB or more are not changed | F1 CRASH FIX (8 GB CARDS), T D, `VICTORY_ROOM_SAFE=0` |
+| The same mission: black patches or lines, skipped draws, then a crash ("dynamic descriptor slots" short, issue #918) | PR #1007: 458,752 dynamic slots, not 262,144, so busy scenes stop dropping draws | `VICTORY_DYNAMIC_SLOTS=262144` is the old value |
+| A stutter about every 1.5 seconds, even standing still | PR #340: the memory sweep that drains the card runs every 15 s while memory is not pressed | `VICTORY_SWEEP_EVERY_MS=1500` is the old cadence |
+| Hitches at cutscene cuts and busy streaming, card full | PR #1095: a texture pass stops after 128 slots held back for room, not 1,024 | `VICTORY_TEXTURE_HELD_CAP=1024` is the old value |
+| Green or black textures on 8 GB cards | PR #1179: the render-target reserve settles on 8 GB cards, slot eviction follows the line, and a waiting texture shows grey, not black or green | - |
+| Vehicles with doors or panels missing or stretched, matte paint, half decals | PR #1197: a mesh's vertex block is no longer cut off at the end of a 4 MiB window | - |
+| The sand and seabed by the water: one tile repeated in strips | PR #1183: the terrain's page table gets its host copy with its view | - |
+| DLSS MODEL: a model per mode | PR #1164: F1 DLSS MODEL AUTO (BY MODE): M for performance, L for ultra performance, K for the rest (M and L need newer DLSS files; if AUTO looks wrong, use K) | F1 DLSS MODEL |
+| KEY BINDINGS did not bring mouse and keyboard back after a bad `bindings.ini` | PR #1185: the file is read again after KEY BINDINGS writes it | - |
+| Mouse and keyboard | Upstream's (ItsMK1/VIctory-MnK-patches): F1 MOUSE AND KEYBOARD, and F1 KEY BINDINGS to change the keys; they are saved in `%LOCALAPPDATA%\victory\bindings.ini` | F1 |
+
+**The robbery crash is not fully fixed.** Two crashes are reported there. The
+first, out of memory on 8 GB cards, is what CRASH FIX (8 GB CARDS) and PR
+#1007 address. The second, "device removed (0x887A0007)" after 5 to 7 minutes
+of heavy city play, has no known cause upstream yet (issue #232). If yours is
+that one, MAKE TESTER REPORT and send the zip.
+
+**Other fixes in this build**
+
+| What you see | Change | Switch |
+|---|---|---|
 | Ray tracing: compacted structures copied with a stale size (#689) | PR #718 by tharun-37: the size is answered at the builder call. Only with RAY TRACING on; the reporter measured 75 to 67 ms a frame | F1 RT SIZE FIX (on), `VICTORY_BVH_SIZE_ANSWER=0` |
 | Crash on 16 GB RAM when the open world streams in (#1049) | PR #1118 by erax4193: spare upload buffers are dropped and the commit is tried again | - |
 | Frozen picture after Alt+Enter with FSR 3 frame generation | PR #1132 by adwen-007 | - |
@@ -77,17 +111,6 @@ unit tests.
 | Depth written and read in the same list | PR #1018 (confirmed on 5070 Ti and 4070 Ti S) | - |
 | Aliasing barriers on textures that are not pooled | PR #999 | - |
 | Out of memory while staging a texture | PR #986: retried in smaller blocks | - |
-| Draws dropped in busy outdoor scenes on 1M-descriptor heaps | PR #1007: 458,752 dynamic slots | `VICTORY_DYNAMIC_SLOTS=262144` is the old value |
-
-**Movie cutscenes.** PR #669 found the movies (the Bink calls and the movie
-planes' uploads) and turned DLSS frame generation off while one played. That
-removed the black boxes, but switching frame generation off and on at every
-cutscene was unpleasant. Now, by default, frame generation stays on. Every
-movie frame, and the first game frame after one, is sent with
-`sl::Constants::reset`, so DLSS blends nothing across it. The black boxes came
-from the game's motion vectors moving the movie picture and its bars. FSR 3 is
-not changed (it never paused for movies). Not yet tested on a real PC: if the
-boxes are still there, pick PAUSE and say so in your report.
 
 The diner face fix (PR #33, `VICTORY_PRELUDE_RECHECK`) was taken out. It did
 not fix the diner faces on a tester's PC.
@@ -147,10 +170,13 @@ with `--set NAME=VALUE`. Each needs a restart.
 |---|---|---|---|
 | OUTFIT CHECK (PR 280) | #280 by Mikey970 | `VICTORY_KEEP_SHOWN=checked` | When the game gives a texture slot another texture of the same size, the old one is kept on screen only if their bytes match; otherwise a neutral texture shows until the new one is uploaded. Try it if a character wears the wrong outfit (Lucia in prison clothes in the coffee-shop flashback). |
 | NEUTRAL PROBE LIGHT (PR 851) | #851 by t90 | `VICTORY_PROBE_NEUTRAL=0.3` | The game's bounced light is made grey. It removes false red or blue light on skin and walls, and real colour with it. Try it if arms or faces stay light blue with SKY SHINE FIX on. |
-| TRY PR 1005: WIDE DISPATCH | #1005 | `VICTORY_INDIRECT_WIDE_NVIDIA=1` | Indirect dispatches wider than 65,535 groups run in one go on NVIDIA too, as on AMD. D3D12 does not allow more than 65,535, so this may fail on your driver. |
 | TRY PR 1008: RT FAULT PAGES | #1008 | `VICTORY_BVH_FAULTS_ALL=16384` | With RAY TRACING on, up to 16,384 faulted pages are copied for the BVH (the old limit is 2,048). |
 | TRY PR 982: PAD KEYS | #982 (keymap only) | `VICTORY_KEYMAP=a=20,lt=A2` | The keyboard pad's keys can be changed. The F1 choice puts A on Space and LT on left Ctrl. Any `control=hexkey` list works, for example `b=1B` (controls: a b x y menu view up down left right lb rb ls rs lt rt ls_up ls_down ls_left ls_right rs_up rs_down rs_left rs_right). It does nothing while GTA V KEYS AND MOUSE is on. |
 | LANGUAGE | #1056 | `VICTORY_MENU_LANGUAGE=zh-CN` / `zh-TW` / `es` / `auto` | F1 and F3 in Chinese or Spanish, using the Windows fonts. English stays the default. This one is merged in full: it is only the menu. |
+
+Not taken yet: #1157 (CPU lock contention, 550 lines across the hottest
+paths) and #1173 (pipeline workers throttled under memory pressure, 220
+lines): too risky without a Windows build.
 
 Not taken at all: #982's Tauri launcher (4,500 lines of new crates; crates.io
 was not reachable to check them) and #1056's bundled fonts (it uses the fonts
@@ -163,7 +189,7 @@ too risky without a Windows build to test it). #294 is already in upstream.
 with the warden); the bar and coffee-shop scenes are her flashback. If Lucia
 wears her prison clothes in the flashback instead of her hoodie, that is a
 texture shown from before (OUTFIT CHECK above, and BLACK FACE FIX, which lets
-first uploads in when the card is full). Please report which of them helps.
+first uploads in when the card is full). Please report whether OUTFIT CHECK helps.
 
 ## Our touch
 
@@ -189,10 +215,12 @@ first uploads in when the card is full). Please report which of them helps.
 
 ## TESTER_MENU.cmd > T
 
-`T` is a submenu with the switches above:
+`T` is a submenu with the switches above. Each press flips one and shows ON
+or OFF. They are saved the way F1 saves them, so F1 and the cmd always agree.
 
-- 1 to 6: the left-out PRs and Discord. Each press flips one and shows ON
-  or OFF. They are saved the way F1 saves them, so F1 and the cmd always
-  agree.
-- 7: the menu language.
+- 1, 2, 3, A: the fixes that work, only here (black face, movies, PR 1005,
+  sky shine). 2 goes UPSTREAM, SMOOTH, PAUSE.
+- 4, 6, 8, 9: PR 1008, PR 982, PR 280, PR 851 (off by default).
+- 5: Discord. 7: the menu language.
+- C, D, E: trail fix, crash fix (8 GB cards), photo mode saves (on).
 - B: back.

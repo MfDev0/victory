@@ -6123,7 +6123,7 @@ impl Host {
             }
             sweep();
             SWEPT.store(now_ms(), Ordering::Relaxed);
-        } else if late_free_present() && now_ms() > SWEPT.load(Ordering::Relaxed) + 1500 {
+        } else if late_free_present() && now_ms() > SWEPT.load(Ordering::Relaxed) + self.sweep_every_ms() {
             // With the present sent ahead nothing else brings a moment
             // with nothing in the air: one is made for the sweep.
             self.settle(&mut submitted, WHY_SYNC);
@@ -10402,10 +10402,12 @@ impl Host {
             // Sent ahead ([`late_free_present`]) unless the frame is to be
             // read back at once (a saved or listed frame): then a list of
             // its own, one whose last flight has finished or a new one.
+            // A photo the title asked for (photo.rs) is read back at once too.
+            let photo = crate::photo::take();
             #[cfg(feature = "diagnostics")]
-            let read_now = crate::capture::wanted(frame) || crate::capture::listed(frame);
+            let read_now = photo.is_some() || crate::capture::wanted(frame) || crate::capture::listed(frame);
             #[cfg(not(feature = "diagnostics"))]
-            let read_now = false;
+            let read_now = photo.is_some();
             let slot = if late_free_present() && !read_now {
                 let finished = FINISHED.load(Ordering::Acquire);
                 p.ahead.iter().position(|(_, flown)| *flown <= finished).or_else(|| {
@@ -10516,6 +10518,18 @@ impl Host {
                     }
                 })
                 .flatten();
+            // The photo: the frame as the title drew it, before the menu, panel and notices below.
+            let photo = photo.and_then(|path| {
+                let read = if composed {
+                    list.ResourceBarrier(&[transition(&back, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE)]);
+                    let read = crate::photo::read_back(&self.device, list, &back);
+                    list.ResourceBarrier(&[transition(&back, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST)]);
+                    read
+                } else {
+                    crate::photo::read_back(&self.device, list, texture)
+                };
+                read.map(|(buffer, footprint)| (path, buffer, footprint))
+            });
             #[cfg(feature = "diagnostics")]
             let probe = if slot.is_some() || composed {
                 None
@@ -10583,6 +10597,10 @@ impl Host {
             }
             #[cfg(not(feature = "diagnostics"))]
             let _ = flown;
+            // Read back at once (`read_now`: no slot, the list was waited for).
+            if let Some((path, buffer, footprint)) = photo {
+                crate::photo::save(path, &buffer, &footprint);
+            }
             #[cfg(feature = "diagnostics")]
             if let Some((buffer, footprint)) = capture {
                 crate::capture::save_read_back(frame, &buffer, &footprint);
@@ -10843,6 +10861,61 @@ impl Host {
     /// bytes: the budget and the use of the card's own memory, then of the
     /// PC's memory shared with the card (where the system moves what does
     /// not fit on the card).
+    /// How long between sweeps made behind flights ([`late_free_present`]).
+    /// Each settles everything in the air first, and that frame took 36 to
+    /// 82 ms instead of ~31 on an RTX 5070 Ti: at every 1.5 s, the 0.7
+    /// frames a second over 50 ms that made the prison stutter; without
+    /// sweeps, none. So while memory is not pressed they come every
+    /// `VICTORY_SWEEP_EVERY_MS` (15,000 by default; 1,500 as before), and
+    /// every 1.5 s while it is: the PC's memory under the residency
+    /// thresholds ([`crate::residency::pressured`]) or the card's use (less
+    /// the texture pool's free part) at the line textures are made up to
+    /// ([`crate::resource::room_line`]): textures are held back for room
+    /// then, and the sweep is what lets idle ones go (at 97% of the budget
+    /// instead, ~150,000 slots were held back a 5 s line for a minute of the
+    /// cutscene). Looked at twice a second.
+    fn sweep_every_ms(&self) -> u64 {
+        const PRESSED_MS: u64 = 1500;
+        static EVERY: OnceLock<u64> = OnceLock::new();
+        let every = *EVERY.get_or_init(|| {
+            std::env::var("VICTORY_SWEEP_EVERY_MS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(15_000)
+        });
+        if every <= PRESSED_MS {
+            return every;
+        }
+        static LOOKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static PRESSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+        let now = now_ms();
+        if now >= LOOKED.load(Ordering::Relaxed) + 500 {
+            LOOKED.store(now, Ordering::Relaxed);
+            crate::residency::refresh();
+            // The card past the line textures are made up to: textures are
+            // held back for room, and it is the sweep that lets idle ones go.
+            // Asked as the texture pass asks it (`crate::resource::room`,
+            // with what is kept for render targets and buffer copies): by
+            // the card's use alone it said "not pressed" for seconds at a
+            // time while every pass held new textures back (a cutscene:
+            // thousands of slots a second held, served up to 32 s after
+            // their write, sweeps every 15 s meanwhile).
+            // `VICTORY_SWEEP_PRESS_BY_ROOM=0`: by the use alone, as before.
+            static BY_ROOM: OnceLock<bool> = OnceLock::new();
+            let by_room = *BY_ROOM.get_or_init(|| std::env::var_os("VICTORY_SWEEP_PRESS_BY_ROOM").is_none_or(|v| v != "0"));
+            let memory = self.video_memory();
+            let card = if by_room {
+                !crate::resource::room(memory)
+            } else {
+                memory.is_none_or(|[budget, used, ..]| {
+                    used.saturating_sub(crate::pool::texture_room()) >= crate::resource::room_line(budget)
+                })
+            };
+            let pressed = crate::residency::pressured() || card;
+            if PRESSED.swap(pressed, Ordering::Relaxed) != pressed {
+                tracing::info!(pressed, every_ms = if pressed { PRESSED_MS } else { every }, "sweeps behind flights");
+            }
+        }
+        if PRESSED.load(Ordering::Relaxed) { PRESSED_MS } else { every }
+    }
+
     pub(crate) fn video_memory(&self) -> Option<[u64; 4]> {
         let adapter = self.adapter.as_ref()?;
         let mut own = DXGI_QUERY_VIDEO_MEMORY_INFO::default();

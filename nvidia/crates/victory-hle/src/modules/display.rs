@@ -7,6 +7,8 @@ use std::ffi::{c_char, c_void};
 use super::xgameruntime::{
     Guid, HRESULT, Interface, Methods, NOT_SUPPORTED, Object, add_ref, missing, put, text,
 };
+#[cfg(windows)]
+use super::xgameruntime::S_OK;
 
 /// HDR mode; asked for with this interface id since 2020.
 pub const HDR_PROVIDER: Guid = Guid::new(
@@ -127,10 +129,38 @@ fn last_error() -> HRESULT {
     (0x8007_0000 | (code & 0xffff)) as i32
 }
 
-// shortcut: screenshots fail as if capture were unavailable. Taking one needs
-// a hook in the GPU side: the last presented frame read back as BGRA8 (size,
-// row pitch, bytes) on request, e.g. `victory_gpu::last_frame() ->
-// Option<Frame>`, copied from the back buffer after `PresentX`.
+/// `XAppCaptureTakeScreenshotResult`: the capture's id, then the formats it is kept in.
+const LOCAL_ID_LENGTH: usize = 250;
+/// `XAppCaptureScreenshotFormatFlag::SDR`.
+const FORMAT_SDR: u32 = 1;
+
+/// The title's photo mode saves a photo through this (its SAVE PHOTO said it could not save while
+/// this answered "not supported"): the next presented frame is saved as a PNG in
+/// `Downloads\VIctory-Photos` (`victory_gpu::photo`); the result names that file.
+/// `VICTORY_PHOTOS=0`: not taken, as before.
+#[cfg(windows)]
+extern "system" fn take_screenshot(_: This, _user: *const c_void, result: *mut c_void) -> HRESULT {
+    let Some(name) = victory_gpu::photo::ask() else {
+        tracing::info!("screenshot not taken (VICTORY_PHOTOS=0 or no folder)");
+        return NOT_SUPPORTED;
+    };
+    if !result.is_null() {
+        let id = name.as_bytes();
+        let n = id.len().min(LOCAL_ID_LENGTH - 1);
+        // SAFETY: the title's `XAppCaptureTakeScreenshotResult`: 250 bytes of id, then (at 252,
+        // aligned) a 32-bit format flag.
+        unsafe {
+            let out = result.cast::<u8>();
+            std::ptr::write_bytes(out, 0, LOCAL_ID_LENGTH);
+            std::ptr::copy_nonoverlapping(id.as_ptr(), out, n);
+            out.add(252).cast::<u32>().write_unaligned(FORMAT_SDR);
+        }
+    }
+    tracing::info!(name = name.as_str(), "screenshot taken: a photo of the next frame (Downloads\\VIctory-Photos)");
+    S_OK
+}
+
+#[cfg(not(windows))]
 extern "system" fn take_screenshot(_: This, _user: *const c_void, _result: *mut c_void) -> HRESULT {
     tracing::info!("screenshot not taken");
     NOT_SUPPORTED

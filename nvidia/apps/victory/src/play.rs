@@ -138,6 +138,8 @@ const KEPT: &[&str] = &[
 ];
 
 const FG_TYPES: [&str; 3] = ["auto", "dlss", "fsr"];
+/// The default mouse and keyboard bindings, written beside the settings on first use.
+const MNK_BINDINGS: &str = include_str!("../../../bindings.ini");
 
 const RESOLUTIONS: [&str; 3] = ["1440", "1080to1440", "4k"];
 const DLSS_MODES: [&str; 5] = ["off", "dlaa", "quality", "balanced", "performance"];
@@ -899,6 +901,19 @@ pub(crate) fn prepare(o: &Play) -> Result<Ready> {
     }
     let streamline = streamline_dir(&here);
     let (mut s, series_s) = settings(o, &menu, streamline.as_deref());
+    // Mouse and keyboard (F1, MOUSE AND KEYBOARD; ItsMK1/VIctory-MnK-patches, GPL-3.0): the
+    // bindings in `bindings.ini` here, written with the defaults the first time; a
+    // VICTORY_MNK_BINDINGS already set (--set) names another file.
+    if s.get("VICTORY_MNK").is_some_and(|v| v == "1") && !s.contains_key("VICTORY_MNK_BINDINGS") {
+        let file = home.join("bindings.ini");
+        if !file.is_file() {
+            let _ = std::fs::write(&file, MNK_BINDINGS);
+        }
+        if file.is_file() {
+            println!("mouse/keyboard on: keys and sensitivity in {}", file.display());
+            s.insert("VICTORY_MNK_BINDINGS".to_owned(), file.to_string_lossy().into_owned());
+        }
+    }
     // FSR 3 made ready: AMD's files, asked for only where they would be used (FSR 3 chosen,
     // or a card without DLSS Frame Generation).
     if s.contains_key("VICTORY_FSR_FRAMEGEN") {

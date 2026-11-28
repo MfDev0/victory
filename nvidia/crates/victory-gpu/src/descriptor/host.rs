@@ -3166,7 +3166,7 @@ impl HostHeap {
                 };
                 raws.contains(&raw).then(|| {
                     let i = i as u32;
-                    let ok = i < self.count && !self.sampler && self.tabled_lately(i, frame);
+                    let ok = i < self.count && !self.sampler && tabled_out() && self.tabled_stamp(i) != 0;
                     (i, raw, ok, seen_since(self.tabled_stamp(i), cutoff, frame))
                 })
             })
@@ -3209,14 +3209,17 @@ impl HostHeap {
         if key == 0 {
             return;
         }
-        match view_at(key as u32, (key >> 32) as u32) {
-            Some(view) => null_for(&view, self.at(index)),
-            None => null_view(self.at(index)),
-        }
+        let kept = match view_at(key as u32, (key >> 32) as u32) {
+            Some(view) => neutral_for(&view, self.at(index)),
+            None => {
+                null_view(self.at(index));
+                None
+            }
+        };
         self.put(index);
         self.clear_twin(index);
         self.write_stride(index, 0);
-        self.keep(index, None);
+        self.keep(index, kept);
     }
 
     /// The slots [`HostHeap::note_buffer`] found stale for slot `index`, with
@@ -3532,13 +3535,15 @@ impl HostHeap {
     /// host cannot.
     pub(crate) fn make_at(&self, index: u32, view: &View) {
         let kept = make_twinned(view, self.at(index), self.twin(index));
-        if kept.is_none() {
-            null_for(view, self.at(index));
-        }
+        let stand_in = if kept.is_none() {
+            neutral_for(view, self.at(index))
+        } else {
+            None
+        };
         self.put(index);
         self.twin_made(index, kept.is_some() && twinned(view));
         self.write_stride(index, if kept.is_some() { view_stride_word(view) } else { 0 });
-        self.keep(index, kept.flatten());
+        self.keep(index, kept.flatten().or(stand_in));
     }
 
     /// Makes slot `index` (a dynamic one) the view the record `words` names,
@@ -4101,14 +4106,16 @@ impl HostHeap {
             } else {
                 make_twinned(&view, self.at(index), self.twin(index))
             };
-            if kept.is_none() && !self.sampler {
-                null_for(&view, self.at(index));
-            }
+            let stand_in = if kept.is_none() && !self.sampler {
+                neutral_for(&view, self.at(index))
+            } else {
+                None
+            };
             if kept.is_some() || !self.sampler {
                 self.put(index);
             }
             self.twin_made(index, kept.is_some() && twinned(&view));
-            self.keep(index, kept.flatten());
+            self.keep(index, kept.flatten().or(stand_in));
             self.quick_is(index, if later { 0 } else { key });
             drop(held);
             self.unmake_stale(index, stale);
@@ -7215,6 +7222,21 @@ mod bake_flip_tests {
         assert!(!super::same_ends(0, base(1), len, read));
         // Under 8 KiB: compared whole.
         assert!(super::same_ends(base(0), base(1), 6000, read));
+    }
+}
+
+#[cfg(test)]
+mod dynamic_slots_tests {
+    use super::{DYNAMIC, DYNAMIC_CAPPED, PORTABLE_VIEWS, parse_dynamic_slots};
+
+    #[test]
+    fn dynamic_slots_on_capped_1m_heap() {
+        let null = PORTABLE_VIEWS - 1;
+        assert_eq!(parse_dynamic_slots(1_245_184, null, None), DYNAMIC_CAPPED);
+        assert_eq!(parse_dynamic_slots(1_245_184, null, Some(300_000)), 300_000);
+        assert_eq!(parse_dynamic_slots(1_245_184, null, Some(900_000)), null / 2);
+        assert_eq!(parse_dynamic_slots(1_245_184, null, Some(1024)), DYNAMIC);
+        assert_eq!(parse_dynamic_slots(1_245_184, 1 << 21, None), (1u32 << 21) - 1_245_184);
     }
 }
 

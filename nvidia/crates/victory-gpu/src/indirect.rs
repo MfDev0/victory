@@ -280,13 +280,13 @@ fn widest(wide: bool) -> u32 {
 }
 
 /// Whether `device` runs indirect dispatches wider than 65,535 groups in x
-/// as asked ([`widest`]): AMD adapters, and NVIDIA ones only with
-/// `VICTORY_INDIRECT_WIDE_NVIDIA=1` (F1, WIDE DISPATCHES (NVIDIA); off by default in the Try
-/// build: D3D12 allows 65,535 groups a dimension, and past that is the driver's goodwill).
+/// as asked ([`widest`]): AMD adapters, and NVIDIA ones too unless
+/// `VICTORY_INDIRECT_WIDE_NVIDIA=0` (PR #1005; on by default in the Try build since testers found
+/// it worked, TESTER_MENU T 3; D3D12 allows 65,535 groups a dimension, past that is the driver's).
 pub(crate) fn runs_wide(device: &ID3D12Device) -> bool {
     match vendor(device) {
         Some(0x1002) => true,
-        Some(0x10de) => std::env::var_os("VICTORY_INDIRECT_WIDE_NVIDIA").is_some_and(|v| v == "1"),
+        Some(0x10de) => std::env::var_os("VICTORY_INDIRECT_WIDE_NVIDIA").is_none_or(|v| v != "0"),
         _ => false,
     }
 }

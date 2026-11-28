@@ -117,48 +117,69 @@ exit /b 1
 :end
 exit /b 0
 
-rem ---- T: the left-out PRs, the language, Discord ----
-rem Each is an F1 row too; picking one here flips it in the same file.
+rem ---- T: the fixes, the left-out PRs, the language, Discord ----
+rem 1, 2, 3 and A work and are on, so F1 no longer shows them: only
+rem here. The rest are F1 rows too; a pick flips it in the same file.
 :try
 cls
 call :current VICTORY_BLACK_FACE_FIX 0 F1
-set "F2=SMOOTH"
+set "F2="
 call :value VICTORY_MOVIE_FG F2
-if not defined F2 set "F2=SMOOTH"
-if "%F2%"=="pause" set "F2=PAUSE"
-if "%F2%"=="off" set "F2=UPSTREAM"
-call :current VICTORY_INDIRECT_WIDE_NVIDIA 1 F3
+if /i "%F2%"=="smooth" (set "F2=SMOOTH") else if /i "%F2%"=="pause" (set "F2=PAUSE") else (set "F2=UPSTREAM")
+call :current VICTORY_INDIRECT_WIDE_NVIDIA 0 F3
 call :current VICTORY_BVH_FAULTS_ALL 16384 F4
 call :current VICTORY_DISCORD 0 F5
 call :current VICTORY_KEYMAP "a=20,lt=A2" F6
 call :current VICTORY_KEEP_SHOWN checked F8
 call :current VICTORY_PROBE_NEUTRAL 0.3 F9
+call :current VICTORY_SKY_BOUND 0 FA
+call :current VICTORY_TRAIL_FIX 0 FC
+call :current VICTORY_ROOM_SAFE 0 FD
+call :current VICTORY_PHOTOS 0 FE
 set "LANG_NOW=en"
 call :value VICTORY_MENU_LANGUAGE LANG_NOW
 echo =============================================
-echo   TRY: PR FIXES, DISCORD
-echo   (each is also an F1 row)
+echo   TRY: FIXES, PRS, DISCORD
+echo   (1 2 3 A: only here, not in F1)
 echo =============================================
 echo   1  PR 669  black face fix       %F1%
 echo   2  Movie cutscenes (DLSS FG)    %F2%
 echo   3  PR 1005 wide dispatch (NV)   %F3%
+echo   A  PR 393  sky shine fix        %FA%
 echo   4  PR 1008 RT fault pages       %F4%
 echo   5  Discord: Playing GTA VI      %F5%
 echo   6  PR 982  Space=A, Ctrl=LT     %F6%
 echo   7  PR 1056 menu language        %LANG_NOW%
 echo   8  PR 280  outfit check         %F8%
 echo   9  PR 851  neutral probe light  %F9%
+echo   C  Trail fix (DLSS model K)     %FC%
+echo   D  Crash fix (8 GB cards)       %FD%
+echo   E  Photo mode saves             %FE%
 echo   B  Back
 echo.
-echo   1 and 5 are on unless set to 0.
-echo   2 goes SMOOTH, PAUSE, UPSTREAM.
+echo   1 3 A 5 C D E are on unless set to 0.
+echo   2 goes UPSTREAM, SMOOTH, PAUSE.
+echo   Photos: Downloads\VIctory-Photos
 echo.
-choice /c 123456789B /n /m "Flip: "
+choice /c 123456789ACDEB /n /m "Flip: "
 set "PICK=%ERRORLEVEL%"
-if "%PICK%"=="10" goto :menu
+if "%PICK%"=="14" goto :menu
+if "%PICK%"=="10" call :flip_off VICTORY_SKY_BOUND "%FA%"
+if "%PICK%"=="11" call :flip_off VICTORY_TRAIL_FIX "%FC%"
+if "%PICK%"=="12" call :flip_off VICTORY_ROOM_SAFE "%FD%"
+if "%PICK%"=="13" call :flip_off VICTORY_PHOTOS "%FE%"
 if "%PICK%"=="8" call :flip VICTORY_KEEP_SHOWN checked "%F8%"
 if "%PICK%"=="9" call :flip VICTORY_PROBE_NEUTRAL 0.3 "%F9%"
 if "%PICK%"=="7" goto :language
+if "%PICK%"=="6" call :flip VICTORY_KEYMAP "a=20,lt=A2" "%F6%"
+if "%PICK%"=="1" call :flip_off VICTORY_BLACK_FACE_FIX "%F1%"
+if "%PICK%"=="2" call :movie "%F2%"
+if "%PICK%"=="3" call :flip_off VICTORY_INDIRECT_WIDE_NVIDIA "%F3%"
+if "%PICK%"=="4" call :flip VICTORY_BVH_FAULTS_ALL 16384 "%F4%"
+if "%PICK%"=="5" call :flip_off VICTORY_DISCORD "%F5%"
+goto :try
+
+:language
 if "%PICK%"=="6" call :flip VICTORY_KEYMAP "a=20,lt=A2" "%F6%"
 if "%PICK%"=="1" call :flip_off VICTORY_BLACK_FACE_FIX "%F1%"
 if "%PICK%"=="2" call :movie "%F2%"
@@ -181,9 +202,9 @@ if "%PICK%"=="4" call :save_choice VICTORY_MENU_LANGUAGE es
 if "%PICK%"=="5" call :save_choice VICTORY_MENU_LANGUAGE auto
 goto :try
 
-rem Movie cutscenes: SMOOTH (not set), then pause, then off.
+rem Movie cutscenes: UPSTREAM (not set, the default), then smooth, then pause.
 :movie
-if /i "%~1"=="SMOOTH" (call :save_choice VICTORY_MOVIE_FG pause) else if /i "%~1"=="PAUSE" (call :save_choice VICTORY_MOVIE_FG off) else (call :save_choice VICTORY_MOVIE_FG "")
+if /i "%~1"=="UPSTREAM" (call :save_choice VICTORY_MOVIE_FG smooth) else if /i "%~1"=="SMOOTH" (call :save_choice VICTORY_MOVIE_FG pause) else (call :save_choice VICTORY_MOVIE_FG "")
 goto :eof
 
 rem %1 the setting, %2 its value when it is the odd one out, %3 where ON or OFF goes.
