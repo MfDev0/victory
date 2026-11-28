@@ -1343,13 +1343,42 @@ pub(crate) fn fresh_inputs() -> Option<Inputs> {
     Some(Inputs { depth: n.depth.current(), motion: n.motion.current(), camera: n.camera, frame_ms: n.frame_ms })
 }
 
-/// PR #669's movie gate: frame generation held off while a Bink movie plays, so the
-/// still letterbox bars do not flicker. Off by default in the Try build (frame generation
-/// runs over movies, as before); `VICTORY_MOVIE_FG_GATE=1` (F1, MOVIE FG PAUSE) turns it on.
-pub fn movie_gate() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_MOVIE_FG_GATE").is_some_and(|v| v == "1"))
+/// What a Bink movie does to DLSS frame generation (`VICTORY_MOVIE_FG`, F1 MOVIE CUTSCENES).
+/// Movies are found by PR #669's gate (the Bink calls and the movie planes' uploads).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MovieFg {
+    /// The Try build's default: frame generation stays on, and every movie frame, and the
+    /// first game frame after one, is sent as a reset (`sl::Constants::reset`). Frame
+    /// generation then blends nothing across them: the game's motion vectors no longer push
+    /// the movie and its black bars around (the black boxes), and there is no off and on
+    /// again at each cutscene (PR #669's pause, which stuttered).
+    Smooth,
+    /// PR #669 as it was: frame generation off while a movie plays.
+    Pause,
+    /// Movies are not looked for, as upstream.
+    Off,
 }
+
+fn movie_fg_of(value: Option<&std::ffi::OsStr>) -> MovieFg {
+    match value.and_then(|v| v.to_str()).map(str::trim) {
+        Some("pause") => MovieFg::Pause,
+        Some("off" | "0") => MovieFg::Off,
+        _ => MovieFg::Smooth,
+    }
+}
+
+pub fn movie_fg() -> MovieFg {
+    static MODE: OnceLock<MovieFg> = OnceLock::new();
+    *MODE.get_or_init(|| movie_fg_of(std::env::var_os("VICTORY_MOVIE_FG").as_deref()))
+}
+
+/// Whether movies are looked for at all (everything but `VICTORY_MOVIE_FG=off`).
+pub fn movie_gate() -> bool {
+    movie_fg() != MovieFg::Off
+}
+
+/// The previous DLSS present showed a movie: the first game frame after it is a reset too.
+static DLSS_LAST_VIDEO: AtomicBool = AtomicBool::new(false);
 
 /// How many title presents after the last sign of a movie frame generation
 /// stays off. A movie decoder can hold a plane for several presents, and the
@@ -2010,13 +2039,19 @@ pub(crate) fn present_begins(frame: u64, planes: Planes<'_>, video: bool) -> Opt
             .map(|n| (n.id, n.depth.clone(), n.motion.clone(), n.camera))
     };
     let viewport = abi::ViewportHandle::new(VIEWPORT_FG);
+    // A movie frame, or the first game frame after one: nothing to blend with (MovieFg::Smooth).
+    let was_video = DLSS_LAST_VIDEO.swap(video, Relaxed);
     let on = if let Some((id, depth, motion, camera)) = fresh {
         PRESENTED_ID.store(id, Relaxed);
         let plan = PLAN.get()?;
         // (Frame generation reads the camera's planes and matrices: the
         // nearer plane is the near one, whichever way the title names them.)
         let camera = camera.planes_in_order();
-        let constants = camera.constants(plan.asked.jitter, plan.asked.mvec);
+        let mut constants = camera.constants(plan.asked.jitter, plan.asked.mvec);
+        if video || was_video {
+            constants.reset = abi::TRUE;
+            once!(info, "DLSS Frame Generation: a movie frame is sent as a reset (MOVIE CUTSCENES SMOOTH): nothing is blended across it");
+        }
         // SAFETY: constants for this frame and viewport.
         let code = unsafe { (sl.set_constants)(&constants, token, &viewport) };
         if code != 0 {
@@ -2069,9 +2104,9 @@ pub(crate) fn present_begins(frame: u64, planes: Planes<'_>, video: bool) -> Opt
             mvec_scale = ?constants.mvec_scale,
             "DLSS Frame Generation: first frame with depth and motion vectors tagged"
         );
-        // A movie plane was recorded for this present: the tags are kept in
-        // step, but generation must not interpolate the black bars.
-        if video { false } else { code == 0 }
+        // A movie plane was recorded for this present: the tags are kept in step. Smooth (the
+        // default) keeps generation on with the reset above; Pause (PR #669) turns it off.
+        if video && movie_fg() == MovieFg::Pause { false } else { code == 0 }
     } else {
         if calls.framegen_on {
             // No upscaling this frame (a menu, a load): what was tagged may
@@ -2684,6 +2719,16 @@ mod tests {
         BINK_IDLE_UNTIL_FRAME.store(0, Relaxed);
         BINK_IDLE_UNTIL_MS.store(0, Relaxed);
         BINK_MOVIES_OPEN.store(0, Relaxed);
+    }
+
+    #[test]
+    fn movie_cutscenes_default_to_smooth() {
+        use std::ffi::OsStr;
+        assert_eq!(movie_fg_of(None), MovieFg::Smooth);
+        assert_eq!(movie_fg_of(Some(OsStr::new(""))), MovieFg::Smooth);
+        assert_eq!(movie_fg_of(Some(OsStr::new("pause"))), MovieFg::Pause);
+        assert_eq!(movie_fg_of(Some(OsStr::new("off"))), MovieFg::Off);
+        assert_eq!(movie_fg_of(Some(OsStr::new("0"))), MovieFg::Off);
     }
 
     #[test]

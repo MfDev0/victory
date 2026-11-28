@@ -119,6 +119,17 @@ pub(crate) struct AllocationInfo {
     alignment: u64,
 }
 
+#[cfg(test)]
+pub(crate) fn readback_test_descriptions() -> (HeapProperties, ResourceDesc) {
+    (
+        HeapProperties { kind: 1, cpu_pages: 0, pool: 0, creation_nodes: 0, visible_nodes: 0 },
+        ResourceDesc {
+            dimension: 3, alignment: 0, width: 256, height: 256, depth_or_array_size: 1,
+            mip_levels: 1, format: 41, sample_count: 1, sample_quality: 0, layout: 0, flags: 4,
+        },
+    )
+}
+
 const _: () = assert!(size_of::<HeapProperties>() == 20);
 const _: () = assert!(size_of::<HeapDesc>() == 48);
 // normal_placed (descriptor.rs) clears the padding words on either side of these spans.
@@ -2150,16 +2161,19 @@ pub(crate) fn targets_room_kept() -> u64 {
 
 /// PR #669's VRAM first-upload admission (black faces when the card is full): the
 /// headroom kept for faces inside the room line, first uploads admitted just over it up
-/// to 80% of the budget, and the target reserve returned at a quarter. Off by default in
-/// the Try build; `VICTORY_FACE_ADMIT=1` (F1, BLACK FACE ADMIT) turns it on. Off, room
-/// is weighed exactly as before the PR.
+/// to 80% of the budget, and the target reserve returned at a quarter. Copied from open
+/// PR #669 by Mit1123. On by default in the Try build (testers saw the black faces go);
+/// `VICTORY_BLACK_FACE_FIX=0` (F1, BLACK FACE FIX) turns it off, and room is then weighed
+/// exactly as before the PR.
 #[cfg(windows)]
 pub(crate) fn face_admit() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        let on = std::env::var_os("VICTORY_FACE_ADMIT").is_some_and(|v| v == "1");
+        let on = std::env::var_os("VICTORY_BLACK_FACE_FIX").is_none_or(|v| v != "0");
         if on {
-            tracing::info!("PR #669 VRAM first-upload admission is on (VICTORY_FACE_ADMIT=1)");
+            tracing::info!("PR #669 VRAM first-upload admission is on (VICTORY_BLACK_FACE_FIX=0 turns it off)");
+        } else {
+            tracing::info!("PR #669 VRAM first-upload admission is off (VICTORY_BLACK_FACE_FIX=0)");
         }
         on
     })

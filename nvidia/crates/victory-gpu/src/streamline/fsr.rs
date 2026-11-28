@@ -440,6 +440,12 @@ pub(crate) fn swap_chain(
             return None;
         }
     };
+    // Prevent DXGI's exclusive fullscreen Alt+Enter transition, which freezes
+    // FidelityFX's frame interpolation swap chain (same rule as Streamline).
+    // SAFETY: valid factory and HWND from swap chain creation.
+    unsafe {
+        let _ = factory.MakeWindowAssociation(hwnd, windows::Win32::Graphics::Dxgi::DXGI_MWA_NO_ALT_ENTER);
+    }
     *live() = Some(Live { swap_chain_context: context, swap_chain: swap_chain.as_raw(), framegen: None, frame_id: 0, refused: None });
     SWAP_CHAIN.store(true, Release);
     // The colour without the interface is copied in front of the title's interface composite, as for DLSS

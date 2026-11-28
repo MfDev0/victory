@@ -570,28 +570,6 @@ pub(crate) fn let_go_idle() {
 /// the host, not in title memory, which stays as it was.
 static HOST_WRITTEN: Mutex<Option<std::collections::HashSet<usize>>> = Mutex::new(None);
 
-/// Textures a host copy or resolve wrote in a list that has been submitted
-/// (or that the library wrote itself): what [`PreludeUpload::finish_refresh`]
-/// checks. [`HOST_WRITTEN`] is filled when the copy is recorded, and a list
-/// that queued a texture's base upload ahead of its own partial copy into it
-/// then found its own copy there and left its upload out: the texels the copy
-/// did not reach stayed zero (black faces, black world textures with a warm
-/// pipeline cache; PR #33's review). Filled at submission instead
-/// ([`host_written_submitted`]), a list's own copies never cancel its uploads,
-/// and a list recorded before a bake but submitted after it still leaves the
-/// baked texture alone.
-static HOST_WRITTEN_SUBMITTED: Mutex<Option<std::collections::HashSet<usize>>> = Mutex::new(None);
-
-/// The textures a submitted list's host copies and resolves wrote (its
-/// `HostList::defer_host_written`), or one the library wrote itself.
-pub(crate) fn host_written_submitted(resources: &[usize]) {
-    if resources.is_empty() {
-        return;
-    }
-    let mut set = HOST_WRITTEN_SUBMITTED.lock().unwrap_or_else(|e| e.into_inner());
-    set.get_or_insert_with(Default::default).extend(resources.iter().copied());
-}
-
 /// A host copy or resolve writes `resource`.
 pub(crate) fn host_written(resource: This) {
     let new = {
@@ -676,12 +654,6 @@ pub(crate) fn forget(resource: usize) {
     if let Some(set) = set.as_mut() {
         set.remove(&resource);
     }
-    drop(set);
-    let mut set = HOST_WRITTEN_SUBMITTED.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(set) = set.as_mut() {
-        set.remove(&resource);
-    }
-    drop(set);
     // Its memory may be given to other textures now (run 177: most of the
     // "HERO LEAD" lines were views in memory a released texture had held).
     HOST_WRITTEN_AT.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, d| d.5 != resource);
@@ -897,7 +869,7 @@ pub(crate) fn upload_from(list: &HostList, resource: This, first: u32) {
             staging.expected.store(there, Relaxed);
         }
         let on_demand = if staging.on_demand { crate::resource::host_tiled(resource) } else { None };
-        list.defer_prelude_upload(PreludeUpload { staging, copy, on_demand, resource: resource as usize });
+        list.defer_prelude_upload(PreludeUpload { staging, copy, on_demand });
         return;
     }
     // The host texture has the staging buffer's contents: only the check
@@ -1010,26 +982,6 @@ pub(crate) struct PreludeUpload {
     staging: Arc<Staging>,
     pub(crate) copy: Arc<crate::resource::HostTexture>,
     on_demand: Option<crate::resource::OnDemand>,
-    /// The title's texture, for the check at submission that the host has
-    /// not written it since the list was recorded ([`host_written`]).
-    resource: usize,
-}
-
-/// Whether a host copy or resolve in a list submitted before has written the
-/// title's texture `resource` ([`HOST_WRITTEN_SUBMITTED`]).
-fn is_host_written(resource: usize) -> bool {
-    HOST_WRITTEN_SUBMITTED
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-        .is_some_and(|set| set.contains(&resource))
-}
-
-/// `VICTORY_PRELUDE_RECHECK=0`: a prelude upload is not checked again at
-/// submission for a host write made after its list was recorded (as before).
-fn prelude_recheck() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_PRELUDE_RECHECK").is_none_or(|v| v != "0"))
 }
 
 impl PreludeUpload {
@@ -1045,30 +997,6 @@ impl PreludeUpload {
     /// levels on demand given memory, what the host copy holds).
     pub(crate) fn finish_refresh(&self) -> Option<bool> {
         use std::sync::atomic::Ordering::Relaxed;
-        // The host wrote the texture (a bake's copy into it) after this list
-        // was recorded, on another recording thread: its title memory holds
-        // what it held before, often another texture's bytes, and copying it
-        // over the host's contents left them there for good (no later list
-        // uploads a host-written texture): a character's baked skin drawn as
-        // coloured specks or a blue face for a whole scene, in about half the
-        // runs (the diner's bartender).
-        if prelude_recheck() && is_host_written(self.resource) {
-            static SKIPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = SKIPPED.fetch_add(1, Relaxed) + 1;
-            if n <= 8 || n.is_power_of_two() {
-                // SAFETY: a live texture.
-                let desc = unsafe { self.copy.texture.GetDesc() };
-                tracing::warn!(
-                    n,
-                    resource = format_args!("{:#x}", self.resource),
-                    width = desc.Width,
-                    height = desc.Height,
-                    format = desc.Format.0,
-                    "prelude upload left out: the host wrote the texture after the list that samples it was recorded"
-                );
-            }
-            return None;
-        }
         let Some(first_upload) = claim_upload(&self.staging.uploaded, &self.staging.dirty) else {
             #[cfg(feature = "diagnostics")]
             crate::copystat::add(crate::copystat::C::TexSkipped, 1);

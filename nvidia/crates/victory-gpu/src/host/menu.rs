@@ -110,17 +110,37 @@ const ABOUT_REPORT: [Labels; 3] = [
 const TITLE: Labels = ["SETTINGS   =^.^=              F1 OR ESC CLOSES", "设置  =^.^=           F1 / ESC 关闭", "設定  =^.^=           F1 / ESC 關閉", "AJUSTES  =^.^=            F1 O ESC PARA CERRAR"];
 /// What is said while a row of the Try build's own is picked: the left-out pull requests,
 /// the language (#1056), the cat and Discord.
-const ABOUT_TRY_VARS: [&str; 7] = ["VICTORY_FACE_ADMIT", "VICTORY_MOVIE_FG_GATE", "VICTORY_INDIRECT_WIDE_NVIDIA", "VICTORY_BVH_FAULTS_ALL", "VICTORY_KEYMAP", LANGUAGE, "VICTORY_DISCORD"];
-const ABOUT_TRY: [[Labels; 3]; 7] = [
+const ABOUT_TRY_VARS: [&str; 11] = ["VICTORY_KEEP_SHOWN", "VICTORY_PROBE_NEUTRAL", "VICTORY_BVH_SIZE_ANSWER", "VICTORY_SKY_BOUND", "VICTORY_BLACK_FACE_FIX", "VICTORY_MOVIE_FG", "VICTORY_INDIRECT_WIDE_NVIDIA", "VICTORY_BVH_FAULTS_ALL", "VICTORY_KEYMAP", LANGUAGE, "VICTORY_DISCORD"];
+const ABOUT_TRY: [[Labels; 3]; 11] = [
     [
-        ["PR 669: WHEN THE CARD IS FULL, FACES THAT NEVER GOT A", "PR 669：显存满时，从未上传纹理的脸部", "PR 669：顯存滿時，從未上傳紋理的臉部", "PR 669: CON LA VRAM LLENA, LAS CARAS SIN TEXTURA"],
-        ["TEXTURE ARE LET IN JUST OVER THE LINE (80 PCT AT MOST).", "可略超上限放行 (最多 80/100 显存)。", "可略超上限放行 (最多 80/100 顯存)。", "ENTRAN UN POCO SOBRE EL LIMITE (80/100 COMO MAX.)."],
-        ["OFF: AS BEFORE. TRY IT IF FACES DRAW BLACK. RESTART.", "关闭：与之前相同。脸部发黑时试试。需重启。", "關閉：與之前相同。臉部發黑時試試。需重啟。", "NO: COMO ANTES. PRUEBALO SI HAY CARAS NEGRAS."],
+        ["PR 280: WHEN THE GAME SWAPS A TEXTURE FOR ANOTHER OF", "PR 280：游戏把纹理换成同尺寸的另一张时，", "PR 280：遊戲把紋理換成同尺寸的另一張時，", "PR 280: SI EL JUEGO CAMBIA UNA TEXTURA POR OTRA"],
+        ["THE SAME SIZE, THE OLD ONE IS NO LONGER SHOWN UNLESS", "除非内容相同，不再显示旧纹理 (例如旧衣服)。", "除非內容相同，不再顯示舊紋理 (例如舊衣服)。", "DEL MISMO TAMAÑO, YA NO SE VE LA VIEJA (ROPA VIEJA)."],
+        ["IT IS THE SAME (AN OLD OUTFIT). TRY FOR WRONG CLOTHES.", "衣服不对时试试。需重启。", "衣服不對時試試。需重啟。", "PRUEBALO CON ROPA EQUIVOCADA. REINICIAR."],
     ],
     [
-        ["PR 669: FRAME GENERATION PAUSES WHILE A BINK MOVIE", "PR 669：播放 BINK 过场影片时暂停帧生成，", "PR 669：播放 BINK 影片時暫停畫格生成，", "PR 669: LA GEN. DE FOTOGRAMAS PARA EN LOS VIDEOS"],
-        ["PLAYS, SO THE BLACK BARS DO NOT FLICKER. OFF: FRAME", "黑边就不会闪烁。关闭：与之前相同，", "黑邊就不會閃爍。關閉：與之前相同，", "BINK: LAS BANDAS NEGRAS NO PARPADEAN. NO: COMO"],
-        ["GEN RUNS OVER MOVIES, AS BEFORE. NEEDS A RESTART.", "影片中也生成帧。需重启。", "影片中也生成畫格。需重啟。", "ANTES, TAMBIEN EN VIDEOS. REQUIERE REINICIAR."],
+        ["PR 851: THE GAME'S BOUNCED LIGHT IS MADE GREY, AGAINST", "PR 851：把游戏的反弹光变成灰色，", "PR 851：把遊戲的反彈光變成灰色，", "PR 851: LA LUZ REBOTADA SE VUELVE GRIS, CONTRA"],
+        ["FALSE RED OR BLUE LIGHT ON SKIN AND WALLS. REAL COLOUR", "防止皮肤和墙上出现错误的红光或蓝光。", "防止皮膚和牆上出現錯誤的紅光或藍光。", "LUZ ROJA O AZUL FALSA EN PIEL Y PAREDES. TAMBIEN"],
+        ["GOES TOO. OFF BY DEFAULT. TRY IT FOR BLUE ARMS. RESTART.", "真实颜色也会消失。默认关闭。需重启。", "真實顏色也會消失。預設關閉。需重啟。", "QUITA COLOR REAL. APAGADO POR DEFECTO. REINICIAR."],
+    ],
+    [
+        ["PR 718: WITH RAY TRACING ON, THE GAME GETS THE SIZE OF", "PR 718：开启光线追踪时，游戏在调用时", "PR 718：開啟光線追蹤時，遊戲在呼叫時", "PR 718: CON TRAZADO DE RAYOS, EL JUEGO RECIBE EL"],
+        ["A PACKED RAY STRUCTURE AT ONCE, NOT A STALE ONE LATER.", "立即得到压缩光追结构的大小，而不是旧值。", "立即得到壓縮光追結構的大小，而不是舊值。", "TAMAÑO DE LA ESTRUCTURA AL MOMENTO, NO UNO VIEJO."],
+        ["FASTER RT IN TESTS. ONLY WITH RAY TRACING ON. RESTART.", "测试中光追更快。仅在开启光追时有效。需重启。", "測試中光追更快。僅在開啟光追時有效。需重啟。", "RT MAS RAPIDO. SOLO CON TRAZADO DE RAYOS. REINICIAR."],
+    ],
+    [
+        ["PR 393: INDOORS, REFLECTIONS THAT FIND NOTHING NO", "PR 393：室内反射找不到物体时，", "PR 393：室內反射找不到物體時，", "PR 393: EN INTERIORES, LOS REFLEJOS VACIOS YA"],
+        ["LONGER SHOW THE BLUE SKY (BLUE SHEEN ON SKIN, EYES,", "不再显示蓝天 (皮肤、眼睛、地板的蓝色反光)。", "不再顯示藍天 (皮膚、眼睛、地板的藍色反光)。", "NO MUESTRAN EL CIELO AZUL (PIEL, OJOS, SUELO)."],
+        ["FLOORS). NEEDS REFLECTION ESTIMATE ON. RESTART.", "需开启反射估算。需重启。", "需開啟反射估算。需重啟。", "REQUIERE ESTIMACION DE REFLEJOS. REINICIAR."],
+    ],
+    [
+        ["PR 669 (MIT1123): WHEN THE CARD IS FULL, FACES THAT", "PR 669 (MIT1123)：显存满时，从未上传纹理的脸部", "PR 669 (MIT1123)：顯存滿時，從未上傳紋理的臉部", "PR 669 (MIT1123): CON LA VRAM LLENA, LAS CARAS SIN"],
+        ["NEVER GOT A TEXTURE ARE LET IN JUST OVER THE LINE (80", "可略超上限放行 (最多 80/100 显存)。", "可略超上限放行 (最多 80/100 顯存)。", "TEXTURA ENTRAN UN POCO SOBRE EL LIMITE (80/100 MAX.)."],
+        ["PCT AT MOST). ON BY DEFAULT. OFF: AS BEFORE. RESTART.", "默认开启。关闭：与之前相同。需重启。", "預設開啟。關閉：與之前相同。需重啟。", "ACTIVO POR DEFECTO. NO: COMO ANTES. REINICIAR."],
+    ],
+    [
+        ["DLSS FRAME GEN IN MOVIES. SMOOTH: STAYS ON, EACH MOVIE", "过场影片中的 DLSS 帧生成。平滑：保持开启，", "過場影片中的 DLSS 畫格生成。平滑：保持開啟，", "DLSS FG EN VIDEOS. SUAVE: SIGUE ACTIVA, CADA FOTOGRAMA"],
+        ["FRAME IS A FRESH START: NO BLACK BOXES AND NO PAUSE.", "每帧影片重新开始，没有黑框也不暂停。", "每格影片重新開始，沒有黑框也不暫停。", "EMPIEZA DE CERO: SIN CUADROS NEGROS NI PAUSA."],
+        ["PAUSE: PR 669, FG OFF IN MOVIES. AS UPSTREAM. RESTART.", "暂停：PR 669，影片中关闭。照旧：与上游相同。需重启。", "暫停：PR 669，影片中關閉。照舊：與上游相同。需重啟。", "PAUSA: PR 669, FG APAGADA. COMO ANTES. REINICIAR."],
     ],
     [
         ["PR 1005: INDIRECT DISPATCHES WIDER THAN 65,535 GROUPS", "PR 1005：超过 65,535 组的间接调度", "PR 1005：超過 65,535 組的間接調度", "PR 1005: DESPACHOS INDIRECTOS DE MAS DE 65.535"],
@@ -257,6 +277,8 @@ const ITEMS: &[Item] = &[
     // The layer's switches.
     Item { var: "VICTORY_DLSS_PRESET", label: ["DLSS MODEL", "DLSS 模型", "DLSS 模型", "MODELO DLSS"], values: &[("", ["DEFAULT", "默认", "預設", "PREDETERMINADO"]), ("k", same("K")), ("j", same("J")), ("m", same("M")), ("l", same("L"))], live: false },
     Item { var: "VICTORY_AMBIENT", label: ["LIGHT ESTIMATE", "环境光估算", "近似環境光", "ESTIMACIÓN DE LUZ"], values: &[("0.8", same("0.8")), ("1", same("1")), ("0.5", same("0.5")), ("", OFF)], live: false },
+    // PR #851 (t90): the diffuse probe light made neutral, against false red/blue light (ambient.rs); opt-in.
+    Item { var: "VICTORY_PROBE_NEUTRAL", label: ["NEUTRAL PROBE LIGHT (PR 851)", "中性探针光照 (PR 851)", "中性探針光照 (PR 851)", "LUZ NEUTRA (PR 851)"], values: &[("", OFF), ("0.3", ON)], live: false },
     Item { var: "VICTORY_AMBIENT_SPECULAR", label: ["REFLECTION ESTIMATE", "反射估算", "近似反射", "ESTIMACIÓN DE REFLEJOS"], values: ON_UNSET, live: false },
     Item { var: "VICTORY_AMBIENT_AIR", label: ["FOG CAP", "雾效强度上限", "霧效上限", "LÍMITE DE NIEBLA"], values: &[("1.5", same("1.5")), ("1", same("1")), ("2", same("2")), ("", NONE)], live: false },
     Item { var: "VICTORY_BVH_BUILDER", label: ["RAY TRACING (SLOW, BROKEN)", "光线追踪 (慢且有故障)", "光線追蹤 (慢且有缺陷)", "TRAZADO DE RAYOS (LENTO, FALLA)"], values: UNSET_ON, live: false },
@@ -280,20 +302,24 @@ const ITEMS: &[Item] = &[
     Item { var: "VICTORY_JOIN_PARTS", label: ["JOIN PARTS", "合并提交分段", "合併批次", "UNIR LOTES"], values: &[("8", same("8")), ("", ["1 (OFF)", "1 (关闭)", "1 (關閉)", "1 (NO)"])], live: false },
     Item { var: "VICTORY_ASYNC_SUBMIT", label: ["ASYNC SUBMIT (FRAME GEN WITHOUT THIN)", "异步提交 (关闭 THIN 时用于帧生成)", "非同步提交 (停用 THIN 時用於畫格生成)", "ENVÍO ASÍNCRONO (SIN LISTAS THIN)"], values: UNSET_ON, live: false },
     // For testers: the face fixes of this build, each with its switch, and the crash watcher.
-    // The diner's skin: a prelude upload left out where a submitted list baked the texture (#33).
-    Item { var: "VICTORY_PRELUDE_RECHECK", label: ["DINER FACE FIX (PRELUDE)", "餐厅脸部修复 (PRELUDE)", "餐廳臉部修復 (PRELUDE)", "ARREGLO CARAS CAFETERÍA"], values: &[("", ON), ("0", OFF)], live: false },
     // Face programs exempt from the shared-memory bounds (#938).
     Item { var: "VICTORY_LDS_BOUNDS_EXEMPT", label: ["FACE PROGRAMS UNBOUNDED", "脸部着色器不受边界限制", "臉部著色器不受邊界限制", "CARAS SIN LÍMITE LDS"], values: &[("", ON), ("0", OFF)], live: false },
+    // PR #669 by Mit1123: first uploads of black faces admitted when the card is full (resource.rs `face_admit`).
+    Item { var: "VICTORY_BLACK_FACE_FIX", label: ["BLACK FACE FIX (PR 669)", "黑脸修复 (PR 669)", "黑臉修復 (PR 669)", "CARAS NEGRAS (PR 669)"], values: &[("", ON), ("0", OFF)], live: false },
+    // PR #393 (tippythetaidum, carrying #63 by wasonidas): indoor sky light in reflections bounded (ambient.rs `sky_bound`).
+    Item { var: "VICTORY_SKY_BOUND", label: ["SKY SHINE FIX (PR 393)", "天空反光修复 (PR 393)", "天空反光修復 (PR 393)", "BRILLO DEL CIELO (PR 393)"], values: &[("", ON), ("0", OFF)], live: false },
     Item { var: "VICTORY_CRASH_REPORT", label: ["CRASH REPORT ZIP", "崩溃报告 ZIP", "當機報告 ZIP", "ZIP DE FALLOS"], values: &[("", ON), ("0", OFF)], live: false },
-    // The pull requests the Try build left out, each to try, each off (as before) until picked on.
-    // #669: first uploads of black faces admitted when the card is full (resource.rs `face_admit`).
-    Item { var: "VICTORY_FACE_ADMIT", label: ["TRY PR 669: BLACK FACE ADMIT", "试用 PR 669：黑脸纹理放行", "試用 PR 669：黑臉紋理放行", "PR 669: ADMITIR CARAS NEGRAS"], values: UNSET_ON, live: false },
-    // #669: frame generation paused while a Bink movie plays (streamline.rs `movie_gate`).
-    Item { var: "VICTORY_MOVIE_FG_GATE", label: ["TRY PR 669: MOVIE FG PAUSE", "试用 PR 669：过场暂停帧生成", "試用 PR 669：影片暫停畫格生成", "PR 669: PAUSA FG EN VÍDEOS"], values: UNSET_ON, live: false },
+    // The movie cutscenes, then the pull requests the Try build left out, each off (as before) until picked on.
+    // DLSS frame generation over Bink movies (streamline.rs `MovieFg`): smooth (resets), #669's pause, or as upstream.
+    Item { var: "VICTORY_MOVIE_FG", label: ["MOVIE CUTSCENES (DLSS FG)", "过场影片 (DLSS 帧生成)", "過場影片 (DLSS 畫格生成)", "VÍDEOS (DLSS FG)"], values: &[("", ["SMOOTH", "平滑", "平滑", "SUAVE"]), ("pause", ["PAUSE (PR 669)", "暂停 (PR 669)", "暫停 (PR 669)", "PAUSA (PR 669)"]), ("off", ["AS UPSTREAM", "照旧", "照舊", "COMO ANTES"])], live: false },
     // #1005: indirect dispatches wider than 65,535 groups on NVIDIA too (indirect.rs `runs_wide`).
     Item { var: "VICTORY_INDIRECT_WIDE_NVIDIA", label: ["TRY PR 1005: WIDE DISPATCH", "试用 PR 1005：宽间接调度", "試用 PR 1005：寬間接調度", "PR 1005: DESPACHO ANCHO"], values: UNSET_ON, live: false },
     // #1008: 16,384 ray-tracing fault pages copied, not 2,048 (memory.rs); for RAY TRACING on.
     Item { var: "VICTORY_BVH_FAULTS_ALL", label: ["TRY PR 1008: RT FAULT PAGES", "试用 PR 1008：光追缺页", "試用 PR 1008：光追缺頁", "PR 1008: PÁGINAS RT"], values: &[("", ["2048 (OFF)", "2048 (关闭)", "2048 (關閉)", "2048 (NO)"]), ("16384", ["16384 (ON)", "16384 (开启)", "16384 (開啟)", "16384 (SÍ)"])], live: false },
+    // #280 (Mikey970): a slot given another texture of the same size keeps the old one only if the bytes match.
+    Item { var: "VICTORY_KEEP_SHOWN", label: ["OUTFIT CHECK (PR 280)", "服装纹理检查 (PR 280)", "服裝紋理檢查 (PR 280)", "COMPROBAR ROPA (PR 280)"], values: &[("", ["AS BEFORE", "照旧", "照舊", "COMO ANTES"]), ("checked", ["CHECKED", "检查", "檢查", "COMPROBAR"])], live: false },
+    // #718 (tharun-37): compacted sizes answered at the builder call, for RAY TRACING on (dxr.rs, fixes #689).
+    Item { var: "VICTORY_BVH_SIZE_ANSWER", label: ["RT SIZE FIX (PR 718)", "光追尺寸修复 (PR 718)", "光追尺寸修復 (PR 718)", "ARREGLO TAMAÑO RT (PR 718)"], values: &[("", ON), ("0", OFF)], live: false },
     // #982 (its keymap only, not its launcher): the keyboard pad's keys (gameinput/keymap.rs).
     Item { var: "VICTORY_KEYMAP", label: ["TRY PR 982: PAD KEYS", "试用 PR 982：键盘手柄按键", "試用 PR 982：鍵盤手把按鍵", "PR 982: TECLAS DEL MANDO"], values: &[("", ["AS BEFORE", "照旧", "照舊", "COMO ANTES"]), ("a=20,lt=A2", ["SPACE = A, CTRL = LT", "空格 = A，CTRL = LT", "空白鍵 = A，CTRL = LT", "ESPACIO = A, CTRL = LT"])], live: false },
     // Ours: Discord.

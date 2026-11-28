@@ -32,7 +32,7 @@ echo   R  Make tester report (zip)
 echo   L  Open the logs folder
 echo   C  Check DLSS and frame gen here
 echo   D  Reset F1 settings (kept as .bak)
-echo   T  Try: left-out PRs, Discord
+echo   T  Try: PR fixes, Discord
 echo   Q  Quit
 echo.
 echo   In game: F1 settings, F3 stats panel.
@@ -121,37 +121,47 @@ rem ---- T: the left-out PRs, the language, Discord ----
 rem Each is an F1 row too; picking one here flips it in the same file.
 :try
 cls
-call :current VICTORY_FACE_ADMIT 1 F1
-call :current VICTORY_MOVIE_FG_GATE 1 F2
+call :current VICTORY_BLACK_FACE_FIX 0 F1
+set "F2=SMOOTH"
+call :value VICTORY_MOVIE_FG F2
+if not defined F2 set "F2=SMOOTH"
+if "%F2%"=="pause" set "F2=PAUSE"
+if "%F2%"=="off" set "F2=UPSTREAM"
 call :current VICTORY_INDIRECT_WIDE_NVIDIA 1 F3
 call :current VICTORY_BVH_FAULTS_ALL 16384 F4
 call :current VICTORY_DISCORD 0 F5
 call :current VICTORY_KEYMAP "a=20,lt=A2" F6
+call :current VICTORY_KEEP_SHOWN checked F8
+call :current VICTORY_PROBE_NEUTRAL 0.3 F9
 set "LANG_NOW=en"
 call :value VICTORY_MENU_LANGUAGE LANG_NOW
 echo =============================================
-echo   TRY: LEFT-OUT PRS, DISCORD
-echo   (each also in F1; off = as before)
+echo   TRY: PR FIXES, DISCORD
+echo   (each is also an F1 row)
 echo =============================================
-echo   1  PR 669  black face admit     %F1%
-echo   2  PR 669  movie FG pause       %F2%
+echo   1  PR 669  black face fix       %F1%
+echo   2  Movie cutscenes (DLSS FG)    %F2%
 echo   3  PR 1005 wide dispatch (NV)   %F3%
 echo   4  PR 1008 RT fault pages       %F4%
 echo   5  Discord: Playing GTA VI      %F5%
 echo   6  PR 982  Space=A, Ctrl=LT     %F6%
 echo   7  PR 1056 menu language        %LANG_NOW%
+echo   8  PR 280  outfit check         %F8%
+echo   9  PR 851  neutral probe light  %F9%
 echo   B  Back
 echo.
-echo   Discord is on by default:
-echo   for it ON means not set to 0.
+echo   1 and 5 are on unless set to 0.
+echo   2 goes SMOOTH, PAUSE, UPSTREAM.
 echo.
-choice /c 1234567B /n /m "Flip: "
+choice /c 123456789B /n /m "Flip: "
 set "PICK=%ERRORLEVEL%"
-if "%PICK%"=="8" goto :menu
+if "%PICK%"=="10" goto :menu
+if "%PICK%"=="8" call :flip VICTORY_KEEP_SHOWN checked "%F8%"
+if "%PICK%"=="9" call :flip VICTORY_PROBE_NEUTRAL 0.3 "%F9%"
 if "%PICK%"=="7" goto :language
 if "%PICK%"=="6" call :flip VICTORY_KEYMAP "a=20,lt=A2" "%F6%"
-if "%PICK%"=="1" call :flip VICTORY_FACE_ADMIT 1 "%F1%"
-if "%PICK%"=="2" call :flip VICTORY_MOVIE_FG_GATE 1 "%F2%"
+if "%PICK%"=="1" call :flip_off VICTORY_BLACK_FACE_FIX "%F1%"
+if "%PICK%"=="2" call :movie "%F2%"
 if "%PICK%"=="3" call :flip VICTORY_INDIRECT_WIDE_NVIDIA 1 "%F3%"
 if "%PICK%"=="4" call :flip VICTORY_BVH_FAULTS_ALL 16384 "%F4%"
 if "%PICK%"=="5" call :flip_off VICTORY_DISCORD "%F5%"
@@ -170,6 +180,11 @@ if "%PICK%"=="3" call :save_choice VICTORY_MENU_LANGUAGE zh-TW
 if "%PICK%"=="4" call :save_choice VICTORY_MENU_LANGUAGE es
 if "%PICK%"=="5" call :save_choice VICTORY_MENU_LANGUAGE auto
 goto :try
+
+rem Movie cutscenes: SMOOTH (not set), then pause, then off.
+:movie
+if /i "%~1"=="SMOOTH" (call :save_choice VICTORY_MOVIE_FG pause) else if /i "%~1"=="PAUSE" (call :save_choice VICTORY_MOVIE_FG off) else (call :save_choice VICTORY_MOVIE_FG "")
+goto :eof
 
 rem %1 the setting, %2 its value when it is the odd one out, %3 where ON or OFF goes.
 rem A setting off unless %2 (the PRs): ON when it holds %2. A setting on unless 0

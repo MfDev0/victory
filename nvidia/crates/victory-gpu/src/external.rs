@@ -41,7 +41,6 @@ pub(crate) fn prepare_input(list: &HostList, resource: This) -> Option<()> {
 /// title memory.
 pub(crate) fn output_written(resource: This) {
     crate::texture::host_written(resource);
-    crate::texture::host_written_submitted(&[resource as usize]);
 }
 
 /// Sends what the title submitted (the line of submissions first) and

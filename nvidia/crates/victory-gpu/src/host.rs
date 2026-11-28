@@ -2390,11 +2390,12 @@ fn give_chunks(chunks: Vec<(Chunk, u64)>) {
 pub(crate) static SPARE_TRIMMED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Drops spare scratch chunks kept idle when host memory is pressured.
-fn trim_spare_chunks() {
+/// Returns the bytes freed; zero if the pool was already empty.
+pub fn trim_spare_chunks() -> u64 {
     let freed: Vec<(Chunk, u64)> = {
         let mut spare = SPARE.lock().unwrap_or_else(|e| e.into_inner());
         if spare.kept.is_empty() {
-            return;
+            return 0;
         }
         spare.bytes = 0;
         spare.low = 0;
@@ -2407,6 +2408,7 @@ fn trim_spare_chunks() {
     ALIVE[3].fetch_sub(count, Ordering::Relaxed);
     ALIVE[4].fetch_sub(bytes, Ordering::Relaxed);
     drop(freed);
+    bytes
 }
 
 /// What the host keeps for copies in the card's own memory
@@ -2688,10 +2690,6 @@ struct Deferred {
     /// Title textures whose upload the list's prelude records if the check at
     /// submission finds it due (`crate::texture::prelude_uploads`).
     prelude_uploads: Vec<crate::texture::PreludeUpload>,
-    /// Title textures the list's host copies and resolves write, marked
-    /// written for prelude uploads when the list is submitted
-    /// (`crate::texture::host_written_submitted`).
-    host_writes: Vec<usize>,
     /// The bytes of `uploads` (counted in [`ALIVE`] while they are held).
     upload_bytes: u64,
     /// Host objects the list's commands name (pipelines, root signatures,
@@ -6207,9 +6205,6 @@ impl Host {
             firsts.push(lists.len());
             // (None unless `VICTORY_PRELUDE_UPLOADS=1`.)
             let uploads = list.prelude_uploads(&mut batch);
-            // Its own uploads are decided: its copies' textures count as
-            // written for the lists submitted after it.
-            crate::texture::host_written_submitted(&list.host_writes());
             if let Some(prelude) = list.prelude(&uploads) {
                 lists.push(Some(prelude));
             }
@@ -7314,10 +7309,21 @@ impl HostList {
             return;
         }
         let mut deferred = self.deferred();
-        if !deferred.back_wanted.iter().any(|target| target.owner() == resource as usize)
-            && let Some(target) = crate::texback::Target::new(resource)
-        {
-            deferred.back_wanted.push(target);
+        // A target whose ticket went stale (the title reused or remapped the
+        // memory it tiles into) must be re-registered, or the read-back
+        // would be dropped as one of memory the texture no longer holds.
+        let existing = deferred
+            .back_wanted
+            .iter_mut()
+            .find(|target| target.owner() == resource as usize);
+        match existing {
+            Some(entry) if !entry.fresh() => {
+                if let Some(target) = crate::texback::Target::new(resource) {
+                    *entry = target;
+                }
+            }
+            None => deferred.back_wanted.extend(crate::texback::Target::new(resource)),
+            Some(_) => {}
         }
     }
 
@@ -7355,6 +7361,24 @@ impl HostList {
             self.twins_to_depth(true);
         }
         depth_planes
+    }
+
+    /// For tests: whether the list's read-back wants a *fresh* target for
+    /// `resource` — one whose ticket has not gone stale. A stale target is
+    /// one the title's memory reuse invalidated, which the list must
+    /// re-register on the next write of `resource`.
+    #[cfg(test)]
+    pub(crate) fn back_wanted_fresh(&self, resource: crate::object::This) -> bool {
+        self.deferred()
+            .back_wanted
+            .iter()
+            .any(|t| t.owner() == resource as usize && t.fresh())
+    }
+
+    /// For tests: how many texture read-backs the list recorded at its close.
+    #[cfg(test)]
+    pub(crate) fn texture_back_count(&self) -> usize {
+        self.deferred().texture_backs.len()
     }
 
     /// At submission: the list that moves each texture this list uses from
@@ -8088,18 +8112,6 @@ impl HostList {
         let mut deferred = self.deferred();
         deferred.copies.push(Step::Texture(upload.staging()));
         deferred.prelude_uploads.push(upload);
-    }
-
-    /// A host copy or resolve of the list writes the title's texture
-    /// `resource`: marked written for other lists' prelude uploads when this
-    /// list is submitted, after its own (`crate::texture::host_written_submitted`).
-    pub(crate) fn defer_host_written(&self, resource: usize) {
-        self.deferred().host_writes.push(resource);
-    }
-
-    /// The textures the list's host copies and resolves write.
-    fn host_writes(&self) -> Vec<usize> {
-        self.deferred().host_writes.clone()
     }
 
     /// At submission, after the list's steps: the textures whose upload its

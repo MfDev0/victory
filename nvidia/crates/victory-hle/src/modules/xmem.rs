@@ -2079,6 +2079,16 @@ fn commit(base: usize, len: usize) -> bool {
     if !unsafe { VirtualAlloc(base as *const c_void, len, MEM_COMMIT, PAGE_READWRITE) }.is_null() {
         return true;
     }
+    // On commit limit, drop Victory's spare D3D12 upload buffers (they hold
+    // committed pages Windows can then reuse) and retry once.  16 GB systems
+    // hit the limit while streaming core_restofworld.rpf (~6.1 GB physical
+    // pages); the SPARE pool often holds hundreds of MB at that moment.
+    if victory_gpu::trim_spare_chunks() > 0
+        && !unsafe { VirtualAlloc(base as *const c_void, len, MEM_COMMIT, PAGE_READWRITE) }
+            .is_null()
+    {
+        return true;
+    }
     commit_refused(len, "physical pages", std::io::Error::last_os_error());
     false
 }

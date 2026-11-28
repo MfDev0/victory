@@ -40,11 +40,13 @@
 
 ## Testers: this Try build
 
-This is VIctory-NVIDIA `63b902f` with the diner face fix (PR #33, corrected),
-13 more pull requests, FG UNLOCK (3x-6x on RTX 20/30/40, from
-MfDev0/dlss-unlocked-), a crash report zip and a tester menu. The left-out
-PRs (#669, #1005, #1008, #982's keymap) are in F1 as TRY PR rows, off until
-you turn them on; #1056's menu languages are in. There is also a Discord
+This is VIctory-NVIDIA `63b902f` with about 20 pull requests merged, among
+them PR #669's black face fix, PR #393's sky shine fix and PR #718's ray
+tracing size fix (all on, each an F1 row). Movie cutscenes keep DLSS frame
+generation on without black boxes. Also: FG UNLOCK (3x-6x on RTX 20/30/40,
+from MfDev0/dlss-unlocked-), a crash report zip and a tester menu. Other
+PRs (#280, #851, #1005, #1008, #982's keymap) are F1 rows, off until you
+turn them on; #1056's menu languages are in. There is also a Discord
 status, "Playing Grand Theft Auto VI", with a "Play on PC too" button. Build
 it with
 `BUILD_VICTORY.cmd`, then start `TESTER_MENU.cmd`. After a problem, send the

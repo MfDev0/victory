@@ -128,9 +128,9 @@ pub fn wrap(dll: &str, name: &str, address: usize) -> usize {
         }
         mode
     });
-    // PR #669 wraps Bink exports even with no movie skipped, to tell the movie gate a
-    // movie is on screen; with the gate off (the Try build's default) they stay unwrapped
-    // when nothing is skipped, as before.
+    // PR #669 wraps Bink exports even with no movie skipped, to tell frame generation a
+    // movie is on screen (the Try build's default, MOVIE CUTSCENES SMOOTH); only with
+    // VICTORY_MOVIE_FG=off do they stay unwrapped when nothing is skipped, as upstream.
     if mode == Mode::Off && !victory_gpu::streamline::movie_gate() {
         return address;
     }

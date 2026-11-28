@@ -58,7 +58,14 @@ unit tests.
 
 | What you see | Change | Switch |
 |---|---|---|
-| Diner/coffee-shop waitress and bartender: face specks, blue or black | PR #33 with the fix from its review (below) | F1 DINER FACE FIX, `VICTORY_PRELUDE_RECHECK=0` |
+| Black faces and objects when video memory is full | PR #669 by Mit1123: a texture that was never uploaded is let in just over the line, up to 80% of the card. Headroom: `VICTORY_FACE_HEADROOM_MB` (256), `VICTORY_TEXTURE_FIRST_UPLOAD_MB` (128) | F1 BLACK FACE FIX (on), `VICTORY_BLACK_FACE_FIX=0` |
+| Black boxes in movie cutscenes with DLSS frame generation | Ours, using #669's movie detection: frame generation stays on, and every movie frame (and the first game frame after one) is sent to DLSS as a reset, so nothing is blended across it (below) | F1 MOVIE CUTSCENES: SMOOTH (default), PAUSE (#669's pause), AS UPSTREAM; `VICTORY_MOVIE_FG=pause` / `off` |
+| Indoors: blue sky in reflections (blue sheen on skin, eyes, glass; white patches on the prison day-room floor) | PR #393 by tippythetaidum, carrying #63 by wasonidas: the sky's light is bounded at 1x the light around | F1 SKY SHINE FIX (on), `VICTORY_SKY_BOUND=0` |
+| Ray tracing: compacted structures copied with a stale size (#689) | PR #718 by tharun-37: the size is answered at the builder call. Only with RAY TRACING on; the reporter measured 75 to 67 ms a frame | F1 RT SIZE FIX (on), `VICTORY_BVH_SIZE_ANSWER=0` |
+| Crash on 16 GB RAM when the open world streams in (#1049) | PR #1118 by erax4193: spare upload buffers are dropped and the commit is tried again | - |
+| Frozen picture after Alt+Enter with FSR 3 frame generation | PR #1132 by adwen-007 | - |
+| Ocean height map not read back after its memory is reused | PR #686 by kibagami-nc (port of fxceless#1376) | - |
+| Block-compressed 1D textures accepted | PR #1016 by Damokles2 | - |
 | Faces with only eyes and teeth | PR #938: the face programs are exempt from the shared-memory bounds | F1 FACE PROGRAMS UNBOUNDED, `VICTORY_LDS_BOUNDS_EXEMPT=0` |
 | Floating eyes and teeth on a first start | PR #703: the heads' blend-shape map is made with its pipeline | - |
 | "DLSS FRAME GEN: NOT ON THIS CARD" on an RTX 50 | PR #1042 (#1028) | - |
@@ -72,15 +79,18 @@ unit tests.
 | Out of memory while staging a texture | PR #986: retried in smaller blocks | - |
 | Draws dropped in busy outdoor scenes on 1M-descriptor heaps | PR #1007: 458,752 dynamic slots | `VICTORY_DYNAMIC_SLOTS=262144` is the old value |
 
-**The diner fix.** #33 skips a texture's base upload when the host wrote the
-texture after the list that samples it was recorded. In #33 as posted, a list
-that uploads a texture and also copies part of it found its own copy and
-cancelled its own upload. Testers then saw black NPC faces and black world
-textures (dcastell1 and JoeY54 in #33's review). Here the check only counts
-copies from lists that were already submitted (`HOST_WRITTEN_SUBMITTED`,
-filled in `Host::submit` after the list's own uploads are decided), as
-dcastell1 proposed. Issue #1058 (prologue NPC faces with the wrong texture)
-looks like the same problem.
+**Movie cutscenes.** PR #669 found the movies (the Bink calls and the movie
+planes' uploads) and turned DLSS frame generation off while one played. That
+removed the black boxes, but switching frame generation off and on at every
+cutscene was unpleasant. Now, by default, frame generation stays on. Every
+movie frame, and the first game frame after one, is sent with
+`sl::Constants::reset`, so DLSS blends nothing across it. The black boxes came
+from the game's motion vectors moving the movie picture and its bars. FSR 3 is
+not changed (it never paused for movies). Not yet tested on a real PC: if the
+boxes are still there, pick PAUSE and say so in your report.
+
+The diner face fix (PR #33, `VICTORY_PRELUDE_RECHECK`) was taken out. It did
+not fix the diner faces on a tester's PC.
 
 ## Features
 
@@ -130,13 +140,13 @@ checked against its published SHA-256. NVIDIA does not support it.
 
 These pull requests were not taken as they are. Each one is here behind its
 own switch, and the switch is **off** by default, so the game behaves as before
-until you turn it on. Turn one on in **F1** (the `TRY PR ...` rows), in
-`TESTER_MENU.cmd` > `T`, or with `--set NAME=VALUE`. Each needs a restart.
+until you turn it on. Turn one on in **F1**, in `TESTER_MENU.cmd` > `T`, or
+with `--set NAME=VALUE`. Each needs a restart.
 
 | F1 row | Pull request | Switch (on) | What it changes |
 |---|---|---|---|
-| TRY PR 669: BLACK FACE ADMIT | #669 | `VICTORY_FACE_ADMIT=1` | When video memory is full, a face texture that was never uploaded is still let in, up to 80% of the card. Headroom: `VICTORY_FACE_HEADROOM_MB` (256), `VICTORY_TEXTURE_FIRST_UPLOAD_MB` (128). Try it if faces draw black. |
-| TRY PR 669: MOVIE FG PAUSE | #669 | `VICTORY_MOVIE_FG_GATE=1` | DLSS frame generation pauses while a Bink movie plays, so its black bars don't flicker. FSR 3 is not paused, as in #669. |
+| OUTFIT CHECK (PR 280) | #280 by Mikey970 | `VICTORY_KEEP_SHOWN=checked` | When the game gives a texture slot another texture of the same size, the old one is kept on screen only if their bytes match; otherwise a neutral texture shows until the new one is uploaded. Try it if a character wears the wrong outfit (Lucia in prison clothes in the coffee-shop flashback). |
+| NEUTRAL PROBE LIGHT (PR 851) | #851 by t90 | `VICTORY_PROBE_NEUTRAL=0.3` | The game's bounced light is made grey. It removes false red or blue light on skin and walls, and real colour with it. Try it if arms or faces stay light blue with SKY SHINE FIX on. |
 | TRY PR 1005: WIDE DISPATCH | #1005 | `VICTORY_INDIRECT_WIDE_NVIDIA=1` | Indirect dispatches wider than 65,535 groups run in one go on NVIDIA too, as on AMD. D3D12 does not allow more than 65,535, so this may fail on your driver. |
 | TRY PR 1008: RT FAULT PAGES | #1008 | `VICTORY_BVH_FAULTS_ALL=16384` | With RAY TRACING on, up to 16,384 faulted pages are copied for the BVH (the old limit is 2,048). |
 | TRY PR 982: PAD KEYS | #982 (keymap only) | `VICTORY_KEYMAP=a=20,lt=A2` | The keyboard pad's keys can be changed. The F1 choice puts A on Space and LT on left Ctrl. Any `control=hexkey` list works, for example `b=1B` (controls: a b x y menu view up down left right lb rb ls rs lt rt ls_up ls_down ls_left ls_right rs_up rs_down rs_left rs_right). It does nothing while GTA V KEYS AND MOUSE is on. |
@@ -144,7 +154,16 @@ until you turn it on. Turn one on in **F1** (the `TRY PR ...` rows), in
 
 Not taken at all: #982's Tauri launcher (4,500 lines of new crates; crates.io
 was not reachable to check them) and #1056's bundled fonts (it uses the fonts
-Windows already has).
+Windows already has). Also not taken yet: #1046 (ray tracing builder within
+a wait budget, 3,800 lines; it conflicts in five files with what is merged
+here, #1008 among them) and #1147 (render-target aliasing, on by default:
+too risky without a Windows build to test it). #294 is already in upstream.
+
+**The prologue's order is the game's.** It opens in the prison (Lucia
+with the warden); the bar and coffee-shop scenes are her flashback. If Lucia
+wears her prison clothes in the flashback instead of her hoodie, that is a
+texture shown from before (OUTFIT CHECK above, and BLACK FACE FIX, which lets
+first uploads in when the card is full). Please report which of them helps.
 
 ## Our touch
 

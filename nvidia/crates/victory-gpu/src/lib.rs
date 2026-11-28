@@ -33,6 +33,8 @@ pub mod descriptor;
 pub mod device;
 #[cfg(windows)]
 mod draw;
+#[cfg(windows)]
+pub mod dxr;
 pub mod dxgi;
 #[cfg(windows)]
 mod external;
@@ -109,6 +111,10 @@ mod texback;
 
 #[cfg(windows)]
 pub use host::on_failure;
+/// Drops spare D3D12 upload scratch buffers to reclaim Windows committed memory.
+/// Returns the bytes freed; call before retrying a failed [`VirtualAlloc(MEM_COMMIT)`].
+#[cfg(windows)]
+pub use host::trim_spare_chunks;
 /// Reserves the address space for memory shaders read by address; call it
 /// first thing, before the process's other allocations can fill [4 GiB, 2^37).
 #[cfg(windows)]
