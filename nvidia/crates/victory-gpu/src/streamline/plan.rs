@@ -80,10 +80,16 @@ impl Mode {
     }
 }
 
-/// `VICTORY_DLSS_PRESET`: the DLSS model for every mode (`sl::DLSSPreset`).
+/// `VICTORY_DLSS_PRESET=auto`: not a `sl::DLSSPreset` but a promise to name
+/// one per the mode actually taken ([`resolve`]).
+pub const AUTO: u32 = u32::MAX;
+
+/// `VICTORY_DLSS_PRESET`: the DLSS model for every mode (`sl::DLSSPreset`),
+/// or [`AUTO`] to pick it by the mode.
 pub fn preset(name: &str) -> Option<u32> {
     Some(match name.trim().to_ascii_lowercase().as_str() {
         "" | "default" => 0,
+        "auto" | "recommended" => AUTO,
         "e" => 5,
         "f" => 6,
         "j" => 10,
@@ -92,6 +98,38 @@ pub fn preset(name: &str) -> Option<u32> {
         "m" => 13,
         _ => return None,
     })
+}
+
+/// The model to hand to Streamline for `mode` (`sl::DLSSMode`): `asked`
+/// itself, or, for [`AUTO`], what NVIDIA's own recommendation names per
+/// mode — `M` for performance, `L` for ultra performance, `K` for the rest.
+/// `M` and `L` are the DLSS 4.5 models, whose extra tensor work is free on
+/// cards with native FP8 (RTX 40 and later) and is not on the ones before,
+/// which is why `default` (what the game ships) is left alone.
+pub fn resolve(asked: u32, mode: u32) -> u32 {
+    if asked != AUTO {
+        return asked;
+    }
+    match mode {
+        abi::DLSS_MAX_PERFORMANCE => 13,
+        abi::DLSS_ULTRA_PERFORMANCE => 12,
+        _ => 11,
+    }
+}
+
+/// What the log calls a preset number: the letter the variable takes.
+pub fn preset_name(asked: u32) -> &'static str {
+    match asked {
+        0 => "default",
+        5 => "e",
+        6 => "f",
+        10 => "j",
+        11 => "k",
+        12 => "l",
+        13 => "m",
+        AUTO => "auto",
+        _ => "?",
+    }
 }
 
 /// The name of a `sl::DLSSMode`.
@@ -394,6 +432,17 @@ mod tests {
         assert_eq!(preset("K"), Some(11));
         assert_eq!(preset("default"), Some(0));
         assert_eq!(preset("a"), None);
+        // `auto` is not a model: it names one per the mode taken.
+        assert_eq!(preset("auto"), Some(AUTO));
+        assert_eq!(resolve(AUTO, abi::DLSS_MAX_PERFORMANCE), 13);
+        assert_eq!(resolve(AUTO, abi::DLSS_ULTRA_PERFORMANCE), 12);
+        assert_eq!(resolve(AUTO, abi::DLSS_MAX_QUALITY), 11);
+        assert_eq!(resolve(AUTO, abi::DLSS_DLAA), 11);
+        // A named model is handed over as it was, whatever the mode.
+        assert_eq!(resolve(12, abi::DLSS_MAX_PERFORMANCE), 12);
+        assert_eq!(preset_name(AUTO), "auto");
+        assert_eq!(preset_name(13), "m");
+        assert_eq!(preset_name(0), "default");
         assert_eq!(sl_mode_name(abi::DLSS_DLAA), "DLAA");
     }
 

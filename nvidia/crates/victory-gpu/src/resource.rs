@@ -1692,6 +1692,62 @@ pub(crate) fn title_fills(this: This) -> bool {
     !this.is_null() && fills(&resource(this).desc)
 }
 
+/// Whether a texture described by `desc` gets its host copy when a view of
+/// it is written into a view heap, instead of on its first use: one the
+/// host writes through unordered access alone (no target or depth flag)
+/// whose texels take `most` bytes or fewer.
+///
+/// A host copy is made when a list names its texture. A target or a depth
+/// texture is always named, by the list that binds it. A texture written
+/// through unordered access may never be: the title's programs can take
+/// both the view they write and the view they read from the view heap by an
+/// index they read from a buffer, and then no list names it. The terrain's
+/// virtual texture does: its page table (256x256 R16_UINT, six levels) is
+/// written by `terrain_indirection_texture:CS_UpdateIndirection` and read
+/// by the tessellated terrain's `PS_TexturedDeferred` that way. Its slot
+/// waited for a whole run and read as nothing, so every lookup gave page 0:
+/// one tile of the atlas repeated over the ground next to water, and
+/// changed as the title drew that page again.
+///
+/// The size keeps this to tables. Of the 39 such textures nothing else had
+/// made after 4,200 frames at a beach, 33 were under 1 MiB (1.9 MiB
+/// together, the page table among them); the other six took 91 MiB.
+#[cfg(windows)]
+fn made_with_view(desc: &ResourceDesc, most: u64) -> bool {
+    const TARGET_DEPTH_UNORDERED: u32 = 0x7;
+    const UNORDERED: u32 = 0x4;
+    if desc.dimension == BUFFER || desc.flags & TARGET_DEPTH_UNORDERED != UNORDERED {
+        return false;
+    }
+    let Some((bytes, block)) = element(desc.format) else {
+        return false;
+    };
+    let first = desc.width.div_ceil(block)
+        * u64::from(desc.height).div_ceil(block)
+        * bytes
+        * u64::from(desc.depth_or_array_size.max(1))
+        * u64::from(desc.sample_count.max(1));
+    // (All levels are a third more than the first.)
+    let all = if desc.mip_levels == 1 { first } else { first + first / 3 };
+    all <= most
+}
+
+/// Whether texture `this` gets its host copy when a view of it is written
+/// into a view heap ([`made_with_view`]). `VICTORY_UNORDERED_NOW_KB` is the
+/// most its texels take, 1024 by default; 0: none does, as before (TESTER_MENU T I).
+#[cfg(windows)]
+pub(crate) fn made_with_its_view(this: This) -> bool {
+    static MOST: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let most = *MOST.get_or_init(|| {
+        std::env::var("VICTORY_UNORDERED_NOW_KB")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(1024)
+            << 10
+    });
+    !this.is_null() && most > 0 && made_with_view(&resource(this).desc, most)
+}
+
 /// Whether `this` is a texture whose host copy is not made yet (and may
 /// still be): a descriptor slot written with a view of it waits
 /// (`crate::descriptor::make_waiting`).
@@ -2166,7 +2222,20 @@ pub(crate) fn targets_room_kept() -> u64 {
 /// `VICTORY_BLACK_FACE_FIX=0` (F1, BLACK FACE FIX) turns it off, and room is then weighed
 /// exactly as before the PR.
 #[cfg(windows)]
+///
+/// FIRST START FIX (`VICTORY_FACE_WARMUP`, on unless 0): a tester's 6 GB card crashed on
+/// entering the world (device removed, or "a host command list did not close (0x8007000E)"
+/// with DLSS out of video memory) whenever the fix was on in a start that had to compile its
+/// pipelines (the first start after a new build or a cleared cache); a start with the fix off,
+/// then the next with it on, played. So the admission waits while host pipelines are being
+/// compiled ([`face_warm`]) and starts by itself when they have calmed, with no restart.
 pub(crate) fn face_admit() -> bool {
+    face_fix_on() && face_warm()
+}
+
+/// Whether the black face fix is set on (`VICTORY_BLACK_FACE_FIX`, on unless 0).
+#[cfg(windows)]
+fn face_fix_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
         let on = std::env::var_os("VICTORY_BLACK_FACE_FIX").is_none_or(|v| v != "0");
@@ -2178,6 +2247,56 @@ pub(crate) fn face_admit() -> bool {
         on
     })
 }
+
+/// [`face_admit`]'s warm-up: false for the first [`WARM_FIRST_MS`] of the run, and while
+/// host pipelines are being compiled: more than [`WARM_BURST`] compiled in a second, or
+/// more than [`WARM_QUEUE`] waiting, within the last [`WARM_QUIET_MS`]. Looked at once a
+/// second. `VICTORY_FACE_WARMUP=0`: always true, as before.
+#[cfg(windows)]
+fn face_warm() -> bool {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("VICTORY_FACE_WARMUP").is_none_or(|v| v != "0")) {
+        return true;
+    }
+    // When it was last looked at, the compiled count then, when compiling was last busy,
+    // and the answer.
+    static LOOKED: AtomicU64 = AtomicU64::new(0);
+    static COMPILED: AtomicU64 = AtomicU64::new(0);
+    static BUSY_AT: AtomicU64 = AtomicU64::new(0);
+    static WARM: AtomicBool = AtomicBool::new(false);
+    let now = crate::host::now_ms();
+    let looked = LOOKED.load(Relaxed);
+    if now >= looked + 1000 && LOOKED.compare_exchange(looked, now, Relaxed, Relaxed).is_ok() {
+        let compiled = crate::pipeline::compiled();
+        let burst = compiled.saturating_sub(COMPILED.swap(compiled, Relaxed));
+        if burst > WARM_BURST || crate::pipeline::making() > WARM_QUEUE {
+            BUSY_AT.store(now, Relaxed);
+        }
+        let warm = now >= WARM_FIRST_MS && now >= BUSY_AT.load(Relaxed) + WARM_QUIET_MS;
+        if WARM.swap(warm, Relaxed) != warm {
+            if warm {
+                tracing::info!(compiled, "black face fix (PR #669): on now, pipelines have calmed (VICTORY_FACE_WARMUP=0: on from the start)");
+            } else {
+                tracing::info!(compiled, burst, "black face fix (PR #669): waiting while pipelines are compiled");
+            }
+        }
+    }
+    WARM.load(Relaxed)
+}
+
+/// [`face_warm`]: the first part of a run it always waits through, in ms.
+#[cfg(windows)]
+const WARM_FIRST_MS: u64 = 30_000;
+/// [`face_warm`]: how long compiling must have been calm, in ms.
+#[cfg(windows)]
+const WARM_QUIET_MS: u64 = 20_000;
+/// [`face_warm`]: host pipelines compiled in a second that count as busy.
+#[cfg(windows)]
+const WARM_BURST: u64 = 4;
+/// [`face_warm`]: host pipelines waiting to be made that count as busy.
+#[cfg(windows)]
+const WARM_QUEUE: u64 = 8;
 
 /// [`targets_room_kept`]'s record of the targets' bytes (`last`) and of
 /// when they last grew by 64 MiB (`since`, ms), with `targets` now: a fall
@@ -2210,7 +2329,9 @@ fn targets_seen(last: u64, since: u64, targets: u64, now: u64) -> (u64, u64) {
 /// 64 MiB, [`targets_seen`] starts the clock and the reserve comes back.
 #[cfg(any(windows, test))]
 fn targets_kept(most: u64, targets: u64, still_ms: u64, settle: u64) -> u64 {
-    if settle > 0 && targets >= most / 4 && still_ms >= settle {
+    // PR #1179: a quarter of the reserve, at most 1 GiB (8 GB cards' targets settle lower).
+    let world_floor = (most / 4).min(1024 << 20);
+    if settle > 0 && targets >= world_floor && still_ms >= settle {
         0
     } else {
         most.saturating_sub(targets)
@@ -2312,11 +2433,28 @@ fn face_headroom_bytes() -> u64 {
 #[cfg(windows)]
 pub(crate) fn room_line(budget: u64) -> u64 {
     static SET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *SET.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_ROOM_PERCENT").is_some()) {
+    let line = if *SET.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_ROOM_PERCENT").is_some()) {
         budget / 100 * room_percent()
     } else {
         line_for(budget)
-    }
+    };
+    safe_line(line, budget, room_safe())
+}
+
+/// F1 CRASH FIX (8 GB CARDS), `VICTORY_ROOM_SAFE` (on unless 0): on cards whose budget is under
+/// 9 GiB (8 GB ones), textures stop at 75% of it. Lucia's store robbery on 8 GB cards ended in
+/// "a host command list did not close (0x8007000E)" with textures at their line, and 75% stopped
+/// it for the tester who found it (issue #232). Bigger cards keep their line.
+#[cfg(windows)]
+fn room_safe() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_ROOM_SAFE").is_none_or(|v| v != "0"))
+}
+
+/// [`room_line`]'s `line` for a budget of `budget`, with the 8 GB crash fix `on`.
+#[cfg(any(windows, test))]
+fn safe_line(line: u64, budget: u64, on: bool) -> u64 {
+    if on && budget < 9 << 30 { line.min(budget / 100 * 75) } else { line }
 }
 
 /// The budget less what is left free for the host's own needs that are
@@ -2710,6 +2848,16 @@ pub(crate) fn let_go_idle() {
     }
 }
 
+/// PR #1179 (8 GB cards' green and black textures), on unless `VICTORY_PR1179=0`
+/// (TESTER_MENU T F). With it, [`slot_evict`] starts at the texture room line
+/// and lets go of textures whose slots a table showed at any time (not only
+/// lately), and slots that cannot be made show a neutral texture instead of
+/// a null view. Off: as upstream before the PR.
+pub(crate) fn pr1179() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_PR1179").is_none_or(|v| v != "0"))
+}
+
 // Slot eviction: memory stack by skornuta (skornuta/victory-memory-stack 57fb136, GPL-3.0),
 // patches 06 and 07 and the slot eviction of their base.
 
@@ -2854,6 +3002,16 @@ fn slot_evict(video: Option<[u64; 4]>, idle_ms: u64, frames: u64) {
         frame_at(&ring, now_ms.saturating_sub(idle_ms))
     };
     static EVICTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    // PR #1179 (on unless `VICTORY_PR1179=0`): the lines no higher than the
+    // texture room line, and the free part of the texture blocks not counted.
+    let (high, low, used) = if pr1179() {
+        let line_pct = (room_line(budget) * 100 / budget.max(1)).clamp(50, 97);
+        let high = high.min(line_pct);
+        let low = low.min(high.saturating_sub(5).max(40));
+        (high, low, used.saturating_sub(crate::pool::texture_room()))
+    } else {
+        (high, low, used)
+    };
     let (on, need) = slot_plan(EVICTING.load(Relaxed), budget, used, high, low, cap);
     EVICTING.store(on, Relaxed);
     SLOT_STATE[0].store(u64::from(on), Relaxed);
@@ -4241,6 +4399,34 @@ mod tests {
         }
     }
 
+    /// The terrain's page table (unordered access alone, 175 KiB with its
+    /// levels) is made with its view; a target, a depth texture, a texture
+    /// the title fills, a buffer and a big unordered-access texture wait
+    /// for their first use, and a limit of 0 leaves all to wait.
+    #[test]
+    fn small_unordered_textures_are_made_with_their_views() {
+        const MIB: u64 = 1 << 20;
+        let with = |d: ResourceDesc, flags: u32| ResourceDesc { flags, ..d };
+        let page_table = with(texture(256, 256, 57, 6), 0x4);
+        assert!(made_with_view(&page_table, MIB));
+        assert!(!made_with_view(&page_table, 0));
+        // 256 x 256 x 2 bytes and a third: over 170 KiB, under 175.
+        assert!(!made_with_view(&page_table, 170 << 10));
+        assert!(made_with_view(&page_table, 175 << 10));
+        // Named by the lists that bind them: target, depth, target with unordered access.
+        for flags in [0x1, 0x2, 0x5] {
+            assert!(!made_with_view(&with(texture(256, 256, 57, 6), flags), MIB), "flags {flags:#x}");
+        }
+        // Filled by the title: the texture pass makes it.
+        assert!(!made_with_view(&texture(256, 256, 57, 6), MIB));
+        assert!(!made_with_view(&with(buffer(4096), 0x4), MIB));
+        // A full-screen half-float texture (28.8 MiB at 2560x1440) waits.
+        assert!(!made_with_view(&with(texture(2560, 1440, 10, 1), 0x4), MIB));
+        // Block-compressed: by blocks (1024x1024 BC1 is 512 KiB).
+        assert!(made_with_view(&with(texture(1024, 1024, 71, 1), 0x4), 512 << 10));
+        assert!(!made_with_view(&with(texture(1024, 1024, 71, 1), 0x4), (512 << 10) - 1));
+    }
+
     fn texture(width: u64, height: u32, format: u32, mips: u16) -> ResourceDesc {
         ResourceDesc {
             dimension: 3,
@@ -5473,9 +5659,16 @@ float4 lit() : SV_Target { return 1.0; }
     #[test]
     fn room_for_targets_is_given_up_once_they_settle() {
         const MIB: u64 = 1 << 20;
+        // The 8 GB crash fix: 75% of a 7 GiB budget; a 12 GiB one keeps its line; off keeps it.
+        assert_eq!(safe_line(6900 * MIB, 7168 * MIB, true), 7168 * MIB / 100 * 75);
+        assert_eq!(safe_line(5000 * MIB, 7168 * MIB, true), 5000 * MIB);
+        assert_eq!(safe_line(11000 * MIB, 12288 * MIB, true), 11000 * MIB);
+        assert_eq!(safe_line(6900 * MIB, 7168 * MIB, false), 6900 * MIB);
         let most = 3072 * MIB;
         // Before the world: kept, however long.
-        assert_eq!(targets_kept(most, 652 * MIB, 60_000, 20_000), 2420 * MIB);
+        assert_eq!(targets_kept(most, 652 * MIB, 300_000, 20_000), 2420 * MIB);
+        // On 8 GB GPUs / Series S / DLSS, world targets settle around 1,185-1,450 MB.
+        assert_eq!(targets_kept(most, 1185 * MIB, 25_000, 20_000), 0);
         // The world's first frames: still growing.
         assert_eq!(targets_kept(most, 2083 * MIB, 5_000, 20_000), 989 * MIB);
         // Settled: nothing kept.

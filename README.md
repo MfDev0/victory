@@ -13,13 +13,15 @@ huss huss huss huss huss huss
 
 ## nvidia/: the VIctory-NVIDIA Try build
 
-`nvidia/` holds version 5 of the Try build: version 3 (trustno1-coder's
-VIctory-NVIDIA at `63b902f` with the fixes of that version, the one that
-worked) plus only the fixes testers found working, on by default and out of
-F1: black faces (#669), sky shine (#393), wide dispatch (#1005), movies as
-upstream. On top of that:
+`nvidia/` holds trustno1-coder's VIctory-NVIDIA (main at `9ce3cf9`, with its
+mouse and keyboard controls) plus the fixes testers found working, on by
+default: black faces (#669), sky shine (#393), wide dispatch (#1005), movies
+as upstream. On top of that:
 - photo mode saving to `Downloads\VIctory-Photos`;
-- ray tracing stays off unless turned on in F1;
+- a trail fix (DLSS model K);
+- a crash fix for 8 GB cards in Lucia's robbery;
+- a first start fix: the black face fix waits while shaders compile, then turns itself on;
+- more of the upstream pull requests;
 - FG UNLOCK (3x-6x on RTX 20/30/40, from MfDev0/dlss-unlocked-);
 - a crash report zip and a tester menu.
 
