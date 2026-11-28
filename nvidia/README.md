@@ -44,9 +44,9 @@ This is VIctory-NVIDIA `63b902f` with the diner face fix (PR #33, corrected),
 13 more pull requests, FG UNLOCK (3x-6x on RTX 20/30/40, from
 MfDev0/dlss-unlocked-), a crash report zip and a tester menu. The left-out
 PRs (#669, #1005, #1008, #982's keymap) are in F1 as TRY PR rows, off until
-you turn them on; #1056's menu languages are in. There is also a cat =^.^=
-(F1 PET THE CAT, and a cheat code) and a Discord status, "Playing Grand Theft
-Auto VI". Build it with
+you turn them on; #1056's menu languages are in. There is also a Discord
+status, "Playing Grand Theft Auto VI", with a "Play on PC too" button. Build
+it with
 `BUILD_VICTORY.cmd`, then start `TESTER_MENU.cmd`. After a problem, send the
 zip from `MAKE_REPORT.cmd` (it is in `Downloads\VIctory-reports`). Details
 and switches: [TRY-NOTES.md](TRY-NOTES.md).

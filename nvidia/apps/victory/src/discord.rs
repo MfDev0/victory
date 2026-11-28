@@ -1,7 +1,7 @@
-//! Discord Rich Presence while the game runs: "Playing Grand Theft Auto VI", with the cover,
-//! the time played, a line about the cat that changes every minute, and two buttons for the
-//! friends who look at it: PLAY ON PC TOO and PET THE CAT. (Both open a rickroll sung by a
-//! cat. You cannot click your own buttons in Discord: only others see them work.)
+//! Discord Rich Presence while the game runs: "Playing Grand Theft Auto VI", with the cover and
+//! the time played, and one button for the friends who look at it: PLAY ON PC TOO, which opens
+//! a cat singing Never Gonna Give You Up on YouTube. (You cannot click your own button in
+//! Discord: only others see it work.)
 //!
 //! It goes through the Discord app's own pipe on this PC (`\\.\pipe\discord-ipc-N`), in the
 //! Discord app's small local protocol: a frame is the operation (u32 LE), the length (u32 LE)
@@ -16,7 +16,7 @@
 //! Adapted from Neptune's (github.com/zm0kiemedia/Neptune_VI, `apps/victory/src/discord.rs`,
 //! GPL-3.0), whose Discord application, named Grand Theft Auto VI, this uses. Added for the
 //! Try build: the cover by URL (with Neptune's `logo` art if Discord refuses the URL), the
-//! buttons, the cat's lines, pings answered, a reply checked for each frame, and a watcher.
+//! button, pings answered, a reply checked for each frame, and a watcher.
 
 use std::io::{Read, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -28,26 +28,12 @@ const APPLICATION: &str = "1575009406737846333";
 const COVER: &str = "https://www.igrandtheftauto.com/content/images/large/grand-theft-auto-vi-official-cover-art-hi-res.jpg";
 /// The application's own art, if a URL is refused.
 const COVER_ASSET: &str = "logo";
-/// The small picture in the cover's corner: the singing cat.
-const CAT_PICTURE: &str = "https://i.ytimg.com/vi/K7XHy8nppf4/hqdefault.jpg";
 /// "Rick Astley - Never Gonna Give You Up - Cat Cover" (Malow Meme, 2020).
 const RICKROLL_CAT: &str = "https://www.youtube.com/watch?v=K7XHy8nppf4";
-/// "Keyboard Cat Rick Roll." (2010).
-const KEYBOARD_CAT: &str = "https://www.youtube.com/watch?v=PSe5lFRiuDo";
-/// The buttons (Discord allows two, labels of at most 32 characters).
-const BUTTONS: [(&str, &str); 2] = [("Play on PC too", RICKROLL_CAT), ("Pet the cat =^.^=", KEYBOARD_CAT)];
-const DETAILS: &str = "Vice City, on PC (yes, really)";
-/// The line under it, a new one every minute (Discord takes at most 5 changes in 20 s).
-const STATES: [&str; 8] = [
-    "Petting the cat between missions",
-    "Cat in the passenger seat, 5 stars",
-    "Robbing a bank, the cat keeps watch",
-    "Frame gen on, cat asleep on the GPU",
-    "Never gonna give you up, Vice City",
-    "Feeding the cat at the diner",
-    "The cat is driving. Send help",
-    "Pre-ordered a second copy for the cat",
-];
+/// The one button (labels of at most 32 characters).
+const BUTTON: (&str, &str) = ("Play on PC too", RICKROLL_CAT);
+/// The activity is sent again this often (Discord takes at most 5 changes in 20 s); a closed
+/// pipe is found then.
 const EVERY: Duration = Duration::from_secs(60);
 /// Discord not running, or closed: looked for again this often.
 const AGAIN: Duration = Duration::from_secs(20);
@@ -91,27 +77,15 @@ fn application() -> String {
 }
 
 /// The SET_ACTIVITY frame's JSON: for the game's process `pid`, played since `started`
-/// (seconds since 1970), the `turn`th state, the cover by URL or as the application's art.
-fn activity(pid: u32, started: u64, turn: usize, by_url: bool, nonce: &str) -> String {
-    let state = STATES[turn % STATES.len()];
-    let assets = if by_url {
-        format!(
-            r#""large_image":"{}","large_text":"Grand Theft Auto VI","small_image":"{}","small_text":"The cat is helping =^.^=""#,
-            escaped(COVER),
-            escaped(CAT_PICTURE)
-        )
-    } else {
-        format!(r#""large_image":"{}","large_text":"Grand Theft Auto VI""#, escaped(COVER_ASSET))
-    };
-    let buttons = BUTTONS
-        .iter()
-        .map(|(label, url)| format!(r#"{{"label":"{}","url":"{}"}}"#, escaped(label), escaped(url)))
-        .collect::<Vec<_>>()
-        .join(",");
+/// (seconds since 1970), the cover by URL or as the application's art.
+fn activity(pid: u32, started: u64, by_url: bool, nonce: &str) -> String {
+    let cover = if by_url { COVER } else { COVER_ASSET };
+    let (label, url) = BUTTON;
     format!(
-        r#"{{"cmd":"SET_ACTIVITY","args":{{"pid":{pid},"activity":{{"details":"{}","state":"{}","timestamps":{{"start":{started}}},"assets":{{{assets}}},"buttons":[{buttons}],"instance":false}}}},"nonce":"{}"}}"#,
-        escaped(DETAILS),
-        escaped(state),
+        r#"{{"cmd":"SET_ACTIVITY","args":{{"pid":{pid},"activity":{{"timestamps":{{"start":{started}}},"assets":{{"large_image":"{}","large_text":"Grand Theft Auto VI"}},"buttons":[{{"label":"{}","url":"{}"}}],"instance":false}}}},"nonce":"{}"}}"#,
+        escaped(cover),
+        escaped(label),
+        escaped(url),
         escaped(nonce)
     )
 }
@@ -189,7 +163,7 @@ pub(crate) fn start_for_this_run() {
         .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
         .spawn();
     if started.is_ok() {
-        println!("Discord: Playing Grand Theft Auto VI, with the cat =^.^= (VICTORY_DISCORD=0 turns it off).");
+        println!("Discord: Playing Grand Theft Auto VI (VICTORY_DISCORD=0 turns it off).");
     }
 }
 
@@ -203,13 +177,14 @@ pub(crate) fn run(watch: u32) -> anyhow::Result<()> {
     });
     let application = application();
     let started = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-    let mut turn = started as usize / 60;
+    let mut sent = 0u64;
     let mut by_url = true;
     loop {
         if let Some(mut pipe) = connect(&application) {
             loop {
-                let nonce = format!("victory-try-{started}-{turn}");
-                let took = match set(&mut pipe, &activity(watch, started, turn, by_url, &nonce), &nonce) {
+                sent += 1;
+                let nonce = format!("victory-try-{started}-{sent}");
+                let took = match set(&mut pipe, &activity(watch, started, by_url, &nonce), &nonce) {
                     Ok(took) => took,
                     Err(_) => break,
                 };
@@ -218,7 +193,6 @@ pub(crate) fn run(watch: u32) -> anyhow::Result<()> {
                     by_url = false;
                     continue;
                 }
-                turn += 1;
                 std::thread::sleep(EVERY);
             }
         }
@@ -264,7 +238,7 @@ mod tests {
 
     #[test]
     fn the_activity_is_what_discord_takes() {
-        let json = activity(4242, 1_764_000_000, 3, true, "n-1");
+        let json = activity(4242, 1_764_000_000, true, "n-1");
         for part in [
             r#""cmd":"SET_ACTIVITY""#,
             r#""pid":4242"#,
@@ -273,7 +247,6 @@ mod tests {
             r#""label":"Play on PC too""#,
             RICKROLL_CAT,
             COVER,
-            STATES[3],
             r#""nonce":"n-1""#,
         ] {
             assert!(json.contains(part), "{part} in {json}");
@@ -292,18 +265,14 @@ mod tests {
             assert!(depth >= 0, "{json}");
         }
         assert_eq!((depth, inside), (0, false), "{json}");
-        let art = activity(1, 2, 0, false, "n");
-        assert!(art.contains(r#""large_image":"logo""#) && !art.contains("small_image"), "{art}");
+        let art = activity(1, 2, false, "n");
+        assert!(art.contains(r#""large_image":"logo""#) && !art.contains("details") && !art.contains("state"), "{art}");
     }
 
     #[test]
     fn what_discord_shows_fits_its_limits() {
-        for (label, url) in BUTTONS {
-            assert!(!label.is_empty() && label.len() <= 32 && url.starts_with("https://"), "{label}");
-        }
-        for text in STATES.iter().chain(&[DETAILS]) {
-            assert!((2..=128).contains(&text.len()), "{text}");
-        }
+        let (label, url) = BUTTON;
+        assert!(!label.is_empty() && label.len() <= 32 && url.starts_with("https://www.youtube.com/"), "{label}");
         assert!(APPLICATION.bytes().all(|b| b.is_ascii_digit()));
     }
 

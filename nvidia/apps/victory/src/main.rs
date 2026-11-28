@@ -456,7 +456,7 @@ fn main() -> Result<()> {
             victory_core::logging::init("info");
             // The Try build's cat.
             println!("   /\\_/\\    VIctory NVIDIA Try build, by MfDev0");
-            println!("  ( o.o )   F1: settings (pet the cat there), F3: stats");
+            println!("  ( o.o )   F1: settings, F3: stats");
             println!("   > ^ <");
             // A zip for the tester if the game fails: made by a process of its own.
             report::watch_this_run();

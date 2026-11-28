@@ -106,40 +106,12 @@ const ABOUT_REPORT: [Labels; 3] = [
     ["SEND THE ZIP WITH WHAT YOU SAW AND WHERE.", "请连同你看到的问题和位置一起发送 ZIP。", "請連同你看到的問題與位置一起傳送 ZIP。", "ENVIA EL ZIP CON LO QUE VISTE Y DONDE."],
 ];
 
-// Ours (the Try build's cat, =^.^=): a cat on the title line and one walking along the
-// frame-rate line (`VICTORY_CAT=0`: none), a cat fact where a line has nothing to say
-// (`VICTORY_CAT_FACTS=0`: none), PET THE CAT, and an old cheat code for a cat parade.
-const CAT: &str = "VICTORY_CAT";
-const CAT_FACTS: &str = "VICTORY_CAT_FACTS";
-/// The action that pets the cat.
-const PET: usize = 7;
-const TITLE: Labels = ["SETTINGS                       F1 OR ESC CLOSES", "设置                     F1 / ESC 关闭", "設定                     F1 / ESC 關閉", "AJUSTES                     F1 O ESC PARA CERRAR"];
-const CAT_TITLE: Labels = ["SETTINGS   =^.^=   MEOW        F1 OR ESC CLOSES", "设置  =^.^=  喵         F1 / ESC 关闭", "設定  =^.^=  喵         F1 / ESC 關閉", "AJUSTES  =^.^=  MIAU      F1 O ESC PARA CERRAR"];
-/// What petting the cat gets, in turn.
-const PURRS: [Labels; 6] = [
-    ["PURRRR... THE CAT LIKES YOU. =^.^=", "呼噜呼噜……猫咪喜欢你。=^.^=", "呼嚕呼嚕……貓咪喜歡你。=^.^=", "RRRRR... AL GATO LE CAES BIEN. =^.^="],
-    ["MEOW! THE CAT WANTS SNACKS NOW.", "喵！猫咪现在想吃零食。", "喵！貓咪現在想吃零食。", "MIAU! EL GATO QUIERE PREMIOS YA."],
-    ["THE CAT KNEADS YOUR KEYBOARD. +1 FPS (NOT REALLY)", "猫咪在键盘上踩奶。帧率 +1 (并没有)", "貓咪在鍵盤上踩奶。畫格率 +1 (並沒有)", "EL GATO AMASA TU TECLADO. +1 FPS (NO ES CIERTO)"],
-    ["THE CAT BLINKS SLOWLY AT YOU: THAT MEANS I LOVE YOU.", "猫咪对你慢慢眨眼：这是在说我爱你。", "貓咪對你慢慢眨眼：這是在說我愛你。", "EL GATO TE PARPADEA DESPACIO: TE QUIERE."],
-    ["TOO MUCH PETTING. THE CAT BIT YOU. FAIR.", "摸太多了，猫咪咬了你一口。", "摸太多了，貓咪咬了你一口。", "DEMASIADAS CARICIAS. EL GATO TE MORDIO."],
-    ["THE CAT KNOCKED THE VRAM OFF THE TABLE. AGAIN.", "猫咪又把显存从桌上推下去了。", "貓咪又把顯存從桌上推下去了。", "EL GATO TIRO LA VRAM DE LA MESA. OTRA VEZ."],
-];
-/// Up, up, down, down, left, right, left, right with the menu open.
-const KONAMI: Labels = ["CHEAT ACTIVATED: CAT PARADE! (AGAIN TURNS IT OFF)", "秘籍已启用：猫咪游行！(再输一次关闭)", "秘技已啟用：貓咪遊行！(再輸一次關閉)", "TRUCO ACTIVADO: DESFILE DE GATOS! (REPITE: QUITAR)"];
-const CAT_FACT_LINES: [[Labels; 3]; 8] = [
-    [["CATS SLEEP 12 TO 16 HOURS A DAY. THIS ONE SLEPT THROUGH", "猫每天要睡 12 到 16 小时。", "貓每天要睡 12 到 16 小時。", "LOS GATOS DUERMEN DE 12 A 16 HORAS AL DIA."], ["THE WHOLE SHADER PRELOAD.", "这只猫睡过了整个着色器预加载。", "這隻貓睡過了整個著色器預載。", "ESTE DURMIO TODA LA PRECARGA DE SHADERS."], same("")],
-    [["A GROUP OF CATS IS CALLED A CLOWDER.", "一群猫的英文叫 CLOWDER。", "一群貓的英文叫 CLOWDER。", "UN GRUPO DE GATOS SE LLAMA CLOWDER EN INGLES."], ["A GROUP OF GENERATED FRAMES IS CALLED A MIRACLE.", "一群生成的帧叫做奇迹。", "一群生成的畫格叫做奇蹟。", "UN GRUPO DE FOTOGRAMAS GENERADOS ES UN MILAGRO."], same("")],
-    [["CATS CAN JUMP ABOUT SIX TIMES THEIR OWN LENGTH.", "猫能跳出约自身体长六倍的距离。", "貓能跳出約自身體長六倍的距離。", "UN GATO SALTA UNAS SEIS VECES SU LONGITUD."], ["STILL NOT AS HIGH AS THE VRAM USE IN VICE CITY.", "但还是没有罪城的显存占用高。", "但還是沒有罪城的顯存佔用高。", "AUN ASI, MENOS QUE EL USO DE VRAM EN VICE CITY."], same("")],
-    [["A CAT HAS 32 MUSCLES IN EACH EAR.", "猫的每只耳朵有 32 块肌肉。", "貓的每隻耳朵有 32 塊肌肉。", "UN GATO TIENE 32 MUSCULOS EN CADA OREJA."], ["IT HEARD YOUR GPU FANS FROM THE OTHER ROOM.", "它在隔壁房间就听见了你的显卡风扇。", "牠在隔壁房間就聽見了你的顯示卡風扇。", "OYO LOS VENTILADORES DE TU GPU DESDE LA OTRA SALA."], same("")],
-    [["CATS PURR AT ABOUT 25 TO 150 HZ. WITH FRAME GEN ON,", "猫咪呼噜的频率约为 25 到 150 HZ。", "貓咪呼嚕的頻率約為 25 到 150 HZ。", "LOS GATOS RONRONEAN A UNOS 25-150 HZ."], ["THIS GAME GETS THERE TOO.", "开了帧生成，这游戏也能到。", "開了畫格生成，這遊戲也能到。", "CON GEN. DE FOTOGRAMAS, ESTE JUEGO TAMBIEN."], same("")],
-    [["HOUSE CATS SHARE ABOUT 95 PERCENT OF THEIR DNA", "家猫和老虎约有百分之 95 的 DNA 相同。", "家貓和老虎約有百分之 95 的 DNA 相同。", "LOS GATOS COMPARTEN UN 95 POR CIENTO DEL ADN"], ["WITH TIGERS. THIS BUILD SHARES ABOUT AS MUCH WITH", "这个版本和上游也差不多一样：", "這個版本和上游也差不多一樣：", "CON LOS TIGRES. ESTA VERSION, LO MISMO CON"], same("TRUSTNO1-CODER/VICTORY-NVIDIA.")],
-    [["CATS WALK LIKE CAMELS: BOTH RIGHT FEET, THEN BOTH LEFT.", "猫走路像骆驼：先迈两只右脚，", "貓走路像駱駝：先邁兩隻右腳，", "LOS GATOS CAMINAN COMO CAMELLOS: AMBAS PATAS"], ["WATCH THE ONE ON THE FPS LINE.", "再迈两只左脚。看看帧率栏上那只。", "再邁兩隻左腳。看看畫格率欄上那隻。", "DERECHAS Y LUEGO LAS IZQUIERDAS. MIRA LA DE LOS FPS."], same("")],
-    [["THE OLDEST KNOWN CAT LIVED TO 38. THAT IS ABOUT HOW", "最长寿的猫活到了 38 岁。", "最長壽的貓活到了 38 歲。", "EL GATO MAS LONGEVO VIVIO 38 ANOS."], ["LONG THE FIRST SHADER PRELOAD FEELS.", "第一次预加载着色器差不多就这种感觉。", "第一次預載著色器差不多就是這種感覺。", "MAS O MENOS LO QUE PARECE LA PRIMERA PRECARGA."], same("")],
-];
+// Ours: a small cat on the title line.
+const TITLE: Labels = ["SETTINGS   =^.^=              F1 OR ESC CLOSES", "设置  =^.^=           F1 / ESC 关闭", "設定  =^.^=           F1 / ESC 關閉", "AJUSTES  =^.^=            F1 O ESC PARA CERRAR"];
 /// What is said while a row of the Try build's own is picked: the left-out pull requests,
 /// the language (#1056), the cat and Discord.
-const ABOUT_TRY_VARS: [&str; 8] = ["VICTORY_FACE_ADMIT", "VICTORY_MOVIE_FG_GATE", "VICTORY_INDIRECT_WIDE_NVIDIA", "VICTORY_BVH_FAULTS_ALL", "VICTORY_KEYMAP", LANGUAGE, CAT, "VICTORY_DISCORD"];
-const ABOUT_TRY: [[Labels; 3]; 8] = [
+const ABOUT_TRY_VARS: [&str; 7] = ["VICTORY_FACE_ADMIT", "VICTORY_MOVIE_FG_GATE", "VICTORY_INDIRECT_WIDE_NVIDIA", "VICTORY_BVH_FAULTS_ALL", "VICTORY_KEYMAP", LANGUAGE, "VICTORY_DISCORD"];
+const ABOUT_TRY: [[Labels; 3]; 7] = [
     [
         ["PR 669: WHEN THE CARD IS FULL, FACES THAT NEVER GOT A", "PR 669：显存满时，从未上传纹理的脸部", "PR 669：顯存滿時，從未上傳紋理的臉部", "PR 669: CON LA VRAM LLENA, LAS CARAS SIN TEXTURA"],
         ["TEXTURE ARE LET IN JUST OVER THE LINE (80 PCT AT MOST).", "可略超上限放行 (最多 80/100 显存)。", "可略超上限放行 (最多 80/100 顯存)。", "ENTRAN UN POCO SOBRE EL LIMITE (80/100 COMO MAX.)."],
@@ -171,40 +143,11 @@ const ABOUT_TRY: [[Labels; 3]; 8] = [
         ["FOLLOWS WINDOWS. ENGLISH IS THE DEFAULT. LIVE.", "AUTO 跟随 WINDOWS。默认英语。即时生效。", "AUTO 跟隨 WINDOWS。預設英語。即時生效。", "AUTO SIGUE A WINDOWS. INGLES POR DEFECTO."],
     ],
     [
-        ["A CAT ON THE TITLE LINE AND ONE WALKING ALONG THE FPS", "标题栏上有一只猫，帧率栏上也有一只在散步。", "標題列上有一隻貓，畫格率欄上也有一隻在散步。", "UN GATO EN EL TITULO Y OTRO PASEANDO POR LA"],
-        ["LINE. PET IT BELOW. MADE WITH LOVE BY MFDEV0.", "可以在下面摸摸它。MFDEV0 用爱制作。", "可以在下面摸摸牠。MFDEV0 用愛製作。", "LINEA DE FPS. ACARICIALO ABAJO. HECHO POR MFDEV0."],
-        ["PSST: THE CAT KNOWS AN OLD CHEAT CODE.", "嘘：这只猫知道一个古老的秘籍。", "噓：這隻貓知道一個古老的秘技。", "PSST: EL GATO SABE UN TRUCO ANTIGUO."],
-    ],
-    [
         ["SHOWS PLAYING GRAND THEFT AUTO VI ON DISCORD, WITH THE", "在 DISCORD 上显示正在玩 GRAND THEFT AUTO VI，", "在 DISCORD 上顯示正在玩 GRAND THEFT AUTO VI，", "MUESTRA JUGANDO A GRAND THEFT AUTO VI EN DISCORD,"],
-        ["COVER. FRIENDS GET A PLAY ON PC TOO BUTTON (TRUST US).", "带封面。好友会看到 PLAY ON PC TOO 按钮。", "附封面。好友會看到 PLAY ON PC TOO 按鈕。", "CON LA PORTADA Y UN BOTON PLAY ON PC TOO."],
+        ["COVER. FRIENDS GET A PLAY ON PC TOO BUTTON.", "带封面。好友会看到 PLAY ON PC TOO 按钮。", "附封面。好友會看到 PLAY ON PC TOO 按鈕。", "CON LA PORTADA Y UN BOTON PLAY ON PC TOO."],
         ["NEEDS THE DISCORD APP RUNNING. APPLIES AT NEXT START.", "需要 DISCORD 正在运行。下次启动生效。", "需要 DISCORD 正在執行。下次啟動生效。", "NECESITA DISCORD ABIERTO. AL PROXIMO INICIO."],
     ],
 ];
-/// Times the menu was opened (a different cat fact each time) and the cat was petted, and
-/// whether the cat parade is on, with the last arrow keys (two bits each) for its code.
-static OPENED: AtomicUsize = AtomicUsize::new(0);
-static PETS: AtomicUsize = AtomicUsize::new(0);
-static PARADE: AtomicBool = AtomicBool::new(false);
-static ARROWS: AtomicUsize = AtomicUsize::new(0);
-/// Up, up, down, down, left, right, left, right: 0, 0, 1, 1, 2, 3, 2, 3.
-const PARADE_CODE: usize = 0b00_00_01_01_10_11_10_11;
-
-/// `line` (the frame-rate line) with the cat walking to and fro in the room the box has left.
-fn with_cat(line: String, now_ms: u64) -> String {
-    let parade = PARADE.load(Ordering::Relaxed);
-    let step = (now_ms / 250) as usize;
-    let right = |face: &str| if parade { format!("~{face} ~{face} ~{face}") } else { format!("~{face}") };
-    let left = |face: &str| if parade { format!("{face}~ {face}~ {face}~") } else { format!("{face}~") };
-    // A slow blink now and then.
-    let face = if step % 16 == 15 { "=^-^=" } else { "=^.^=" };
-    let len = if parade { 20 } else { 6 };
-    let room = (FPS_BOX.columns * ASCII_WIDTH).saturating_sub(text_width(&line)) / ASCII_WIDTH;
-    let Some(track) = (room as usize).checked_sub(len + 3).filter(|t| *t > 0) else { return line };
-    let at = step % (2 * track);
-    let (pad, cat) = if at < track { (at, right(face)) } else { (2 * track - at, left(face)) };
-    format!("{line}  {:pad$}{cat}", "")
-}
 /// The DLSS setting, and what is said while it is picked on in a start without NVIDIA's files.
 const DLSS: &str = "VICTORY_MENU_DLSS";
 const ABOUT_NO_DLSS: [Labels; 3] = [
@@ -353,14 +296,12 @@ const ITEMS: &[Item] = &[
     Item { var: "VICTORY_BVH_FAULTS_ALL", label: ["TRY PR 1008: RT FAULT PAGES", "试用 PR 1008：光追缺页", "試用 PR 1008：光追缺頁", "PR 1008: PÁGINAS RT"], values: &[("", ["2048 (OFF)", "2048 (关闭)", "2048 (關閉)", "2048 (NO)"]), ("16384", ["16384 (ON)", "16384 (开启)", "16384 (開啟)", "16384 (SÍ)"])], live: false },
     // #982 (its keymap only, not its launcher): the keyboard pad's keys (gameinput/keymap.rs).
     Item { var: "VICTORY_KEYMAP", label: ["TRY PR 982: PAD KEYS", "试用 PR 982：键盘手柄按键", "試用 PR 982：鍵盤手把按鍵", "PR 982: TECLAS DEL MANDO"], values: &[("", ["AS BEFORE", "照旧", "照舊", "COMO ANTES"]), ("a=20,lt=A2", ["SPACE = A, CTRL = LT", "空格 = A，CTRL = LT", "空白鍵 = A，CTRL = LT", "ESPACIO = A, CTRL = LT"])], live: false },
-    // Ours: the cat (=^.^=), its facts, and Discord.
-    Item { var: CAT, label: ["CAT MODE =^.^=", "猫咪模式 =^.^=", "貓咪模式 =^.^=", "MODO GATO =^.^="], values: &[("", ON), ("0", OFF)], live: true },
-    Item { var: CAT_FACTS, label: ["CAT FACTS", "猫咪冷知识", "貓咪冷知識", "DATOS DE GATOS"], values: &[("", ON), ("0", OFF)], live: true },
+    // Ours: Discord.
     // apps\victory\src\discord.rs: "Playing Grand Theft Auto VI", started with the game.
     Item { var: "VICTORY_DISCORD", label: ["DISCORD STATUS (GTA VI)", "DISCORD 状态 (GTA VI)", "DISCORD 狀態 (GTA VI)", "ESTADO DE DISCORD (GTA VI)"], values: &[("", ON), ("0", OFF)], live: false },
 ];
 /// The lines after the settings.
-const ACTIONS: [Labels; 9] = [
+const ACTIONS: [Labels; 8] = [
     ["SAVE AND RESTART NOW", "保存并立即重启", "儲存並立即重新啟動", "GUARDAR Y REINICIAR AHORA"],
     ["SAVE FOR NEXT START", "保存设置", "儲存設定", "GUARDAR PARA EL PRÓXIMO INICIO"],
     ["PRELOAD SHADERS (RESTARTS THE GAME)", "预加载着色器 (重启游戏)", "預載著色器 (重新啟動遊戲)", "PRECARGAR SHADERS (REINICIA EL JUEGO)"],
@@ -368,7 +309,6 @@ const ACTIONS: [Labels; 9] = [
     ["EXPORT SAVE (TO SAVES IN THE GAME FOLDER)", "导出存档 (到游戏目录的 SAVES)", "匯出存檔 (到遊戲目錄的 SAVES)", "EXPORTAR PARTIDA (A LA CARPETA SAVES)"],
     ["IMPORT SAVE (PICK FROM SAVES)", "导入存档 (从 SAVES 选择)", "匯入存檔 (從 SAVES 選擇)", "IMPORTAR PARTIDA (ELEGIR EN SAVES)"],
     ["MAKE TESTER REPORT (ZIP)", "生成测试报告 (ZIP)", "產生測試報告 (ZIP)", "CREAR INFORME DE PRUEBA (ZIP)"],
-    ["PET THE CAT =^.^=", "摸摸猫咪 =^.^=", "摸摸貓咪 =^.^=", "ACARICIAR AL GATO =^.^="],
     ["CLOSE", "关闭", "關閉", "CERRAR"],
 ];
 
@@ -705,7 +645,7 @@ impl Menu {
         let at = rows.iter().position(|r| *r == self.at).unwrap_or(0);
         let first = at.saturating_sub(ROWS / 2).min(total.saturating_sub(ROWS));
         let mut out = vec![
-            tr(if self.value(CAT) == "0" { TITLE } else { CAT_TITLE }).to_owned(),
+            tr(TITLE).to_owned(),
             tr(["UP/DOWN PICK  LEFT/RIGHT CHANGE  ENTER DOES IT", "上下选择    左右修改    回车确认", "上下選擇    左右調整    Enter 確認", "ARRIBA/ABAJO ELIGE  IZQ./DER. CAMBIA  ENTER CONFIRMA"]).to_owned(),
             String::new(),
         ];
@@ -755,8 +695,6 @@ impl Menu {
             ABOUT_FRAMEGEN_RESTART
         } else if let Some(i) = ITEMS.get(self.at).and_then(|item| ABOUT_TRY_VARS.iter().position(|v| *v == item.var)) {
             ABOUT_TRY[i]
-        } else if self.value(CAT_FACTS) != "0" {
-            CAT_FACT_LINES[(self.at + OPENED.load(Ordering::Relaxed)) % CAT_FACT_LINES.len()]
         } else {
             [same(""); 3]
         };
@@ -998,35 +936,6 @@ impl Menu {
         self.import_at = picked.and_then(|p| self.imports.iter().position(|n| *n == p)).unwrap_or(0);
     }
 
-    /// PET THE CAT: what the cat thinks of it, in turn.
-    fn pet(&mut self) {
-        let n = PETS.fetch_add(1, Ordering::Relaxed);
-        tracing::info!(times = n + 1, "settings menu: the cat was petted =^.^=");
-        self.say(PURRS[n % PURRS.len()]);
-    }
-
-    /// The cat parade's code (the arrows, with the menu open): on, or off again.
-    fn cheat(&mut self, vk: u16) {
-        let arrow = match vk {
-            VK_UP => 0,
-            VK_DOWN => 1,
-            VK_LEFT => 2,
-            VK_RIGHT => 3,
-            _ => {
-                ARROWS.store(0, Ordering::Relaxed);
-                return;
-            }
-        };
-        let seen = (ARROWS.load(Ordering::Relaxed) << 2 | arrow) & 0xffff;
-        ARROWS.store(seen, Ordering::Relaxed);
-        if seen == PARADE_CODE {
-            ARROWS.store(0, Ordering::Relaxed);
-            let on = !PARADE.fetch_xor(true, Ordering::Relaxed);
-            tracing::info!(on, "settings menu: cat parade");
-            self.say(if on { KONAMI } else { PURRS[0] });
-        }
-    }
-
     /// MAKE TESTER REPORT: `victory report --no-open` (the launcher, `VICTORY_MENU_PLAY`) as a
     /// process of its own with no window, so that a failing report never touches the game. The
     /// zip has this run's log as written so far.
@@ -1149,7 +1058,6 @@ impl Menu {
                 self.picking = false;
                 if !open {
                     self.read_imports();
-                    OPENED.fetch_add(1, Ordering::Relaxed);
                 }
                 self.changed = true;
                 continue;
@@ -1199,7 +1107,6 @@ impl Menu {
                     3 => self.reset(),
                     EXPORT => self.export_save(),
                     REPORT => self.make_report(),
-                    PET => self.pet(),
                     IMPORT => {
                         self.read_imports();
                         self.import_at = 0;
@@ -1209,7 +1116,6 @@ impl Menu {
                 },
                 _ => {}
             }
-            self.cheat(vk);
             self.changed = true;
         }
     }
@@ -1222,8 +1128,7 @@ impl Menu {
         // Closed: the frame-rate line in the top left corner, if it is wanted and there is a rate.
         let open = Self::open();
         let language = language();
-        let cat = self.value(CAT) != "0";
-        let line = if open { None } else { fps_line(language).map(|l| if cat { with_cat(l, super::now_ms()) } else { l }) };
+        let line = if open { None } else { fps_line(language) };
         if !open && line.is_none() {
             return;
         }
@@ -1343,29 +1248,6 @@ mod tests {
         unsafe { std::env::remove_var("VICTORY_HOME") };
     }
 
-    /// The cat walks to and fro along the frame-rate line, always in the box, and so does the
-    /// parade; the code turns the parade on and off again.
-    #[test]
-    fn the_cat_stays_in_its_box() {
-        for parade in [false, true] {
-            PARADE.store(parade, Ordering::Relaxed);
-            for language in Language::ALL {
-                let line = format_fps(f64::from(u32::MAX) / 10.0, 6, language);
-                for ms in (0..60_000).step_by(250) {
-                    let walked = with_cat(line.clone(), ms);
-                    assert!(text_width(&walked) <= FPS_BOX.columns * ASCII_WIDTH, "{walked}");
-                    assert_line_fits(&walked, FPS_BOX.columns);
-                }
-                let short = format_fps(60.0, 1, language);
-                let positions: std::collections::HashSet<usize> =
-                    (0..60_000).step_by(250).map(|ms| with_cat(short.clone(), ms).find('=').unwrap_or(0)).collect();
-                assert!(positions.len() > 3, "the cat must walk: {positions:?}");
-            }
-        }
-        PARADE.store(false, Ordering::Relaxed);
-        assert_eq!(PARADE_CODE, 0x5bb);
-    }
-
     fn assert_line_fits(line: &str, columns: u32) {
         assert!(text_width(line) <= columns * ASCII_WIDTH, "{line}");
         for c in line.bytes().filter(u8::is_ascii) {
@@ -1439,9 +1321,7 @@ mod tests {
                 } else if let Some(i) = ITEMS.get(at).and_then(|item| ABOUT_TRY_VARS.iter().position(|v| *v == item.var)) {
                     assert_eq!(about, ABOUT_TRY[i].map(|line| Language::English.text(line)));
                 } else {
-                    // Every other line has a cat fact to say (CAT FACTS is on unless "0").
-                    let fact = |f: &[Labels; 3]| about == f.map(|line| Language::English.text(line));
-                    assert!(CAT_FACT_LINES.iter().any(fact), "{about:?}");
+                    assert!(about.iter().all(String::is_empty), "{about:?}");
                 }
             }
         }
@@ -1449,10 +1329,9 @@ mod tests {
         assert_eq!(Language::English.text(ACTIONS[EXPORT]), "EXPORT SAVE (TO SAVES IN THE GAME FOLDER)");
         assert_eq!(Language::English.text(ACTIONS[IMPORT]), "IMPORT SAVE (PICK FROM SAVES)");
         assert_eq!(Language::English.text(ACTIONS[REPORT]), "MAKE TESTER REPORT (ZIP)");
-        assert_eq!(Language::English.text(ACTIONS[PET]), "PET THE CAT =^.^=");
-        let pick = [PICK_TITLE, PICK_HELP, PICK_NONE, PICK_BACK, CONFIRM_IMPORT, CONFIRM_PRELOAD, REPORT_STARTED, REPORT_FAILED, REPORT_NO_PROGRAM, KONAMI,
+        let pick = [PICK_TITLE, PICK_HELP, PICK_NONE, PICK_BACK, CONFIRM_IMPORT, CONFIRM_PRELOAD, REPORT_STARTED, REPORT_FAILED, REPORT_NO_PROGRAM,
             ["IMPORT FAILED: THAT ZIP IS DAMAGED OR NOT A SAVE", "导入失败：压缩包已损坏或不含有效存档", "匯入失敗：ZIP 已損毀或不含有效存檔", "ERROR AL IMPORTAR: ZIP DAÑADO O SIN PARTIDA VÁLIDA"]];
-        for lines in [ABOUT_EXPORT, ABOUT_IMPORT, ABOUT_PICK, ABOUT_MFG, ABOUT_NO_DLSS, ABOUT_S_RES, ABOUT_REPORT].iter().chain(&CAT_FACT_LINES).chain(&ABOUT_TRY).flatten().chain(&pick).chain(&PURRS) {
+        for lines in [ABOUT_EXPORT, ABOUT_IMPORT, ABOUT_PICK, ABOUT_MFG, ABOUT_NO_DLSS, ABOUT_S_RES, ABOUT_REPORT].iter().chain(&ABOUT_TRY).flatten().chain(&pick) {
             for line in *lines {
                 assert_line_fits(line, COLUMNS);
             }

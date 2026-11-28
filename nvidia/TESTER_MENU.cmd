@@ -13,7 +13,7 @@ set "LAST="
 cls
 echo =============================================
 echo    /\_/\    VIctory NVIDIA  -  TESTER MENU
-echo   ( o.o )   Try build by MfDev0, with the cat
+echo   ( o.o )   Try build by MfDev0
 echo    ^> ^^ ^<
 echo =============================================
 echo   Game: %GAME%
@@ -32,11 +32,10 @@ echo   R  Make tester report (zip)
 echo   L  Open the logs folder
 echo   C  Check DLSS and frame gen here
 echo   D  Reset F1 settings (kept as .bak)
-echo   T  Try: left-out PRs, cat, Discord
+echo   T  Try: left-out PRs, Discord
 echo   Q  Quit
 echo.
 echo   In game: F1 settings, F3 stats panel.
-call :cat_fact
 echo.
 choice /c 123456789RLCDTQ /n /m "Pick: "
 set "PICK=%ERRORLEVEL%"
@@ -118,7 +117,7 @@ exit /b 1
 :end
 exit /b 0
 
-rem ---- T: the left-out PRs, the language, the cat, Discord ----
+rem ---- T: the left-out PRs, the language, Discord ----
 rem Each is an F1 row too; picking one here flips it in the same file.
 :try
 cls
@@ -126,42 +125,36 @@ call :current VICTORY_FACE_ADMIT 1 F1
 call :current VICTORY_MOVIE_FG_GATE 1 F2
 call :current VICTORY_INDIRECT_WIDE_NVIDIA 1 F3
 call :current VICTORY_BVH_FAULTS_ALL 16384 F4
-call :current VICTORY_CAT 0 F5
-call :current VICTORY_CAT_FACTS 0 F6
-call :current VICTORY_DISCORD 0 F7
-call :current VICTORY_KEYMAP "a=20,lt=A2" F8
+call :current VICTORY_DISCORD 0 F5
+call :current VICTORY_KEYMAP "a=20,lt=A2" F6
 set "LANG_NOW=en"
 call :value VICTORY_MENU_LANGUAGE LANG_NOW
 echo =============================================
-echo   TRY: LEFT-OUT PRS, CAT, DISCORD
+echo   TRY: LEFT-OUT PRS, DISCORD
 echo   (each also in F1; off = as before)
 echo =============================================
 echo   1  PR 669  black face admit     %F1%
 echo   2  PR 669  movie FG pause       %F2%
 echo   3  PR 1005 wide dispatch (NV)   %F3%
 echo   4  PR 1008 RT fault pages       %F4%
-echo   5  Cat mode (=^^.^^=)             %F5%
-echo   6  Cat facts                    %F6%
-echo   7  Discord: Playing GTA VI      %F7%
-echo   8  PR 982  Space=A, Ctrl=LT     %F8%
-echo   9  PR 1056 menu language        %LANG_NOW%
+echo   5  Discord: Playing GTA VI      %F5%
+echo   6  PR 982  Space=A, Ctrl=LT     %F6%
+echo   7  PR 1056 menu language        %LANG_NOW%
 echo   B  Back
 echo.
-echo   Cat and Discord are on by default:
-echo   for them ON means not set to 0.
+echo   Discord is on by default:
+echo   for it ON means not set to 0.
 echo.
-choice /c 123456789B /n /m "Flip: "
+choice /c 1234567B /n /m "Flip: "
 set "PICK=%ERRORLEVEL%"
-if "%PICK%"=="10" goto :menu
-if "%PICK%"=="9" goto :language
-if "%PICK%"=="8" call :flip VICTORY_KEYMAP "a=20,lt=A2" "%F8%"
+if "%PICK%"=="8" goto :menu
+if "%PICK%"=="7" goto :language
+if "%PICK%"=="6" call :flip VICTORY_KEYMAP "a=20,lt=A2" "%F6%"
 if "%PICK%"=="1" call :flip VICTORY_FACE_ADMIT 1 "%F1%"
 if "%PICK%"=="2" call :flip VICTORY_MOVIE_FG_GATE 1 "%F2%"
 if "%PICK%"=="3" call :flip VICTORY_INDIRECT_WIDE_NVIDIA 1 "%F3%"
 if "%PICK%"=="4" call :flip VICTORY_BVH_FAULTS_ALL 16384 "%F4%"
-if "%PICK%"=="5" call :flip_off VICTORY_CAT "%F5%"
-if "%PICK%"=="6" call :flip_off VICTORY_CAT_FACTS "%F6%"
-if "%PICK%"=="7" call :flip_off VICTORY_DISCORD "%F7%"
+if "%PICK%"=="5" call :flip_off VICTORY_DISCORD "%F5%"
 goto :try
 
 :language
@@ -180,7 +173,7 @@ goto :try
 
 rem %1 the setting, %2 its value when it is the odd one out, %3 where ON or OFF goes.
 rem A setting off unless %2 (the PRs): ON when it holds %2. A setting on unless 0
-rem (%2 is 0: the cat, Discord): OFF when it holds 0.
+rem (%2 is 0: Discord): OFF when it holds 0.
 :current
 set "CUR="
 call :value %~1 CUR
@@ -204,17 +197,6 @@ goto :eof
 
 :flip_off
 if /i "%~2"=="ON" (call :save_choice %~1 0) else (call :save_choice %~1 "")
-goto :eof
-
-rem One of the cat's facts, picked at random.
-:cat_fact
-set /a "FACT=%RANDOM% %% 6"
-if "%FACT%"=="0" echo   Cat fact: cats sleep 12-16 hours a day.
-if "%FACT%"=="1" echo   Cat fact: a group of cats is a clowder.
-if "%FACT%"=="2" echo   Cat fact: 32 muscles in each ear.
-if "%FACT%"=="3" echo   Cat fact: cats purr at 25 to 150 Hz.
-if "%FACT%"=="4" echo   Cat fact: in F1, PET THE CAT. Do it.
-if "%FACT%"=="5" echo   Cat fact: the cat knows a cheat code.
 goto :eof
 
 rem ---- shared: victory.exe, the home folder, the game ----

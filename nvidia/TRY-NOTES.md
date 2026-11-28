@@ -4,7 +4,7 @@ This folder is [trustno1-coder/VIctory-NVIDIA](https://github.com/trustno1-coder
 at `63b902f` (tag v2026.11.28.01, the newest when this was made). The fixes,
 pull requests and tester features below are added on top. None of it was
 built or run here: it is source for you to build (`BUILD_VICTORY.cmd`) and
-test. Everything (the menu, the cat, Discord) is built into `victory.exe`.
+test. Everything (the menu, Discord) is built into `victory.exe`.
 
 ## Build and start
 
@@ -111,57 +111,34 @@ Not taken at all: #982's Tauri launcher (4,500 lines of new crates; crates.io
 was not reachable to check them) and #1056's bundled fonts (it uses the fonts
 Windows already has).
 
-## Our touch: the cat =^.^=
+## Our touch
 
-- **F1 title.** It reads `SETTINGS =^.^= MEOW`, and the about line credits
-  MfDev0.
-- **The walking cat.** It walks along the FPS line in the room left over, and
-  blinks now and then.
-- **PET THE CAT =^.^=.** A new F1 line. Each press gets a different reaction.
-- **Cat facts.** Each time F1 opens, a line without its own help shows a cat
-  fact. F1 CAT FACTS OFF (`VICTORY_CAT_FACTS=0`) turns them off.
-- **The cheat.** With F1 open, press up, up, down, down, left, right, left,
-  right: the cat parade starts (three cats). The same code again stops it.
-- **The cmds.** The cat is also in `BUILD_VICTORY.cmd`, in `TESTER_MENU.cmd`
-  (with a random cat fact) and in the console when the game starts.
-- **Turning it off.** F1 CAT MODE OFF (`VICTORY_CAT=0`) is the plain menu.
-
-## Discord: "Playing Grand Theft Auto VI"
-
-While the game runs, your Discord profile shows the status below. You need the
-Discord desktop app running.
-
-- **Title.** Playing Grand Theft Auto VI.
-- **Picture.** The GTA VI cover.
-- **Text.** "Vice City, on PC (yes, really)", plus a cat line that changes
-  every minute.
-- **Time.** How long you have been playing.
-- **Buttons.** Two, for your friends:
-  - **Play on PC too.** It opens a cat playing Never Gonna Give You Up. Yes,
-    it's a rickroll.
-  - **Pet the cat =^.^=.** It opens keyboard cat.
-
-How it works:
-
-- `victory play` starts a small hidden helper (`victory discord --watch
-  <pid>`). It talks to Discord through its local pipe and closes with the game.
-  It never runs inside the game, and it needs no extra crate.
-- **The name.** The "Playing" text is the name of the Discord application.
-  The default one is Neptune_VI's (`1575009406737846333`; the idea and the
-  pipe code are from github.com/zm0kiemedia/Neptune_VI, GPL-3.0).
-- **Your own name.** To be sure of the name, make an application called
-  "Grand Theft Auto VI" at discord.com/developers. Then set
-  `VICTORY_DISCORD_APP=<its application id>`. If Discord refuses the picture
-  from the web, the helper uses the application's `logo` image instead, so
-  upload one under that name.
-- **Off.** F1 DISCORD STATUS OFF, or `VICTORY_DISCORD=0`.
+- A small cat `=^.^=` on the F1 title line, in `BUILD_VICTORY.cmd`, in
+  `TESTER_MENU.cmd` and in the console when the game starts.
+- **Discord status.** While the game runs, your Discord profile shows
+  **Playing Grand Theft Auto VI** with the cover and the time played. Friends
+  see one button, **Play on PC too**. It opens a YouTube video of a cat
+  singing Never Gonna Give You Up
+  (https://www.youtube.com/watch?v=K7XHy8nppf4).
+  - You need the Discord desktop app running.
+  - `victory play` starts a small hidden helper that talks to Discord on
+    this PC and closes with the game. It is std only and never runs inside
+    the game. The pipe code is adapted from github.com/zm0kiemedia/Neptune_VI
+    (GPL-3.0).
+  - The word after "Playing" is the name of the Discord application. The
+    default is Neptune_VI's (`1575009406737846333`). To be sure of the name,
+    make your own application called "Grand Theft Auto VI" at
+    discord.com/developers and set `VICTORY_DISCORD_APP=<its id>`. If Discord
+    refuses the cover from the web, the application's `logo` image is used,
+    so upload one under that name.
+  - Off: F1 DISCORD STATUS OFF, or `VICTORY_DISCORD=0`.
 
 ## TESTER_MENU.cmd > T
 
 `T` is a submenu with the switches above:
 
-- 1 to 8: the left-out PRs, cat mode, cat facts and Discord. Each press flips
-  one and shows ON or OFF. They are saved the way F1 saves them, so F1 and
-  the cmd always agree.
-- 9: the menu language.
+- 1 to 6: the left-out PRs and Discord. Each press flips one and shows ON
+  or OFF. They are saved the way F1 saves them, so F1 and the cmd always
+  agree.
+- 7: the menu language.
 - B: back.

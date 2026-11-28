@@ -40,7 +40,7 @@ if /i "%~1"=="test" (
 copy /y "target\release\victory.exe" "%~dp0victory.exe" >nul
 echo.
 echo Built: %~dp0victory.exe
-echo The cat approves =^^.^^=  (F1 in game: PET THE CAT)
+echo The cat approves =^^.^^=
 echo Next: TESTER_MENU.cmd (or put victory.exe beside your
 echo game_scarlett_master.exe and double-click it).
 echo NVIDIA's DLSS files download on the first start.
